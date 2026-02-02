@@ -82,3 +82,27 @@ npm run start:debug
 # Build for production
 npm run build
 ```
+
+## 6. Verification & Troubleshooting
+
+### Verify Database Tables
+To confirm that your tables were correctly created in the Docker container, run:
+
+```bash
+docker exec -it cv-postgres psql -U postgres -d cv_management -c "\dt"
+```
+
+### Reset Database (Force Re-initialization)
+If the database fails to initialize or if you want to wipe it and start fresh with the `init-scripts`, you must delete the Docker volume:
+
+```bash
+# Stop containers and delete all data volumes
+docker-compose down -v
+
+# Start everything fresh
+docker-compose up -d
+```
+
+> [!IMPORTANT]
+> The `docker-compose down -v` command is destructive. It will permanently delete all data in your local database. Use it only when resetting your development environment.
+
