@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:14
+    container_name: cv-postgres
+    environment:
+      POSTGRES_DB: cv_management
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./database/init-scripts:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    networks:
+      - cv-network
+
+  # NestJS Backend
+  backend:
+    build: ./backend
+    container_name: cv-backend
+    environment:
+      DATABASE_URL: postgresql://postgres:${DB_PASSWORD}@postgres:5432/cv_management
+      JWT_SECRET: ${JWT_SECRET}
+    volumes:
+      - ./file-storage:/app/file-storage
+      - ./backend/src:/app/src    # Hot reload in dev
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+    networks:
+      - cv-network
+    command: npm run start:dev
+
+  # Python AI Service (Optional - add when needed)
+  ai-service:
+    build: ./ai-service
+    container_name: cv-ai-service
+    volumes:
+      - ./file-storage:/app/file-storage
+    ports:
+      - "8000:8000"
+    networks:
+      - cv-network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # React Frontend
+  frontend:
+    build: ./frontend
+    container_name: cv-frontend
+    environment:
+      VITE_API_URL: http://localhost:3000
+    volumes:
+      - ./frontend/src:/app/src    # Hot reload
+    ports:
+      - "5173:5173"
+    networks:
+      - cv-network
+    command: npm run dev
+
+networks:
+  cv-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
