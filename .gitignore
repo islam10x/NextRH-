@@ -5,7 +5,7 @@ build/
 coverage/
 npm-debug.log
 yarn-error.log
-
+.idea/
 # Python
 __pycache__/
 *.py[cod]

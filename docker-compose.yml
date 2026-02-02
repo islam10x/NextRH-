@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # PostgreSQL Database
   postgres:
-    image: postgres:14
+    image: pgvector/pgvector:pg14
     container_name: cv-postgres
     environment:
       POSTGRES_DB: cv_management
@@ -19,7 +19,9 @@ services:
 
   # NestJS Backend
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      target: development
     container_name: cv-backend
     environment:
       DATABASE_URL: postgresql://postgres:${DB_PASSWORD}@postgres:5432/cv_management
