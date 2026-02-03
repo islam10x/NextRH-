@@ -4,7 +4,7 @@
 -- ENUM TYPES
 -- =============================================
 
-CREATE TYPE user_role AS ENUM ('employee', 'team_manager', 'bid_manager', 'admin');
+CREATE TYPE user_role AS ENUM ('employee', 'team_manager', 'bid_manager');
 CREATE TYPE proficiency_level AS ENUM ('beginner', 'intermediate', 'advanced', 'expert');
 CREATE TYPE skill_source AS ENUM ('cv', 'certification', 'training', 'project', 'manual');
 CREATE TYPE certification_status AS ENUM ('active', 'expired', 'expiring_soon');
@@ -21,6 +21,7 @@ CREATE TYPE alert_type AS ENUM ('expiring_soon', 'expired', 'renewal_reminder');
 CREATE TABLE IF NOT EXISTS users (
     user_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email VARCHAR(255) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL,
     role user_role NOT NULL,
     first_name VARCHAR(100) NOT NULL,
     last_name VARCHAR(100) NOT NULL,
