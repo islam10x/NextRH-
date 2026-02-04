@@ -151,5 +151,5 @@ docker exec -it cv-postgres psql -U postgres -d cv_management -c "SELECT user_id
 If the database was already initialized and you need to add the admin user manually, run:
 
 ```bash
-docker exec -it cv-postgres psql -U postgres -d cv_management -f /docker-entrypoint-initdb.d/04-insert-admin.sql
+docker exec -it cv-postgres psql -U postgres -d cv_management -f /docker-entrypoint-initdb.d/03-insert-admin.sql
 ```

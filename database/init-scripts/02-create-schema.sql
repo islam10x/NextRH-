@@ -66,7 +66,6 @@ CREATE TABLE IF NOT EXISTS education (
     degree VARCHAR(255) NOT NULL,
     field_of_study VARCHAR(255),
     institution VARCHAR(255),
-    start_date DATE,
     end_date DATE
 );
 
@@ -79,8 +78,7 @@ CREATE TABLE IF NOT EXISTS work_experience (
     start_date DATE,
     end_date DATE,
     is_current BOOLEAN DEFAULT FALSE,
-    responsibilities TEXT[],  -- Array of strings
-    achievements TEXT[]       -- Array of strings
+    description TEXT NOT NULL
 );
 
 -- 7. skills
@@ -111,8 +109,8 @@ CREATE TABLE IF NOT EXISTS certifications (
     expiration_date DATE,
     status certification_status DEFAULT 'active',
     file_path VARCHAR(512),
-    is_renewable BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    credential_id VARCHAR(255),
+    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 10. training_sessions
@@ -124,7 +122,7 @@ CREATE TABLE IF NOT EXISTS training_sessions (
     start_date DATE,
     end_date DATE,
     duration_hours INT,
-    certificate_obtained BOOLEAN DEFAULT FALSE
+    description TEXT NOT NULL
 );
 
 -- 11. projects
@@ -144,8 +142,7 @@ CREATE TABLE IF NOT EXISTS project_participants (
     project_id UUID REFERENCES projects(project_id) ON DELETE CASCADE,
     profile_id UUID REFERENCES employee_profiles(profile_id) ON DELETE CASCADE,
     role VARCHAR(255),
-    responsibilities TEXT[],
-    achievements TEXT[],
+    description TEXT NOT NULL,
     CONSTRAINT uq_project_profile UNIQUE (project_id, profile_id)
 );
 
@@ -178,9 +175,7 @@ CREATE TABLE IF NOT EXISTS cv_templates (
     template_type template_type NOT NULL,
     file_path VARCHAR(512),
     font_family VARCHAR(100),
-    font_size INT,
-    layout_config JSONB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    layout_config JSONB
 );
 
 -- 16. generated_cvs
@@ -191,7 +186,6 @@ CREATE TABLE IF NOT EXISTS generated_cvs (
     generated_by UUID REFERENCES users(user_id),
     generation_purpose VARCHAR(100),
     file_path VARCHAR(512),
-    client_name VARCHAR(255),
     generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

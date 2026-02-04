@@ -1,5 +1,5 @@
 # AI-Driven CV Management System - Complete File Structure
-## With Docker, NextOra Integration, and Microservices Architecture
+## With Docker, NextOra Integration, Auto-Sync, and Microservices Architecture
 
 ---
 
@@ -33,6 +33,7 @@ cv-management-system/
 │   │   ├── config/                   # Configuration
 │   │   │   ├── database.config.ts
 │   │   │   ├── storage.config.ts
+│   │   │   ├── queue.config.ts       # Queue/Redis config
 │   │   │   ├── ai.config.ts
 │   │   │   └── nextora.config.ts
 │   │   │
@@ -140,7 +141,23 @@ cv-management-system/
 │   │   │   ├── file-storage.module.ts
 │   │   │   ├── file-storage.service.ts
 │   │   │   ├── file-upload.service.ts
-│   │   │   └── folder-manager.service.ts
+│   │   │   ├── folder-manager.service.ts
+│   │   │   └── metadata.service.ts   # Manages metadata.json files
+│   │   │
+│   │   ├── sync/                     # Auto-Sync Module (File ↔ DB)
+│   │   │   ├── sync.module.ts
+│   │   │   ├── sync.controller.ts  # Receives webhooks from watchdog
+│   │   │   ├── sync.service.ts       # Orchestrates file → DB sync
+│   │   │   └── sync-processor.service.ts  # Processes sync events
+│   │   │
+│   │   ├── queue/                    # Background Jobs (Bull/Redis)
+│   │   │   ├── queue.module.ts
+│   │   │   ├── processors/
+│   │   │   │   ├── cv-parse.processor.ts      # Processes CV parsing jobs
+│   │   │   │   ├── cert-parse.processor.ts    # Processes cert parsing jobs
+│   │   │   │   └── embedding.processor.ts     # Generates embeddings
+│   │   │   └── producers/
+│   │   │       └── sync-job.producer.ts       # Creates sync jobs
 │   │   │
 │   │   ├── rag/                      # RAG Search System
 │   │   │   ├── rag.module.ts
@@ -180,7 +197,7 @@ cv-management-system/
 │   │   │       ├── nextora-query.dto.ts
 │   │   │       └── nextora-update.dto.ts
 │   │   │
-│   │   ├── jobs/                     # Background Jobs
+│   │   ├── jobs/                     # Scheduled Jobs (Cron)
 │   │   │   ├── jobs.module.ts
 │   │   │   ├── certification-checker.job.ts
 │   │   │   ├── folder-sync.job.ts
@@ -218,6 +235,7 @@ cv-management-system/
 │       └── unit/
 │           ├── auth.service.spec.ts
 │           ├── rag.service.spec.ts
+│           ├── sync.service.spec.ts
 │           └── cv.service.spec.ts
 │
 ├── ai-service/                       # Python AI Microservice
@@ -230,13 +248,19 @@ cv-management-system/
 │   │   ├── __init__.py
 │   │   ├── main.py                   # FastAPI entry point
 │   │   ├── config.py                 # Configuration
+│   │   ├── watchers/
+│   │   │   ├── __init__.py
+│   │   │   ├── file_watcher.py      # Python Watchdog ✅
+│   │   │   ├── event_handler.py     # Process file events
+│   │   │   └── sync_client.py       # Notify backend via webhook 
 │   │   │
 │   │   ├── api/                      # API Routes
 │   │   │   ├── __init__.py
 │   │   │   ├── parsing.py            # CV/Certificate parsing endpoints
 │   │   │   ├── ocr.py                # OCR endpoints
 │   │   │   ├── generation.py         # CV generation endpoints
-│   │   │   └── nlp.py                # NLP understanding endpoints
+│   │   │   ├── nlp.py                # NLP understanding endpoints
+│   │   │   └── metadata.py           # Metadata extraction endpoint
 │   │   │
 │   │   ├── services/                 # Business Logic
 │   │   │   ├── __init__.py
@@ -245,7 +269,8 @@ cv-management-system/
 │   │   │   ├── ocr_service.py        # OCR processing
 │   │   │   ├── cv_generator.py       # CV generation
 │   │   │   ├── nlp_service.py        # NLU for queries/updates
-│   │   │   └── ollama_service.py     # Ollama integration
+│   │   │   ├── ollama_service.py     # Ollama integration
+│   │   │   └── metadata_extractor.py # Structured data extraction
 │   │   │
 │   │   ├── parsers/                  # Document Parsers
 │   │   │   ├── __init__.py
@@ -286,12 +311,11 @@ cv-management-system/
 │   │       └── logger.py
 │   │
 │   ├── templates/                    # CV Templates
-│   │   ├── standard_cv.docx
-│   │   ├── canadian_cv.docx
-│   │   ├── eu_cv.docx
-│   │   └── custom/                 # Client-provided templates
-│   │       ├── .gitkeep
-│   │       └── (client uploads go here)    
+│   │   ├── standard.docx             # Fixed template 1
+│   │   ├── canadian.docx             # Fixed template 2
+│   │   ├── eu.docx                   # Fixed template 3
+│   │   └── custom/                   # Client-provided templates
+│   │       └── .gitkeep
 │   │
 │   └── tests/                        # Python Tests
 │       ├── __init__.py
@@ -407,11 +431,11 @@ cv-management-system/
 │   └── backups/
 │       └── .gitkeep
 │
-├── file-storage/                     # Persistent File Storage
+├── file-storage/                     # Persistent File Storage (WATCHED by Python Watchdog)
 │   ├── cv-database/                  # Main CV folder structure
 │   │   ├── Imen_BenAli/
 │   │   │   ├── Imen_BenAli_CV.pdf
-│   │   │   ├── metadata.json
+│   │   │   ├── metadata.json         # Auto-generated/updated
 │   │   │   └── certificates/
 │   │   │       ├── Python_Certificate.pdf
 │   │   │       └── AWS_Certificate.pdf
@@ -427,8 +451,7 @@ cv-management-system/
 │   │   ├── canadian.docx
 │   │   ├── eu.docx
 │   │   └── custom/
-│   │       ├── .gitkeep
-│   │       └── (client uploads go here)
+│   │       └── .gitkeep
 │   │
 │   └── generated-cvs/                # Temporarily generated CVs
 │       └── .gitkeep
@@ -455,6 +478,7 @@ cv-management-system/
 │   ├── architecture/
 │   │   ├── system-architecture.md
 │   │   ├── database-schema.md
+│   │   ├── auto-sync-flow.md
 │   │   └── nextora-integration.md
 │   ├── deployment/
 │   │   ├── docker-deployment.md
@@ -504,6 +528,23 @@ services:
       timeout: 5s
       retries: 5
 
+  # Redis (Job Queue & Caching)
+  redis:
+    image: redis:7-alpine
+    container_name: cv-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - cv-network
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # NestJS Backend
   backend:
     build:
@@ -513,16 +554,21 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV}
       DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
       JWT_SECRET: ${JWT_SECRET}
       AI_SERVICE_URL: http://ai-service:8000
       OPENAI_API_KEY: ${OPENAI_API_KEY}
     volumes:
-      - ./file-storage:/app/file-storage
+      - ./file-storage:/app/file-storage      # Shared with AI service
+      - ./backend/src:/app/src                 # Hot reload
       - ./logs/backend:/app/logs
     ports:
       - "3000:3000"
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       ai-service:
         condition: service_started
@@ -541,7 +587,7 @@ services:
       OLLAMA_HOST: ${OLLAMA_HOST}
       TESSERACT_LANG: eng+fra+ara+spa
     volumes:
-      - ./file-storage:/app/file-storage
+      - ./file-storage:/app/file-storage      # Shared with Backend
       - ./ai-service/templates:/app/templates
       - ./logs/ai-service:/app/logs
     ports:
@@ -603,18 +649,6 @@ services:
               count: 1
               capabilities: [gpu]
 
-  # Redis (Caching & Queue)
-  redis:
-    image: redis:7-alpine
-    container_name: cv-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
-    networks:
-      - cv-network
-    command: redis-server --appendonly yes
-
   # Nginx Reverse Proxy
   nginx:
     build:
@@ -640,9 +674,9 @@ networks:
 
 volumes:
   postgres-data:
+  redis-data:
   n8n-data:
   ollama-data:
-  redis-data:
 ```
 
 ---
@@ -768,6 +802,10 @@ DB_NAME=cv_management
 DB_USER=postgres
 DB_PASSWORD=yourpassword
 
+# Redis (Job Queue)
+REDIS_HOST=redis
+REDIS_PORT=6379
+
 # JWT
 JWT_SECRET=your-super-secret-jwt-key
 JWT_EXPIRES_IN=15m
@@ -803,6 +841,38 @@ SMTP_PASSWORD=your-app-password
 
 # Frontend
 VITE_API_URL=http://localhost:3000
+```
+
+---
+
+## 📦 Additional Dependencies
+
+### **backend/package.json** (Additional)
+
+```json
+{
+  "dependencies": {
+    "@nestjs/bull": "^10.0.0",
+    "bull": "^4.11.0",
+    "chokidar": "^3.5.3",
+    "@nestjs/axios": "^3.0.0",
+    "axios": "^1.6.0"
+  }
+}
+```
+
+### **ai-service/requirements.txt**
+
+```txt
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+PyMuPDF==1.23.0
+python-docx==1.1.0
+pytesseract==0.3.10
+Pillow==10.2.0
+docxtpl==0.16.7
+python-multipart==0.0.6
+pydantic==2.5.0
 ```
 
 ---
@@ -845,11 +915,42 @@ docker-compose exec backend npm run embeddings:generate
 # 9. Pull Ollama model (if using local LLM)
 docker-compose exec ollama ollama pull llama3.1
 
-# 10. Stop all services
+# 10. Test auto-sync (add a CV manually)
+docker-compose exec backend mkdir -p /app/file-storage/cv-database/Test_User
+docker-compose exec backend cp /path/to/test.pdf /app/file-storage/cv-database/Test_User/Test_User_CV.pdf
+# Watch logs: docker-compose logs -f backend
+
+# 11. Stop all services
 docker-compose down
 
-# 11. Stop and remove volumes (CAUTION: deletes data)
+# 12. Stop and remove volumes (CAUTION: deletes data)
 docker-compose down -v
+```
+
+---
+
+## 🔄 Auto-Sync Flow
+
+```
+1. User uploads CV → file-storage/cv-database/Imen_BenAli/CV.pdf
+                ↓
+2. Chokidar detects new file → FolderWatcherService
+                ↓
+3. SyncService creates job → Bull Queue (Redis)
+                ↓
+4. CVParseProcessor picks up job
+                ↓
+5. Calls Python AI service → POST /api/parse/cv
+                ↓
+6. Python parses PDF → Returns structured data
+                ↓
+7. Backend receives parsed data
+                ↓
+8. Updates database → employees, skills, education tables
+                ↓
+9. Updates metadata.json → file-storage/cv-database/Imen_BenAli/metadata.json
+                ↓
+10. DONE: DB ↔ Files ↔ metadata.json all synced ✅
 ```
 
 ---
@@ -863,6 +964,12 @@ docker-compose down -v
 - **n8n**: Workflow automation
 - **Ollama**: Local LLM (alternative to OpenAI)
 
+### ✅ **Auto-Sync System**
+- **Chokidar**: Watches file-storage for changes
+- **Bull + Redis**: Background job queue for async processing
+- **Metadata Service**: Manages metadata.json files
+- **Bi-directional Sync**: File ↔ DB ↔ metadata.json
+
 ### ✅ **Docker Benefits**
 - Consistent development environment
 - Easy deployment
@@ -873,6 +980,7 @@ docker-compose down -v
 ### ✅ **Data Persistence**
 - `file-storage/`: Persistent CV and certificate storage
 - `postgres-data`: Database volume
+- `redis-data`: Queue data persistence
 - `n8n-data`: Workflow configurations
 - `ollama-data`: Model storage
 
@@ -886,6 +994,11 @@ docker-compose down -v
 - pgvector for embeddings (local)
 - Ollama option for LLM (local, no API)
 
+### ✅ **3 Fixed CV Templates + Custom**
+- Standard, Canadian, EU templates included
+- BID managers can upload client-specific templates
+- Stored in `templates/custom/` directory
+
 ---
 
-This structure is production-ready, scalable, and follows best practices for microservices architecture with Docker! 🚀
+This structure is production-ready, scalable, includes auto-sync functionality, and follows best practices for microservices architecture with Docker! 🚀
