@@ -1,0 +1,248 @@
+import React, { useState } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/common';
+import { mockTeams, getTeamMembers } from '@/data/mockData';
+import { Certification, Employee } from '@/types';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Calendar } from '@/components/ui/calendar';
+import { Search, Filter, Download, CalendarIcon, Award } from 'lucide-react';
+import { format } from 'date-fns';
+import { cn } from '@/lib/utils';
+
+interface CertWithEmployee extends Certification {
+  employeeName: string;
+  employeeTitle: string;
+}
+
+const CertificationTrackingPage: React.FC = () => {
+  const { user } = useAuth();
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [dateRange, setDateRange] = useState<{ from?: Date; to?: Date }>({});
+
+  const team = mockTeams.find((t) => t.managerId === user?.id);
+  const teamMembers = team ? getTeamMembers(team.id) : [];
+
+  // Flatten certifications with employee info
+  const allCertifications: CertWithEmployee[] = teamMembers.flatMap((emp) =>
+    emp.certifications.map((cert) => ({
+      ...cert,
+      employeeName: emp.name,
+      employeeTitle: emp.title,
+    }))
+  );
+
+  const filteredCertifications = allCertifications.filter((cert) => {
+    const matchesSearch =
+      cert.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      cert.issuer.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      cert.employeeName.toLowerCase().includes(searchQuery.toLowerCase());
+    
+    const matchesStatus = statusFilter === 'all' || cert.status === statusFilter;
+    
+    let matchesDate = true;
+    if (dateRange.from) {
+      const expDate = new Date(cert.expirationDate);
+      if (dateRange.from && expDate < dateRange.from) matchesDate = false;
+      if (dateRange.to && expDate > dateRange.to) matchesDate = false;
+    }
+
+    return matchesSearch && matchesStatus && matchesDate;
+  });
+
+  const formatDate = (dateString: string) => {
+    try {
+      return format(new Date(dateString), 'MMM d, yyyy');
+    } catch {
+      return dateString;
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">Certification Tracking</h1>
+          <p className="text-muted-foreground">Monitor team certifications and expirations</p>
+        </div>
+        <Button variant="outline">
+          <Download className="h-4 w-4 mr-2" />
+          Export CSV
+        </Button>
+      </div>
+
+      {/* Filters */}
+      <Card>
+        <CardContent className="py-4">
+          <div className="flex flex-col md:flex-row gap-4">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Search by certification, issuer, or employee..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+            <div className="flex gap-2">
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-[150px]">
+                  <SelectValue placeholder="Status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="active">Active</SelectItem>
+                  <SelectItem value="expiring_soon">Expiring Soon</SelectItem>
+                  <SelectItem value="expired">Expired</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" className="w-[180px] justify-start text-left">
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {dateRange.from ? (
+                      dateRange.to ? (
+                        <>
+                          {format(dateRange.from, 'LLL dd')} - {format(dateRange.to, 'LLL dd')}
+                        </>
+                      ) : (
+                        format(dateRange.from, 'LLL dd, y')
+                      )
+                    ) : (
+                      <span>Expiration range</span>
+                    )}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar
+                    initialFocus
+                    mode="range"
+                    selected={{ from: dateRange.from, to: dateRange.to }}
+                    onSelect={(range) => setDateRange({ from: range?.from, to: range?.to })}
+                    numberOfMonths={2}
+                    className="pointer-events-auto"
+                  />
+                </PopoverContent>
+              </Popover>
+
+              {(statusFilter !== 'all' || dateRange.from) && (
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setStatusFilter('all');
+                    setDateRange({});
+                  }}
+                >
+                  Clear
+                </Button>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Results */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-lg">
+              {filteredCertifications.length} Certification{filteredCertifications.length !== 1 ? 's' : ''}
+            </CardTitle>
+            <div className="flex gap-2 text-sm text-muted-foreground">
+              <Badge variant="outline" className="bg-success/10 text-success">
+                {allCertifications.filter((c) => c.status === 'active').length} Active
+              </Badge>
+              <Badge variant="outline" className="bg-warning/10 text-warning">
+                {allCertifications.filter((c) => c.status === 'expiring_soon').length} Expiring
+              </Badge>
+              <Badge variant="outline" className="bg-destructive/10 text-destructive">
+                {allCertifications.filter((c) => c.status === 'expired').length} Expired
+              </Badge>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Certification</TableHead>
+                <TableHead>Employee</TableHead>
+                <TableHead>Issuer</TableHead>
+                <TableHead>Issue Date</TableHead>
+                <TableHead>Expiration</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredCertifications.map((cert) => (
+                <TableRow key={cert.id} className="animate-fade-in">
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <Award className="h-4 w-4 text-primary" />
+                      <span className="font-medium">{cert.name}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div>
+                      <p className="font-medium text-sm">{cert.employeeName}</p>
+                      <p className="text-xs text-muted-foreground">{cert.employeeTitle}</p>
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{cert.issuer}</TableCell>
+                  <TableCell className="text-muted-foreground">{formatDate(cert.issueDate)}</TableCell>
+                  <TableCell>
+                    <span
+                      className={cn(
+                        'font-medium',
+                        cert.status === 'expired' && 'text-destructive',
+                        cert.status === 'expiring_soon' && 'text-warning'
+                      )}
+                    >
+                      {formatDate(cert.expirationDate)}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <StatusBadge status={cert.status} />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          {filteredCertifications.length === 0 && (
+            <div className="py-16 text-center">
+              <Award className="h-12 w-12 mx-auto text-muted-foreground/50 mb-4" />
+              <h3 className="font-medium text-lg mb-1">No certifications found</h3>
+              <p className="text-muted-foreground text-sm">
+                Try adjusting your filters
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
+
+export default CertificationTrackingPage;
