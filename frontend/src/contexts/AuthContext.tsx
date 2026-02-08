@@ -1,67 +1,69 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react';
 import { User, UserRole } from '@/types';
-import { mockEmployees, mockManagers, mockBidManager } from '@/data/mockData';
+import { authService } from '@/services/auth.service';
 
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
-  login: (email: string, password: string, role?: UserRole) => Promise<boolean>;
+  login: (email: string, password: string) => Promise<User | null>;
   logout: () => void;
-  switchRole: (role: UserRole) => void;
+  isLoading: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Demo users for each role
-const demoUsers: Record<UserRole, User> = {
-  employee: {
-    id: 'emp-001',
-    email: 'john.smith@company.com',
-    name: 'John Smith',
-    role: 'employee',
-    teamId: 'team-001',
-    title: 'Senior Cloud Architect',
-    yearsOfExperience: 8,
-  },
-  manager: {
-    id: 'mgr-001',
-    email: 'mark.anderson@company.com',
-    name: 'Mark Anderson',
-    role: 'manager',
-    teamId: 'team-001',
-    title: 'Cloud Engineering Manager',
-    yearsOfExperience: 12,
-  },
-  bid_manager: {
-    id: 'bid-001',
-    email: 'alex.thompson@company.com',
-    name: 'Alex Thompson',
-    role: 'bid_manager',
-    title: 'BID Manager',
-    yearsOfExperience: 15,
-  },
-};
-
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const login = useCallback(async (email: string, password: string, role?: UserRole): Promise<boolean> => {
-    // Simulate API delay
-    await new Promise((resolve) => setTimeout(resolve, 500));
+  const mapBackendUserToFrontend = (backendUser: any): User => {
+    return {
+      id: backendUser.id || backendUser.user_id,
+      email: backendUser.email,
+      name: `${backendUser.firstName} ${backendUser.lastName}`,
+      role: backendUser.role === 'team_manager' ? 'manager' : backendUser.role as UserRole,
+      title: 'Employee', // Default, backend doesn't send yet
+      yearsOfExperience: 0 // Default
+    };
+  };
 
-    // For demo purposes, accept any credentials
-    // Use the role parameter to determine which user to log in as
-    const selectedRole = role || 'employee';
-    setUser(demoUsers[selectedRole]);
-    return true;
+  const initAuth = async () => {
+    if (authService.isAuthenticated()) {
+      try {
+        const profile = await authService.getProfile();
+        setUser(mapBackendUserToFrontend(profile));
+      } catch (error) {
+        console.error('Failed to fetch profile', error);
+        authService.logout();
+      }
+    }
+    setIsLoading(false);
+  };
+
+  useEffect(() => {
+    initAuth();
+  }, []);
+
+  const login = useCallback(async (email: string, password: string): Promise<User | null> => {
+    try {
+      const response = await authService.login(email, password);
+
+      localStorage.setItem('access_token', response.access_token);
+      localStorage.setItem('refresh_token', response.refresh_token);
+
+      const mappedUser = mapBackendUserToFrontend(response.user);
+      localStorage.setItem('user', JSON.stringify(mappedUser));
+      setUser(mappedUser);
+      return mappedUser;
+    } catch (error) {
+      console.error('Login failed', error);
+      return null;
+    }
   }, []);
 
   const logout = useCallback(() => {
+    authService.logout(); // Clears storage and calls API
     setUser(null);
-  }, []);
-
-  const switchRole = useCallback((role: UserRole) => {
-    setUser(demoUsers[role]);
   }, []);
 
   const value = {
@@ -69,7 +71,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     isAuthenticated: !!user,
     login,
     logout,
-    switchRole,
+    isLoading
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

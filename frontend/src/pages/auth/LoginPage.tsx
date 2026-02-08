@@ -21,16 +21,17 @@ const LoginPage: React.FC = () => {
     e.preventDefault();
     setIsLoading(true);
 
-    const success = await login(email, password, selectedRole);
+    const user = await login(email, password);
     setIsLoading(false);
 
-    if (success) {
+    if (user) {
+      const role = user.role;
       const redirectPath =
-        selectedRole === 'employee'
+        role === 'employee'
           ? '/employee/dashboard'
-          : selectedRole === 'manager'
-          ? '/manager/dashboard'
-          : '/bid/dashboard';
+          : role === 'manager'
+            ? '/manager/dashboard'
+            : '/bid/dashboard';
       navigate(redirectPath);
     }
   };
@@ -90,27 +91,23 @@ const LoginPage: React.FC = () => {
                       key={card.role}
                       type="button"
                       onClick={() => setSelectedRole(card.role)}
-                      className={`flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${
-                        selectedRole === card.role
+                      className={`flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${selectedRole === card.role
                           ? 'border-primary bg-primary/5 shadow-sm'
                           : 'border-muted hover:border-primary/50 hover:bg-muted/50'
-                      }`}
+                        }`}
                     >
                       <div
-                        className={`p-2 rounded-lg ${
-                          selectedRole === card.role ? card.color : 'bg-muted'
-                        }`}
+                        className={`p-2 rounded-lg ${selectedRole === card.role ? card.color : 'bg-muted'
+                          }`}
                       >
                         <card.icon
-                          className={`h-5 w-5 ${
-                            selectedRole === card.role ? 'text-white' : 'text-muted-foreground'
-                          }`}
+                          className={`h-5 w-5 ${selectedRole === card.role ? 'text-white' : 'text-muted-foreground'
+                            }`}
                         />
                       </div>
                       <span
-                        className={`text-xs font-medium ${
-                          selectedRole === card.role ? 'text-primary' : 'text-muted-foreground'
-                        }`}
+                        className={`text-xs font-medium ${selectedRole === card.role ? 'text-primary' : 'text-muted-foreground'
+                          }`}
                       >
                         {card.title}
                       </span>
