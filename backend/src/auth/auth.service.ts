@@ -40,7 +40,9 @@ export class AuthService {
             throw new UnauthorizedException('Account is inactive');
         }
 
-        return this.generateTokens(user);
+        const tokens = await this.generateTokens(user);
+        await this.usersService.setCurrentRefreshToken(tokens.refresh_token, user.user_id);
+        return tokens;
     }
 
     async validateUser(email: string, password: string): Promise<User | null> {
@@ -90,28 +92,25 @@ export class AuthService {
         };
     }
 
-    async refreshToken(token: string): Promise<{ access_token: string }> {
+    async refreshToken(token: string): Promise<AuthResponse> {
         try {
             const payload = this.jwtService.verify(token);
-            const user = await this.usersService.findById(payload.sub);
+            const user = await this.usersService.getUserIfRefreshTokenMatches(token, payload.sub);
 
             if (!user || !user.isActive) {
                 throw new UnauthorizedException('Invalid token');
             }
 
-            const newPayload: JwtPayload = {
-                sub: user.user_id,
-                email: user.email,
-                role: user.role,
-            };
-
-            const access_token = this.jwtService.sign(newPayload, {
-                expiresIn: '15m',
-            });
-
-            return { access_token };
+            const tokens = await this.generateTokens(user);
+            await this.usersService.setCurrentRefreshToken(tokens.refresh_token, user.user_id);
+            return tokens;
         } catch (error) {
             throw new UnauthorizedException('Invalid token');
         }
+    }
+
+    async logout(user: any) {
+        await this.usersService.removeRefreshToken(user.user_id || user.id);
+        return { message: 'Logged out successfully' };
     }
 }

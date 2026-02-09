@@ -28,6 +28,13 @@ export class AuthController {
         return this.authService.refreshToken(refreshToken);
     }
 
+    @Post('logout')
+    @UseGuards(JwtAuthGuard)
+    @HttpCode(HttpStatus.OK)
+    async logout(@CurrentUser() user: any) {
+        return this.authService.logout(user);
+    }
+
     @Get('profile')
     @UseGuards(JwtAuthGuard)
     async getProfile(@CurrentUser() user: any) {

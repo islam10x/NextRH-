@@ -39,6 +39,9 @@ export class User {
     @Column({ name: 'is_active', default: true })
     isActive: boolean;
 
+    @Column({ name: 'current_hashed_refresh_token', nullable: true })
+    currentHashedRefreshToken?: string;
+
     @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;
 
