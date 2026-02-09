@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { MainLayout } from "@/components/layout";
 import LoginPage from "@/pages/auth/LoginPage";
+import SetupPasswordPage from "@/pages/auth/SetupPasswordPage";
 import { EmployeeDashboard, CVUploadPage, CertificationsPage, TrainingProjectsPage, CVPreviewPage } from "@/pages/employee";
 import { ManagerDashboard, TeamMembersPage, MemberProfilePage, CertificationTrackingPage } from "@/pages/manager";
 import { BIDDashboard, EmployeeDirectoryPage, AIChatPage, CVGenerationPage } from "@/pages/bid";
@@ -23,7 +24,8 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Navigate to="/login" replace />} />
             <Route path="/login" element={<LoginPage />} />
-            
+            <Route path="/auth/setup-password" element={<SetupPasswordPage />} />
+
             {/* Employee Routes */}
             <Route element={<MainLayout requiredRole="employee" />}>
               <Route path="/employee/dashboard" element={<EmployeeDashboard />} />

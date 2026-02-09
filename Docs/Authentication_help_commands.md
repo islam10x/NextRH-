@@ -143,7 +143,7 @@ curl -X GET http://localhost:3000/users/<USER_UUID> \
 To see all users directly in the database (bypassing the API), run:
 
 ```bash
-docker exec -it cv-postgres psql -U postgres -d cv_management -c "SELECT user_id, email, role, is_active FROM users;"
+docker exec -it cv-postgres psql -U postgres -d cv_management -c "SELECT user_id, email, role, status FROM users;"
 ```
 
 ## 9. Manually Create Admin User

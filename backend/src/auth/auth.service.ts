@@ -36,8 +36,8 @@ export class AuthService {
             throw new UnauthorizedException('Invalid credentials');
         }
 
-        if (!user.isActive) {
-            throw new UnauthorizedException('Account is inactive');
+        if (user.status !== 'active') { // Check status instead of isActive
+            throw new UnauthorizedException('Account is inactive or pending invitation');
         }
 
         const tokens = await this.generateTokens(user);
@@ -97,8 +97,8 @@ export class AuthService {
             const payload = this.jwtService.verify(token);
             const user = await this.usersService.getUserIfRefreshTokenMatches(token, payload.sub);
 
-            if (!user || !user.isActive) {
-                throw new UnauthorizedException('Invalid token');
+            if (!user || user.status !== 'active') { // Check status instead of isActive
+                throw new UnauthorizedException('Account is inactive or pending invitation');
             }
 
             const tokens = await this.generateTokens(user);

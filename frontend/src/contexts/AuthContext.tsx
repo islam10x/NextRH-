@@ -13,14 +13,23 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [user, setUser] = useState<User | null>(() => {
+    const savedUser = sessionStorage.getItem('user');
+    return savedUser ? JSON.parse(savedUser) : null;
+  });
+  const [isLoading, setIsLoading] = useState(!sessionStorage.getItem('access_token'));
 
   const mapBackendUserToFrontend = (backendUser: any): User => {
+    const firstName = backendUser.firstName || '';
+    const lastName = backendUser.lastName || '';
+    const name = (firstName || lastName)
+      ? `${firstName} ${lastName}`.trim()
+      : backendUser.email;
+
     return {
       id: backendUser.id || backendUser.user_id,
       email: backendUser.email,
-      name: `${backendUser.firstName} ${backendUser.lastName}`,
+      name,
       role: backendUser.role === 'team_manager' ? 'manager' : backendUser.role as UserRole,
       title: 'Employee', // Default, backend doesn't send yet
       yearsOfExperience: 0 // Default
@@ -48,11 +57,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     try {
       const response = await authService.login(email, password);
 
-      localStorage.setItem('access_token', response.access_token);
-      localStorage.setItem('refresh_token', response.refresh_token);
+      sessionStorage.setItem('access_token', response.access_token);
+      sessionStorage.setItem('refresh_token', response.refresh_token);
 
       const mappedUser = mapBackendUserToFrontend(response.user);
-      localStorage.setItem('user', JSON.stringify(mappedUser));
+      sessionStorage.setItem('user', JSON.stringify(mappedUser));
       setUser(mappedUser);
       return mappedUser;
     } catch (error) {

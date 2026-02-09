@@ -20,15 +20,6 @@ export class User {
     @Column({ unique: true })
     email: string;
 
-    @Column()
-    password: string;
-
-    @Column({ name: 'first_name' })
-    firstName: string;
-
-    @Column({ name: 'last_name' })
-    lastName: string;
-
     @Column({
         type: 'enum',
         enum: UserRole,
@@ -36,8 +27,30 @@ export class User {
     })
     role: UserRole;
 
-    @Column({ name: 'is_active', default: true })
-    isActive: boolean;
+    @Column({
+        type: 'enum',
+        enum: ['active', 'pending_invitation', 'deactivated'],
+        default: 'pending_invitation',
+    })
+    status: 'active' | 'pending_invitation' | 'deactivated';
+
+    @Column({ name: 'first_name', nullable: true })
+    firstName: string;
+
+    @Column({ name: 'last_name', nullable: true })
+    lastName: string;
+
+    @Column({ nullable: true })
+    password: string;
+
+    @Column({ name: 'invited_by', nullable: true })
+    invitedBy: string;
+
+    @Column({ name: 'invited_at', nullable: true })
+    invitedAt: Date;
+
+    @Column({ name: 'activated_at', nullable: true })
+    activatedAt: Date;
 
     @Column({ name: 'current_hashed_refresh_token', nullable: true })
     currentHashedRefreshToken?: string;

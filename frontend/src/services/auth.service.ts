@@ -23,9 +23,9 @@ export const authService = {
         try {
             await api.post('/auth/logout');
         } finally {
-            localStorage.removeItem('access_token');
-            localStorage.removeItem('refresh_token');
-            localStorage.removeItem('user');
+            sessionStorage.removeItem('access_token');
+            sessionStorage.removeItem('refresh_token');
+            sessionStorage.removeItem('user');
         }
     },
 
@@ -35,6 +35,6 @@ export const authService = {
     },
 
     isAuthenticated(): boolean {
-        return !!localStorage.getItem('access_token');
+        return !!sessionStorage.getItem('access_token');
     },
 };

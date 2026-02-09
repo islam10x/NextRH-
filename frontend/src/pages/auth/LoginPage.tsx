@@ -157,9 +157,6 @@ const LoginPage: React.FC = () => {
                   'Sign In'
                 )}
               </Button>
-              <p className="text-xs text-muted-foreground text-center">
-                Demo mode: Any credentials will work. Select a role to explore the system.
-              </p>
             </CardFooter>
           </form>
         </Card>

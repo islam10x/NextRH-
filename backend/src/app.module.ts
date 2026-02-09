@@ -13,6 +13,7 @@ import { CvModule } from './cv/cv.module';
 import { FileStorageModule } from './file-storage/file-storage.module';
 import { RagModule } from './rag/rag.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { MailModule } from './mail/mail.module';
 
 @Module({
     imports: [
@@ -45,6 +46,7 @@ import { NotificationsModule } from './notifications/notifications.module';
         FileStorageModule,
         RagModule,
         NotificationsModule,
+        MailModule,
     ],
     controllers: [],
     providers: [],
