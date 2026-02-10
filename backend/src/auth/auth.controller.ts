@@ -28,7 +28,7 @@ export class AuthController {
 
     @Post('invite')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.BID_MANAGER)
+    @Roles(UserRole.BID_MANAGER, UserRole.TEAM_MANAGER)
     @HttpCode(HttpStatus.OK)
     async invite(
         @Body() body: { email: string; role: string },
@@ -79,7 +79,7 @@ export class AuthController {
 
     @Post('invite/resend/:userId')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.BID_MANAGER)
+    @Roles(UserRole.BID_MANAGER, UserRole.TEAM_MANAGER)
     @HttpCode(HttpStatus.OK)
     async resendInvitation(
         @Param('userId') userId: string,
@@ -90,7 +90,7 @@ export class AuthController {
 
     @Delete('invite/:userId')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.BID_MANAGER)
+    @Roles(UserRole.BID_MANAGER, UserRole.TEAM_MANAGER)
     @HttpCode(HttpStatus.OK)
     async cancelInvitation(@Param('userId') userId: string) {
         return this.invitationsService.cancelInvitation(userId);

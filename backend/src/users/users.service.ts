@@ -35,9 +35,11 @@ export class UsersService {
         return this.usersRepository.save(user);
     }
 
-    async findAll(): Promise<User[]> {
+    async findAll(managerId?: string): Promise<User[]> {
+        const whereClause = managerId ? { invitedBy: managerId } : {};
         return this.usersRepository.find({
-            select: ['user_id', 'email', 'firstName', 'lastName', 'role', 'status', 'createdAt', 'updatedAt'],
+            where: whereClause,
+            select: ['user_id', 'email', 'firstName', 'lastName', 'role', 'status', 'createdAt', 'updatedAt', 'invitedBy'],
         });
     }
 
