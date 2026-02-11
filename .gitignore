@@ -14,7 +14,8 @@ venv/
 .venv/
 env/
 .env
-
+uploads/
+templates/
 # Environment variables
 .env
 .env.*
