@@ -2,7 +2,7 @@ import { Injectable, ConflictException, NotFoundException } from '@nestjs/common
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
-import { User } from './entities/user.entity';
+import { User, UserStatus } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 
@@ -30,6 +30,8 @@ export class UsersService {
         const user = this.usersRepository.create({
             ...createUserDto,
             password: hashedPassword,
+            status: UserStatus.ACTIVE,
+            activatedAt: new Date(),
         });
 
         return this.usersRepository.save(user);
@@ -51,7 +53,22 @@ export class UsersService {
     }
 
     async getUserIfRefreshTokenMatches(refreshToken: string, userId: string): Promise<User | null> {
-        const user = await this.findById(userId);
+        const user = await this.usersRepository.findOne({
+            where: { user_id: userId },
+            select: [
+                'user_id',
+                'email',
+                'firstName',
+                'lastName',
+                'role',
+                'status',
+                'currentHashedRefreshToken',
+            ],
+        });
+
+        if (!user) {
+            return null;
+        }
 
         const isRefreshTokenMatching = await bcrypt.compare(
             refreshToken,

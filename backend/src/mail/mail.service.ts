@@ -7,15 +7,24 @@ export class MailService {
     private transporter: nodemailer.Transporter;
 
     constructor(private configService: ConfigService) {
-        const host = this.configService.get<string>('SMTP_HOST');
-        const user = this.configService.get<string>('SMTP_USER');
+        const host = this.configService.get<string>('MAIL_HOST') || this.configService.get<string>('SMTP_HOST');
+        const user = this.configService.get<string>('MAIL_USER') || this.configService.get<string>('SMTP_USER');
 
         if (!host || !user) {
             console.warn('WARNING: SMTP configuration is missing. Emails will fail to send.');
         }
 
-        const port = Number(this.configService.get('SMTP_PORT', 2525));
-        const secure = this.configService.get('SMTP_SECURE') === 'true'; // Explicit cast from string
+        const portValue =
+            this.configService.get<string>('MAIL_PORT') ??
+            this.configService.get<string>('SMTP_PORT') ??
+            '25';
+        const port = Number(portValue);
+
+        const secureValue =
+            this.configService.get<string>('MAIL_SECURE') ??
+            this.configService.get<string>('SMTP_SECURE') ??
+            'false';
+        const secure = secureValue === 'true';
 
         this.transporter = nodemailer.createTransport({
             host,
@@ -23,7 +32,13 @@ export class MailService {
             secure,
             auth: {
                 user,
-                pass: this.configService.get<string>('SMTP_PASS'),
+                pass: this.configService.get<string>('MAIL_PASSWORD') || this.configService.get<string>('SMTP_PASS'),
+            },
+            tls: {
+                rejectUnauthorized:
+                    (this.configService.get<string>('MAIL_TLS_REJECT_UNAUTHORIZED') ??
+                        this.configService.get<string>('SMTP_TLS_REJECT_UNAUTHORIZED') ??
+                        'true') === 'true',
             },
             connectionTimeout: 10000, // 10 seconds
             greetingTimeout: 10000,
@@ -39,7 +54,9 @@ export class MailService {
 
         // Use system email for 'From' but set display name to BID Manager
         // This ensures better deliverability (DMARC/SPF) while showing who sent it
-        const systemFrom = this.configService.get<string>('SMTP_FROM');
+        const systemFrom =
+            this.configService.get<string>('MAIL_FROM_ADDRESS') ||
+            this.configService.get<string>('SMTP_FROM');
         const fromDisplayName = senderName ? `${senderName} via CV Manager` : 'CV Manager';
 
         const mailOptions = {

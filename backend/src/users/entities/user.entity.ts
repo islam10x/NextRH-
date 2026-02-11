@@ -12,6 +12,12 @@ export enum UserRole {
     BID_MANAGER = 'bid_manager',
 }
 
+export enum UserStatus {
+    ACTIVE = 'active',
+    PENDING_INVITATION = 'pending_invitation',
+    DEACTIVATED = 'deactivated',
+}
+
 @Entity('users')
 export class User {
     @PrimaryGeneratedColumn('uuid')
@@ -29,10 +35,10 @@ export class User {
 
     @Column({
         type: 'enum',
-        enum: ['active', 'pending_invitation', 'deactivated'],
-        default: 'pending_invitation',
+        enum: UserStatus,
+        default: UserStatus.PENDING_INVITATION,
     })
-    status: 'active' | 'pending_invitation' | 'deactivated';
+    status: UserStatus;
 
     @Column({ name: 'first_name', nullable: true })
     firstName: string;

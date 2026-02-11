@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { User, UserRole } from '../users/entities/user.entity';
+import { User, UserRole, UserStatus } from '../users/entities/user.entity';
 import { InvitationToken } from './entities/invitation-token.entity';
 import { v4 as uuidv4 } from 'uuid';
 import * as bcrypt from 'bcryptjs';
@@ -30,7 +30,7 @@ export class InvitationsService {
         const newUser = this.usersRepository.create({
             email,
             role: role as UserRole,
-            status: 'pending_invitation',
+            status: UserStatus.PENDING_INVITATION,
             invitedBy: invitedByUserId,
             invitedAt: new Date(),
             // No password, no first/last name yet
@@ -152,7 +152,7 @@ export class InvitationsService {
 
         // Update User
         user.password = hashedPassword;
-        user.status = 'active';
+        user.status = UserStatus.ACTIVE;
         user.activatedAt = new Date();
         await this.usersRepository.save(user);
 
@@ -168,7 +168,7 @@ export class InvitationsService {
     async resendInvitation(userId: string, invitedByUserId: string) {
         const user = await this.usersRepository.findOne({ where: { user_id: userId } });
         if (!user) throw new NotFoundException('User not found');
-        if (user.status !== 'pending_invitation') {
+        if (user.status !== UserStatus.PENDING_INVITATION) {
             throw new BadRequestException('Can only resend invitations for pending users');
         }
 
@@ -204,7 +204,7 @@ export class InvitationsService {
     async cancelInvitation(userId: string) {
         const user = await this.usersRepository.findOne({ where: { user_id: userId } });
         if (!user) throw new NotFoundException('User not found');
-        if (user.status !== 'pending_invitation') {
+        if (user.status !== UserStatus.PENDING_INVITATION) {
             throw new BadRequestException('Only pending invitations can be cancelled');
         }
 

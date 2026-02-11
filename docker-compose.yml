@@ -34,7 +34,14 @@ services:
       context: ./backend
       target: development
     container_name: cv-backend
+    env_file:
+      - ./backend/.env
     environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: cv_management
       DATABASE_URL: postgresql://postgres:${DB_PASSWORD}@postgres:5432/cv_management
       JWT_SECRET: ${JWT_SECRET}
     volumes:

@@ -1,6 +1,10 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import * as path from 'path';
+import * as dotenv from 'dotenv';
+
+dotenv.config({ path: path.resolve(__dirname, '..', '.env'), override: true });
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { EmployeesModule } from './employees/employees.module';
@@ -19,6 +23,7 @@ import { MailModule } from './mail/mail.module';
     imports: [
         ConfigModule.forRoot({
             isGlobal: true,
+            envFilePath: path.resolve(__dirname, '..', '.env'),
         }),
         TypeOrmModule.forRootAsync({
             imports: [ConfigModule],

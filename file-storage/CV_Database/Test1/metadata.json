@@ -1,0 +1,23 @@
+{
+  "name": "test1",
+  "skills": [],
+  "certifications": [
+    {
+      "name": "Certificate of Achievement",
+      "status": "expired",
+      "expiration": "2021-01-25"
+    },
+    {
+      "name": "Unknown Certification",
+      "status": "unknown",
+      "expiration": null
+    },
+    {
+      "name": "Nexpose Certified Administrator (NCA)",
+      "status": "expired",
+      "expiration": "2016-02-06"
+    }
+  ],
+  "experience_years": 0,
+  "last_update": "2026-02-11"
+}

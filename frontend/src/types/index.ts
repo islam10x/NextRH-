@@ -138,3 +138,17 @@ export interface UploadedFile {
   uploadedAt?: string;
   error?: string;
 }
+
+export interface ParsedCertificationMetadata {
+  name: string;
+  status: 'active' | 'expired' | 'unknown';
+  expiration: string | null;
+}
+
+export interface ParsedEmployeeMetadata {
+  name: string;
+  skills: string[];
+  certifications: ParsedCertificationMetadata[];
+  experience_years: number;
+  last_update: string;
+}

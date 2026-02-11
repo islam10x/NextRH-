@@ -2,7 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../users/users.service';
 import { LoginDto } from './dto/login.dto';
-import { User } from '../users/entities/user.entity';
+import { User, UserStatus } from '../users/entities/user.entity';
 
 export interface JwtPayload {
     sub: string;
@@ -36,7 +36,7 @@ export class AuthService {
             throw new UnauthorizedException('Invalid credentials');
         }
 
-        if (user.status !== 'active') { // Check status instead of isActive
+        if (user.status !== UserStatus.ACTIVE) {
             throw new UnauthorizedException('Account is inactive or pending invitation');
         }
 
@@ -97,7 +97,7 @@ export class AuthService {
             const payload = this.jwtService.verify(token);
             const user = await this.usersService.getUserIfRefreshTokenMatches(token, payload.sub);
 
-            if (!user || user.status !== 'active') { // Check status instead of isActive
+            if (!user || user.status !== UserStatus.ACTIVE) {
                 throw new UnauthorizedException('Account is inactive or pending invitation');
             }
 
