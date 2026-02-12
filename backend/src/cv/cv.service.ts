@@ -7,6 +7,8 @@ import { EmployeeProfile } from '../employees/entities/employee-profile.entity';
 import { WorkExperience } from '../employees/entities/work-experience.entity';
 import { Education } from '../employees/entities/education.entity';
 import { Certification } from '../certifications/entities/certification.entity';
+import { Project } from '../projects/entities/project.entity';
+import { ProjectParticipant } from '../projects/entities/participant.entity';
 
 @Injectable()
 export class CvService {
@@ -24,7 +26,11 @@ export class CvService {
         @InjectRepository(Education)
         private educationRepository: Repository<Education>,
         @InjectRepository(Certification)
-        private certificationRepository: Repository<Certification>
+        private certificationRepository: Repository<Certification>,
+        @InjectRepository(Project)
+        private projectRepository: Repository<Project>,
+        @InjectRepository(ProjectParticipant)
+        private participantRepository: Repository<ProjectParticipant>
     ) { }
 
     async processCvData(userId: string, data: any) {
@@ -74,7 +80,7 @@ export class CvService {
             isCurrent: true,
         });
         await this.metadataRepository.save(snapshot);
-        
+
 
         // 4. Populate Work Experience
         if (data.structured_data?.experience) {
@@ -124,6 +130,59 @@ export class CvService {
                 return newCert;
             });
             await this.certificationRepository.save(certifications);
+        }
+        // 7. Populate Projects
+        if (data.structured_data?.projects) {
+            // Delete existing participation links for this profile
+            await this.participantRepository.delete({ profile: { profile_id: profile.profile_id } });
+
+            const processedProjectIds = new Set<string>();
+
+            for (const projectData of data.structured_data.projects) {
+                this.logger.debug(`Processing project: ${JSON.stringify(projectData)}`);
+
+                // Fallback: use client as project name if name is missing
+                const projectName = projectData.name || 'Unknown Project';
+                const projectDesc = projectData.description || '';
+                const clientName = projectData.client || null;
+                const projectYear = projectData.date || null;
+
+                // Find or create project by name, description, client, and year
+                let project = await this.projectRepository.findOne({
+                    where: {
+                        projectName: projectName,
+                        projectDescription: projectDesc,
+                        clientName: clientName,
+                        projectYear: projectYear
+                    }
+                });
+
+                if (!project) {
+                    project = this.projectRepository.create({
+                        projectName: projectName,
+                        projectDescription: projectDesc,
+                        clientName: clientName,
+                        projectYear: projectYear
+                    });
+                    project = await this.projectRepository.save(project);
+                    this.logger.log(`Created new project: ${projectName} for client: ${clientName} (${projectYear})`);
+                }
+
+                // Deduplicate participation
+                if (processedProjectIds.has(project.project_id)) {
+                    continue;
+                }
+
+                // Create participation entry linking profile to project
+                const participant = this.participantRepository.create({
+                    profile: profile,
+                    project: project,
+                    description: projectDesc,
+                    role: projectData.role || 'Contributor'
+                });
+                await this.participantRepository.save(participant);
+                processedProjectIds.add(project.project_id);
+            }
         }
 
         return { message: 'CV processed successfully', profileId: profile.profile_id };

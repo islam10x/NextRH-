@@ -12,6 +12,8 @@ import { User } from '../../users/entities/user.entity';
 import { WorkExperience } from './work-experience.entity';
 import { Education } from './education.entity';
 import { Certification } from '../../certifications/entities/certification.entity';
+import { Project } from '../../projects/entities/project.entity';
+import { ProjectParticipant } from '../../projects/entities/participant.entity';
 
 @Entity('employee_profiles')
 export class EmployeeProfile {
@@ -42,6 +44,9 @@ export class EmployeeProfile {
 
     @OneToMany(() => Certification, (certification) => certification.profile)
     certifications: Certification[];
+
+    @OneToMany(() => ProjectParticipant, (participant) => participant.profile)
+    projectParticipations: ProjectParticipant[];
 
     @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;

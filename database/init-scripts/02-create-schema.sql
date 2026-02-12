@@ -131,9 +131,7 @@ CREATE TABLE IF NOT EXISTS projects (
     project_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_name VARCHAR(255) NOT NULL,
     client_name VARCHAR(255),
-    industry VARCHAR(100),
-    start_date DATE,
-    end_date DATE,
+    project_year VARCHAR(10),
     project_description TEXT
 );
 
