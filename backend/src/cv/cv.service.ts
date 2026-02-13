@@ -9,6 +9,7 @@ import { Education } from '../employees/entities/education.entity';
 import { Certification } from '../certifications/entities/certification.entity';
 import { Project } from '../projects/entities/project.entity';
 import { ProjectParticipant } from '../projects/entities/participant.entity';
+import { FileStorageService } from '../file-storage/file-storage.service';
 
 @Injectable()
 export class CvService {
@@ -30,9 +31,90 @@ export class CvService {
         @InjectRepository(Project)
         private projectRepository: Repository<Project>,
         @InjectRepository(ProjectParticipant)
-        private participantRepository: Repository<ProjectParticipant>
+        private participantRepository: Repository<ProjectParticipant>,
+        private readonly fileStorageService: FileStorageService
     ) { }
 
+    /**
+     * Rania's Logic: Physical file storage management
+     * Consolidated: Saves file AND triggers parsing
+     */
+    async saveEmployeeCv(userId: string, file: Express.Multer.File) {
+        let updatedUser = null;
+
+        // 1. Parse CV FIRST to get the name
+        try {
+            const formData = new FormData();
+            formData.append('user_id', userId);
+            const blob = new Blob([file.buffer as any], { type: file.mimetype });
+            formData.append('file', blob, file.originalname);
+
+            const aiResponse = await fetch('http://localhost:8000/api/v1/parsing/cv', {
+                method: 'POST',
+                body: formData,
+            });
+
+            if (aiResponse.ok) {
+                const parsingResult = await aiResponse.json();
+                this.logger.log(`AI parsing successful for user ${userId}`);
+
+                // 2. Update user names in DB BEFORE creating folder
+                await this.updateUserNames(userId, parsingResult);
+
+                // Fetch the updated user
+                updatedUser = await this.userRepository.findOne({ where: { user_id: userId } });
+
+                // 3. NOW save the file (folder will use updated name from DB)
+                const storageResult = await this.fileStorageService.saveEmployeeFile(userId, file, 'CV');
+
+                // 4. Save the full parsed data to metadata.json
+                await this.fileStorageService.saveMetadata(userId, parsingResult);
+
+                // 5. Process and store structured data in database
+                await this.processCvData(userId, parsingResult);
+
+                return {
+                    ...storageResult,
+                    user: updatedUser
+                };
+            } else {
+                this.logger.error(`AI parsing failed: ${aiResponse.statusText}`);
+                throw new Error('AI parsing failed');
+            }
+        } catch (error) {
+            this.logger.error(`Error during AI parsing orchestration: ${error.message}`);
+            throw error;
+        }
+    }
+
+    /**
+     * Update user's firstName and lastName from parsed CV data
+     */
+    private async updateUserNames(userId: string, data: any) {
+        const user = await this.userRepository.findOne({ where: { user_id: userId } });
+        if (!user) {
+            throw new NotFoundException(`User with ID ${userId} not found`);
+        }
+
+        let updated = false;
+        if (data.structured_data?.first_name) {
+            user.firstName = data.structured_data.first_name;
+            updated = true;
+        }
+        if (data.structured_data?.last_name) {
+            user.lastName = data.structured_data.last_name;
+            updated = true;
+        }
+
+        if (updated) {
+            await this.userRepository.save(user);
+            this.logger.log(`Updated user ${userId} names: ${user.firstName} ${user.lastName}`);
+        }
+    }
+
+    /**
+     * Your Logic: Advanced CV data parsing into database
+     */
     async processCvData(userId: string, data: any) {
         this.logger.log(`Processing CV data for user ${userId}`);
 
@@ -40,23 +122,6 @@ export class CvService {
         const user = await this.userRepository.findOne({ where: { user_id: userId } });
         if (!user) {
             throw new NotFoundException(`User with ID ${userId} not found`);
-        }
-
-        // 1.1 Update User Details (First Name, Last Name) if available
-        if (data.structured_data?.first_name || data.structured_data?.last_name) {
-            let updated = false;
-            if (data.structured_data.first_name) {
-                user.firstName = data.structured_data.first_name;
-                updated = true;
-            }
-            if (data.structured_data.last_name) {
-                user.lastName = data.structured_data.last_name;
-                updated = true;
-            }
-            if (updated) {
-                await this.userRepository.save(user);
-                this.logger.log(`Updated user ${userId} details: ${user.firstName} ${user.lastName}`);
-            }
         }
 
         // 2. Find or Create Profile
@@ -84,10 +149,6 @@ export class CvService {
 
         // 4. Populate Work Experience
         if (data.structured_data?.experience) {
-            // Clear existing for this demo/MVP or append? 
-            // Better to clear and re-populate if it's a "parse new CV" action
-            // But realistically we should merge. For now let's just add new ones.
-            // Or delete all linked to this profile and re-add?
             await this.experienceRepository.delete({ profile: { profile_id: profile.profile_id } });
 
             const experiences = data.structured_data.experience.map((exp: any) => {
@@ -96,8 +157,6 @@ export class CvService {
                 newExp.jobTitle = exp.title || 'Unknown Role';
                 newExp.companyName = exp.company || 'Unknown Company';
                 newExp.description = exp.description || '';
-                // Date parsing logic might be needed if dates are strings like "Jan 2020"
-                // For MVP we might skip date parsing or do it in AI service
                 return newExp;
             });
             await this.experienceRepository.save(experiences);
@@ -112,7 +171,6 @@ export class CvService {
                 newEdu.profile = profile;
                 newEdu.degree = edu.degree || 'Unknown Degree';
                 newEdu.institution = edu.institution || 'Unknown Institution';
-                // Date parsing needed
                 return newEdu;
             });
             await this.educationRepository.save(educations);
@@ -126,28 +184,23 @@ export class CvService {
                 const newCert = new Certification();
                 newCert.profile = profile;
                 newCert.certificationName = cert.name || 'Unknown Certification';
-                // Date parsing needed
                 return newCert;
             });
             await this.certificationRepository.save(certifications);
         }
+
         // 7. Populate Projects
         if (data.structured_data?.projects) {
-            // Delete existing participation links for this profile
             await this.participantRepository.delete({ profile: { profile_id: profile.profile_id } });
 
             const processedProjectIds = new Set<string>();
 
             for (const projectData of data.structured_data.projects) {
-                this.logger.debug(`Processing project: ${JSON.stringify(projectData)}`);
-
-                // Fallback: use client as project name if name is missing
                 const projectName = projectData.name || 'Unknown Project';
                 const projectDesc = projectData.description || '';
                 const clientName = projectData.client || null;
                 const projectYear = projectData.date || null;
 
-                // Find or create project by name, description, client, and year
                 let project = await this.projectRepository.findOne({
                     where: {
                         projectName: projectName,
@@ -168,12 +221,10 @@ export class CvService {
                     this.logger.log(`Created new project: ${projectName} for client: ${clientName} (${projectYear})`);
                 }
 
-                // Deduplicate participation
                 if (processedProjectIds.has(project.project_id)) {
                     continue;
                 }
 
-                // Create participation entry linking profile to project
                 const participant = this.participantRepository.create({
                     profile: profile,
                     project: project,

@@ -7,6 +7,7 @@ interface AuthContextType {
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<User | null>;
   logout: () => void;
+  updateUser: (backendUser: any) => void;
   isLoading: boolean;
 }
 
@@ -41,17 +42,20 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       try {
         const profile = await authService.getProfile();
         setUser(mapBackendUserToFrontend(profile));
-      } catch (error) {
+      } catch (error: any) {
         console.error('Failed to fetch profile', error);
-        authService.logout();
+        // Only logout on explicit authentication failures (401, 403)
+        // If it's a network error or other, keep the user logged in with current data
+        if (error.response?.status === 401 || error.response?.status === 403) {
+          authService.logout();
+          setUser(null);
+        }
       }
     }
     setIsLoading(false);
   };
 
-  useEffect(() => {
-    initAuth();
-  }, []);
+
 
   const login = useCallback(async (email: string, password: string): Promise<User | null> => {
     try {
@@ -75,11 +79,33 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setUser(null);
   }, []);
 
+  useEffect(() => {
+    // Listen for logout events from the API interceptor
+    const handleLogoutEvent = () => {
+      console.log('Logout event received from API interceptor');
+      logout();
+    };
+
+    window.addEventListener('auth:logout', handleLogoutEvent);
+    initAuth();
+
+    return () => {
+      window.removeEventListener('auth:logout', handleLogoutEvent);
+    };
+  }, [logout]);
+
+  const updateUser = useCallback((backendUser: any) => {
+    const mappedUser = mapBackendUserToFrontend(backendUser);
+    sessionStorage.setItem('user', JSON.stringify(mappedUser));
+    setUser(mappedUser);
+  }, []);
+
   const value = {
     user,
     isAuthenticated: !!user,
     login,
     logout,
+    updateUser,
     isLoading
   };
 

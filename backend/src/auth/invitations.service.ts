@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { User, UserRole } from '../users/entities/user.entity';
+import { User, UserRole, UserStatus } from '../users/entities/user.entity';
 import { InvitationToken } from './entities/invitation-token.entity';
 import { v4 as uuidv4 } from 'uuid';
 import * as bcrypt from 'bcryptjs';
@@ -30,7 +30,7 @@ export class InvitationsService {
         const newUser = this.usersRepository.create({
             email,
             role: role as UserRole,
-            status: 'pending_invitation',
+            status: UserStatus.PENDING_INVITATION,
             invitedBy: invitedByUserId,
             invitedAt: new Date(),
             // No password, no first/last name yet
@@ -74,43 +74,6 @@ export class InvitationsService {
     }
 
     async validateToken(token: string) {
-        // Find all unused logical tokens (This is inefficient in prod, better storing token ID in link if possible, 
-        // but requirement says link has token. We'll search or need a way to lookup. 
-        // Wait, token is hashed. We can't lookup by hash. 
-        // We need the token ID in the URL or the token needs to be the ID?
-        // Ah, current requirement: "token=..." 
-        // If token is just a random string, we can't look it up if it's hashed.
-        // Unless we store the token itself? No, security.
-        // Implementation Plan Step 11: "Extract token from URL... Query invitation_tokens... match found"
-        // This implies iterating tokens? No, that's bad.
-        // BETTER APPROACH: Token = tokenId + '.' + secret.
-        // Or store the token plainly? No.
-        // Let's use: Link = /setup-password?token=${tokenId}&secret=${randomString}
-        // DB stores hash(secret).
-        // Let's adjust logic. Token in URL will be `${tokenId}.${secret}`.
-
-        // But let's stick to the simplest securely:
-        // Token ID is UUID. Secret is random.
-        // URL: ?token=TOKEN_ID.SECRET
-
-        // My previous plan said "token=...".
-        // Let's assume the input token is the UUID of the token record for simplicity if the user didn't specify format?
-        // User request Step 4: "Generate random 64-character token... Hash it... Store it"
-        // User request Step 11: "Query invitation_tokens where is_used=false... For each... compare"
-        // THIS IS VERY SLOW. "For each token... compare".
-        // I should stick to a more performant way: Token = <UUID>_<RandomSecret>. 
-        // Look up by UUID, verify Secret.
-
-        // Let's change the implementation slightly for performance but keep the spirit.
-        // I will generate a token that is `userId.randomToken`.
-        // Then I can look up by userId.
-
-        // Or better: `tokenId.randomHex`.
-        // I will implement `tokenId.randomHex`.
-
-        // Let's split the token.
-        // If token doesn't have a dot, it might be the old slow way.
-        // I'll implement `tokenId.secret`.
         return this.validateTokenLogic(token);
     }
 
@@ -152,7 +115,7 @@ export class InvitationsService {
 
         // Update User
         user.password = hashedPassword;
-        user.status = 'active';
+        user.status = UserStatus.ACTIVE;
         user.activatedAt = new Date();
         await this.usersRepository.save(user);
 
@@ -168,7 +131,7 @@ export class InvitationsService {
     async resendInvitation(userId: string, invitedByUserId: string) {
         const user = await this.usersRepository.findOne({ where: { user_id: userId } });
         if (!user) throw new NotFoundException('User not found');
-        if (user.status !== 'pending_invitation') {
+        if (user.status !== UserStatus.PENDING_INVITATION) {
             throw new BadRequestException('Can only resend invitations for pending users');
         }
 
@@ -204,7 +167,7 @@ export class InvitationsService {
     async cancelInvitation(userId: string) {
         const user = await this.usersRepository.findOne({ where: { user_id: userId } });
         if (!user) throw new NotFoundException('User not found');
-        if (user.status !== 'pending_invitation') {
+        if (user.status !== UserStatus.PENDING_INVITATION) {
             throw new BadRequestException('Only pending invitations can be cancelled');
         }
 

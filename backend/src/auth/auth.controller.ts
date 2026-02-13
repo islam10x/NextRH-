@@ -13,6 +13,7 @@ import {
 import { AuthService } from './auth.service';
 import { InvitationsService } from './invitations.service';
 import { LoginDto } from './dto/login.dto';
+import { InviteDto } from './dto/invite.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { Roles } from './decorators/roles.decorator';
@@ -31,7 +32,7 @@ export class AuthController {
     @Roles(UserRole.BID_MANAGER, UserRole.TEAM_MANAGER)
     @HttpCode(HttpStatus.OK)
     async invite(
-        @Body() body: { email: string; role: string },
+        @Body() body: InviteDto,
         @CurrentUser() user: any,
     ) {
         return this.invitationsService.inviteEmployee(

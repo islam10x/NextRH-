@@ -6,6 +6,7 @@ requests
 pymupdf
 python-docx
 tika
+
 pytesseract
 easyocr
 docxtpl

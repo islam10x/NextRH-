@@ -1,0 +1,317 @@
+{
+  "name": "Anouar ABDALLAH",
+  "skills": [],
+  "certifications": [
+    "CCNP Security",
+    "Forcepoint NGFW Certified Administrator",
+    "FortiADC Specialist",
+    "Security Architecture for Systems Engineer (500-651)",
+    "Barracuda Application Delivery Specialist",
+    "Barracuda Load Balancer ADC Certified Engineer",
+    "Network Security Architect – NSE 7",
+    "Sophos Certified Architect – XG Firewall",
+    "Cisco SISAS 300-208 : Implementing Cisco Secure Access Solutions",
+    "CCNA Security",
+    "Nexpose Certified Administrator",
+    "CCNA Routing and Switching",
+    "FortiGate Network Security Professional – NSE 4",
+    "Fortinet Security Sales Associate (NSE 1-2-3)",
+    "Certification Voltaire : Niveau Affaires (747)",
+    "Unknown Certification",
+    "Achievement",
+    "ATTESTATION DE DIPLOME",
+    "ATTESTATION DE DIPLOME Il",
+    "WAF200 - Barracuda Web Application Firewall Certified Product Specialist",
+    "DIPLOME NATIONAL D’INGENIEUR EN INFORMATIQUE",
+    "Having achieved a passing score on the Nexpose Certified Administrator exam",
+    "ified Administrator (NCA)",
+    "Nexpose Certified Administrator (NCA)",
+    "NUMBER: TOJaRHUEIC",
+    "NSE 7 Network Security Architect",
+    "NSE 4 Security Professional",
+    "of Achievement",
+    "Sophos Certified Architect",
+    "Cisco Certified Network Associate Security",
+    "Cisco Certified Network Associate Routing and Switching",
+    "of Competency",
+    "Fundamentals of Deep Learning"
+  ],
+  "experience_years": 0,
+  "last_update": "2026-02-13T17:14:48.430Z",
+  "structured_data": {
+    "first_name": "Anouar",
+    "last_name": "ABDALLAH",
+    "email": "a.abdallah@nextstep-it.com",
+    "phone": "+216 98 772 838",
+    "address": "Rue 8612 - Imp Energie Solaire- Charguia I, 2035 Tunis, Tunisie",
+    "experience": [
+      {
+        "start_date": "Depuis Janvier 2020",
+        "company": "Next Step IT",
+        "title": "Chef du département « Services de Sécurité Managés »"
+      },
+      {
+        "start_date": "Août 2015- Décembre 2019",
+        "company": "Next Step IT",
+        "title": "Consultant Sécurité"
+      }
+    ],
+    "certifications": [
+      {
+        "name": "CCNP Security",
+        "date_obtained": "Février 2020"
+      },
+      {
+        "name": "Forcepoint NGFW Certified Administrator",
+        "date_obtained": "Octobre 2019"
+      },
+      {
+        "name": "FortiADC Specialist",
+        "date_obtained": "Février 2019"
+      },
+      {
+        "name": "Security Architecture for Systems Engineer (500-651)",
+        "date_obtained": "Juillet 2018"
+      },
+      {
+        "name": "Barracuda Application Delivery Specialist",
+        "date_obtained": "Mars 2018"
+      },
+      {
+        "name": "Barracuda Load Balancer ADC Certified Engineer",
+        "date_obtained": "Mars 2018"
+      },
+      {
+        "name": "Network Security Architect – NSE 7",
+        "date_obtained": "Février 2018"
+      },
+      {
+        "name": "Sophos Certified Architect – XG Firewall",
+        "date_obtained": "Avril 2017"
+      },
+      {
+        "name": "Cisco SISAS 300-208 : Implementing Cisco Secure Access Solutions",
+        "date_obtained": "Mars 2017"
+      },
+      {
+        "name": "CCNA Security",
+        "date_obtained": "Septembre 2016"
+      },
+      {
+        "name": "Nexpose Certified Administrator",
+        "date_obtained": "Juin 2016"
+      },
+      {
+        "name": "CCNA Routing and Switching",
+        "date_obtained": "Avril 2016"
+      },
+      {
+        "name": "FortiGate Network Security Professional – NSE 4",
+        "date_obtained": "Février 2016"
+      },
+      {
+        "name": "Fortinet Security Sales Associate (NSE 1-2-3)",
+        "date_obtained": "Octobre 2015"
+      },
+      {
+        "name": "Certification Voltaire : Niveau Affaires (747)",
+        "date_obtained": "Janvier 2015"
+      }
+    ],
+    "education": [
+      {
+        "end_date": "2019",
+        "institution": "Ecole Supérieur Privée de Technologie et de Management",
+        "degree": "Diplôme National d’Ingénieur en Informatique (Option : Systèmes et Réseaux)"
+      },
+      {
+        "end_date": "2015",
+        "institution": "Institut Supérieur des Etudes Technologiques en Communications de Tunis (ISET’Com)",
+        "degree": "Licence appliquée en Sciences et Technologies de l’Information et de la Communication (Option : Sécurité des réseaux)"
+      },
+      {
+        "end_date": "2012",
+        "institution": "Lycée IBN KHALDOUN",
+        "degree": "Baccalauréat Mathématiques"
+      }
+    ],
+    "projects": [
+      {
+        "date": "2015",
+        "client": "Rose Blanche",
+        "description": "Migration de l’infrastructure réseau, wifi et sécurité."
+      },
+      {
+        "date": "2015",
+        "client": "NAIB Bank",
+        "description": "Migration de l’infrastructure réseau et sécurité."
+      },
+      {
+        "date": "2015",
+        "client": "Alubaf International Bank",
+        "description": "Migration de l’infrastructure réseau et sécurité"
+      },
+      {
+        "date": "2015",
+        "client": "Assurances Zitouna Takaful",
+        "description": "Migration de l’infrastructure de sécurité"
+      },
+      {
+        "date": "2015",
+        "client": "Mitigan",
+        "description": "Implémentation d’une solution de sécurité"
+      },
+      {
+        "date": "2015",
+        "client": "Al Hikma Pharmaceuticals",
+        "description": "Implémentation d’une solution de sécurité pour le WiFi"
+      },
+      {
+        "date": "2016",
+        "client": "Groupe ARTES",
+        "description": "Implémentation d’une solution"
+      },
+      {
+        "date": "2016",
+        "client": "Banque Tuniso-Koweitienne",
+        "description": "Implémentation d’une solution d’authentification AAA"
+      },
+      {
+        "date": "2016",
+        "client": "Banque Nationale Agricole",
+        "description": "Implémentation d’une solution de monitoring Open Source"
+      },
+      {
+        "date": "2016",
+        "client": "Société Nationale des Chemins de",
+        "description": "Fer Tunisiens Migration de la solution de sécurité"
+      },
+      {
+        "date": "2016",
+        "client": "Compagnie Tunisienne de Forage",
+        "description": "Migration de l’infrastructure réseau et sécurité"
+      },
+      {
+        "date": "2016",
+        "client": "KIABI",
+        "description": "Implémentation d’une solution réseau et sécurité"
+      },
+      {
+        "date": "2016",
+        "client": "Agence Nationale pour l’Emploi et",
+        "description": "le Travail Indépendant Migration de l’infrastructure de sécurité"
+      },
+      {
+        "date": "2016",
+        "client": "Haute Autorité Indépendante de la",
+        "description": "Communication Audiovisuelle Implémentation d’une solution antivirale"
+      },
+      {
+        "date": "2016",
+        "client": "Clinique les Narcisses",
+        "description": "Implémentation d’une solution antivirale"
+      },
+      {
+        "date": "2016",
+        "client": "Alubaf International Bank",
+        "description": "Implémentation d’une solution antivirale"
+      },
+      {
+        "date": "2016",
+        "client": "Tunisie TradeNet",
+        "description": "Migration d’une solution de sécurité"
+      },
+      {
+        "date": "2017",
+        "client": "Banque de Tunisie",
+        "description": "Migration de l’infrastructure réseau"
+      },
+      {
+        "date": "2017",
+        "client": "Centre Informatique du Ministère",
+        "description": "de Santé Migration de l’infrastructure réseau/sécurité"
+      },
+      {
+        "date": "2017",
+        "client": "Amen Bank",
+        "description": "Mise à niveau de l’infrastructure réseau/sécurité"
+      },
+      {
+        "date": "2017",
+        "client": "MITIGAN",
+        "description": "Mise en place de l’infrastructure réseau/sécurité"
+      },
+      {
+        "date": "2017",
+        "client": "Attijari Bank",
+        "description": "Mise en place d’une solution NAC"
+      },
+      {
+        "date": "2017",
+        "client": "Tunisie Telecom",
+        "description": "Mise en place d'une solution de scan de vulnérabilités"
+      },
+      {
+        "date": "2017",
+        "client": "Centre National de l'Informatique",
+        "description": "Mise en place d'une solution de Firewalling pour le projet RNIA"
+      },
+      {
+        "date": "2018",
+        "client": "Banque Tuniso-Koweitienne",
+        "description": "Mise à niveau de l'infrastructure de sécurité"
+      },
+      {
+        "date": "2018",
+        "client": "Banque Centrale de la Libye",
+        "description": "Mise en place de l'infrastructure réseaux/sécurité du site Backup"
+      },
+      {
+        "date": "2018",
+        "client": "Office de la Marine Marchande et",
+        "description": "des Ports Mise à niveau de l'infrastructure réseaux/sécurité"
+      },
+      {
+        "date": "2018",
+        "client": "Bourse des Valeurs Monétiques de",
+        "description": "Tunis (BVMT) Mise en place d'une solution SIEM"
+      },
+      {
+        "date": "2018",
+        "client": "Assurances CTAMA",
+        "description": "Mise à niveau de l'infrastructure réseaux/sécurité"
+      },
+      {
+        "date": "2019",
+        "client": "Banque Nationale Agricole",
+        "description": "Mise à niveau de l'infrastructure réseaux/sécurité"
+      },
+      {
+        "date": "2019",
+        "client": "Centre de Calcul El-Khawarizmi",
+        "description": "Mise en place d'une solution de sécurité"
+      },
+      {
+        "date": "2019",
+        "client": "Société Tunisienne de l'Electricité et",
+        "description": "du Gaz Mise en place d'une solution de Load Balancing"
+      },
+      {
+        "date": "2020",
+        "client": "Office National de la Propriété",
+        "description": "Foncière Mise en place d’une infrastructure de sécurité"
+      },
+      {
+        "date": "2020",
+        "client": "Office de la Marine Marchande et",
+        "description": "des Ports Mise en place d’une infrastructure de réseau/sécurité"
+      },
+      {
+        "date": "2020",
+        "client": "Caisse Nationale d’Assurance",
+        "description": "Maladie Mise en place d’une infrastructure Cloud"
+      }
+    ]
+  },
+  "filename": "CV & Dip & Certif Anouar ABDALLAH 2021-1-3.pdf"
+}

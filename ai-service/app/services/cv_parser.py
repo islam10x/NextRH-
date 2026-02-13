@@ -52,19 +52,6 @@ class CVParserService:
                 "filename": filename
             }
             
-            # 1. Save metadata.json locally (as snapshot)
-            # In production, this should ideally be S3 or a persistent volume
-            # For now, saving to 'uploads' folder
-            os.makedirs(settings.UPLOAD_FOLDER, exist_ok=True)
-            meta_filename = f"{os.path.splitext(filename)[0]}_metadata.json"
-            meta_path = os.path.join(settings.UPLOAD_FOLDER, meta_filename)
-            with open(meta_path, "w", encoding='utf-8') as f:
-                json.dump(result, f, ensure_ascii=False, indent=2)
-            logger.info(f"Saved metadata snapshot to {meta_path}")
-
-            # 2. Send to Backend
-            await self.send_to_backend(user_id, result)
-
             return result
 
         except Exception as e:
@@ -74,24 +61,3 @@ class CVParserService:
             # Clean up temp file
             if os.path.exists(temp_path):
                 os.remove(temp_path)
-
-    async def send_to_backend(self, user_id: str, data: Dict[str, Any]):
-        """
-        Sends the parsed data to the Node.js backend to populate the database.
-        """
-        url = f"{settings.BACKEND_URL}/cv/process"
-        payload = {
-            "userId": user_id,
-            "data": data
-        }
-        
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(url, json=payload)
-                response.raise_for_status()
-                logger.info(f"Successfully sent CV data to backend for user {user_id}")
-            except httpx.HTTPError as e:
-                logger.error(f"Failed to send data to backend: {e}")
-                # We don't raise here to allow the immediate response to return `result` locally,
-                # but in production, we might want to queue this or alert.
-                pass

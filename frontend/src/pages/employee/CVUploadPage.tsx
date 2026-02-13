@@ -1,10 +1,14 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { UploadProgress } from '@/components/common';
 import { UploadStatus } from '@/types';
-import { Upload, FileText, CheckCircle, XCircle, File, Loader2 } from 'lucide-react';
+import { Upload, FileText, CheckCircle, File, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import api from '@/services/api';
+import { useAuth } from '@/contexts/AuthContext';
+import { ParsedEmployeeMetadata } from '@/types';
+import axios from 'axios';
 
 interface UploadedFileInfo {
   name: string;
@@ -18,8 +22,24 @@ const CVUploadPage: React.FC = () => {
   const [progress, setProgress] = useState(0);
   const [file, setFile] = useState<UploadedFileInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [metadata, setMetadata] = useState<ParsedEmployeeMetadata | null>(null);
 
-  const simulateUpload = useCallback((uploadedFile: File) => {
+  const loadMetadata = useCallback(async () => {
+    try {
+      const response = await api.get<ParsedEmployeeMetadata>('/file-storage/metadata/me');
+      setMetadata(response.data);
+    } catch {
+      // Keep UI usable even if metadata fetch fails
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMetadata();
+  }, [loadMetadata]);
+
+  const { updateUser } = useAuth();
+
+  const uploadFile = useCallback(async (uploadedFile: File) => {
     setFile({
       name: uploadedFile.name,
       size: uploadedFile.size,
@@ -29,24 +49,41 @@ const CVUploadPage: React.FC = () => {
     setUploadStatus('uploading');
     setProgress(0);
 
-    // Simulate upload progress
-    const uploadInterval = setInterval(() => {
-      setProgress((prev) => {
-        if (prev >= 100) {
-          clearInterval(uploadInterval);
-          setUploadStatus('parsing');
-          
-          // Simulate parsing
-          setTimeout(() => {
-            setUploadStatus('completed');
-          }, 2000);
-          
-          return 100;
-        }
-        return prev + 10;
+    try {
+      const formData = new FormData();
+      formData.append('file', uploadedFile);
+
+      const response = await api.post('/cv/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (event) => {
+          if (event.total) {
+            const pct = Math.round((event.loaded / event.total) * 100);
+            setProgress(pct);
+          }
+        },
       });
-    }, 200);
-  }, []);
+
+      // Update user name in frontend session if returned from backend
+      if (response.data && response.data.user) {
+        updateUser(response.data.user);
+      }
+
+      setUploadStatus('parsing');
+      setTimeout(() => {
+        setUploadStatus('completed');
+      }, 800);
+      await loadMetadata();
+    } catch (err) {
+      console.error('CV upload failed', err);
+      setUploadStatus('error');
+      if (axios.isAxiosError(err)) {
+        const message = (err.response?.data as { message?: string } | undefined)?.message;
+        setError(message || 'Upload failed. Please try again.');
+      } else {
+        setError('Upload failed. Please try again.');
+      }
+    }
+  }, [loadMetadata]);
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -66,30 +103,34 @@ const CVUploadPage: React.FC = () => {
 
       if (e.dataTransfer.files && e.dataTransfer.files[0]) {
         const droppedFile = e.dataTransfer.files[0];
-        if (droppedFile.type === 'application/pdf' || 
-            droppedFile.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-          simulateUpload(droppedFile);
+        if (droppedFile.type === 'application/pdf' ||
+          droppedFile.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+          droppedFile.type === 'image/png' ||
+          droppedFile.type === 'image/jpeg') {
+          uploadFile(droppedFile);
         } else {
-          setError('Please upload a PDF or DOCX file');
+          setError('Please upload a PDF, DOCX, PNG or JPG file');
         }
       }
     },
-    [simulateUpload]
+    [uploadFile]
   );
 
   const handleFileSelect = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.files && e.target.files[0]) {
         const selectedFile = e.target.files[0];
-        if (selectedFile.type === 'application/pdf' || 
-            selectedFile.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-          simulateUpload(selectedFile);
+        if (selectedFile.type === 'application/pdf' ||
+          selectedFile.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+          selectedFile.type === 'image/png' ||
+          selectedFile.type === 'image/jpeg') {
+          uploadFile(selectedFile);
         } else {
-          setError('Please upload a PDF or DOCX file');
+          setError('Please upload a PDF, DOCX, PNG or JPG file');
         }
       }
     },
-    [simulateUpload]
+    [uploadFile]
   );
 
   const handleReset = () => {
@@ -97,6 +138,7 @@ const CVUploadPage: React.FC = () => {
     setUploadStatus('idle');
     setProgress(0);
     setError(null);
+    setMetadata(null);
   };
 
   const formatFileSize = (bytes: number): string => {
@@ -131,7 +173,7 @@ const CVUploadPage: React.FC = () => {
         <CardHeader>
           <CardTitle>CV Document</CardTitle>
           <CardDescription>
-            Upload your CV in PDF or DOCX format. The system will automatically parse and extract information.
+            Upload your CV in PDF, DOCX, PNG or JPG format. The system will automatically parse and extract information.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -151,7 +193,7 @@ const CVUploadPage: React.FC = () => {
             >
               <input
                 type="file"
-                accept=".pdf,.docx"
+                accept=".pdf,.docx,.png,.jpg,.jpeg"
                 onChange={handleFileSelect}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
               />
@@ -174,7 +216,7 @@ const CVUploadPage: React.FC = () => {
                     {dragActive ? 'Drop your file here' : 'Drag and drop your CV'}
                   </p>
                   <p className="text-sm text-muted-foreground mt-1">
-                    or click to browse (PDF, DOCX up to 10MB)
+                    or click to browse (PDF, DOCX, PNG, JPG up to 10MB)
                   </p>
                 </div>
                 <Button variant="outline" className="mt-2">
@@ -207,9 +249,9 @@ const CVUploadPage: React.FC = () => {
               {/* Progress/Status */}
               <div className="space-y-4">
                 {(uploadStatus === 'uploading' || uploadStatus === 'parsing') && (
-                  <UploadProgress 
-                    progress={uploadStatus === 'parsing' ? 100 : progress} 
-                    status={getStatusMessage()} 
+                  <UploadProgress
+                    progress={uploadStatus === 'parsing' ? 100 : progress}
+                    status={getStatusMessage()}
                   />
                 )}
 
@@ -243,7 +285,8 @@ const CVUploadPage: React.FC = () => {
                       (step === 'Completed' && uploadStatus === 'completed');
                     const isCompleted =
                       (step === 'Uploading' && ['parsing', 'completed'].includes(uploadStatus)) ||
-                      (step === 'Parsing' && uploadStatus === 'completed');
+                      (step === 'Parsing' && uploadStatus === 'completed') ||
+                      (step === 'Completed' && uploadStatus === 'completed');
 
                     return (
                       <React.Fragment key={step}>
@@ -303,6 +346,21 @@ const CVUploadPage: React.FC = () => {
           )}
         </CardContent>
       </Card>
+
+      {metadata && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Parsed Profile Snapshot</CardTitle>
+            <CardDescription>Data extracted from your uploaded documents</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <p><span className="font-medium">Name:</span> {metadata.name}</p>
+            <p><span className="font-medium">Experience:</span> {metadata.experience_years} years</p>
+            <p><span className="font-medium">Last Update:</span> {metadata.last_update}</p>
+            <p><span className="font-medium">Skills:</span> {metadata.skills.length ? metadata.skills.join(', ') : 'None detected yet'}</p>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Tips Card */}
       <Card>

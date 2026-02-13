@@ -43,13 +43,19 @@ api.interceptors.response.use(
     async (error: AxiosError) => {
         const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
 
+        // If it's a 401 error and not the retry request
         if (error.response?.status === 401 && !originalRequest._retry) {
             if (isRefreshing) {
                 return new Promise(function (resolve, reject) {
                     failedQueue.push({ resolve, reject });
                 })
                     .then((token) => {
-                        originalRequest.headers.set('Authorization', `Bearer ${token}`);
+                        // Safe header setting for older/newer Axios
+                        if (originalRequest.headers.set) {
+                            originalRequest.headers.set('Authorization', `Bearer ${token}`);
+                        } else {
+                            originalRequest.headers['Authorization'] = `Bearer ${token}`;
+                        }
                         return api(originalRequest);
                     })
                     .catch((err) => Promise.reject(err));
@@ -61,12 +67,12 @@ api.interceptors.response.use(
             const refreshToken = sessionStorage.getItem('refresh_token');
 
             if (!refreshToken) {
-                // No refresh token, force logout
                 window.dispatchEvent(new Event('auth:logout'));
                 return Promise.reject(error);
             }
 
             try {
+                // Use a fresh axios instance to avoid interceptor loop
                 const response = await axios.post(`${api.defaults.baseURL}/auth/refresh`, {
                     refresh_token: refreshToken,
                 });
@@ -78,10 +84,17 @@ api.interceptors.response.use(
                     sessionStorage.setItem('refresh_token', newRefreshToken);
                 }
 
+                // Update defaults for future requests
                 api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
                 processQueue(null, access_token);
 
-                originalRequest.headers.set('Authorization', `Bearer ${access_token}`);
+                // Update current request headers and retry
+                if (originalRequest.headers.set) {
+                    originalRequest.headers.set('Authorization', `Bearer ${access_token}`);
+                } else {
+                    originalRequest.headers['Authorization'] = `Bearer ${access_token}`;
+                }
+
                 return api(originalRequest);
             } catch (err) {
                 processQueue(err, null);

@@ -1,6 +1,10 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import * as path from 'path';
+import * as dotenv from 'dotenv';
+
+dotenv.config({ path: '.env', override: true });
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { EmployeesModule } from './employees/employees.module';
@@ -19,12 +23,13 @@ import { MailModule } from './mail/mail.module';
     imports: [
         ConfigModule.forRoot({
             isGlobal: true,
+            envFilePath: ['.env'],
         }),
         TypeOrmModule.forRootAsync({
             imports: [ConfigModule],
             useFactory: (configService: ConfigService) => ({
                 type: 'postgres',
-                host: configService.get<string>('DB_HOST', 'postgres'),
+                host: configService.get<string>('DB_HOST', 'localhost'),
                 port: parseInt(configService.get<string>('DB_PORT', '5432')),
                 username: configService.get<string>('DB_USER', 'postgres'),
                 password: configService.get<string>('DB_PASSWORD', 'change_me'),
