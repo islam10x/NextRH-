@@ -16,6 +16,7 @@ env/
 .env
 uploads/
 templates/
+backend/file-storage/
 # Environment variables
 .env
 .env.*
