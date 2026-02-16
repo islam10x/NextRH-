@@ -17,3 +17,8 @@ httpx
 opencv-python-headless
 Pillow
 pydantic-settings
+SQLAlchemy
+psycopg[binary]
+pgvector
+langchain
+langchain-ollama

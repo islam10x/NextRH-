@@ -1,4 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { FileStorageService } from '../file-storage/file-storage.service';
@@ -8,14 +9,20 @@ import { EmployeeProfile } from '../employees/entities/employee-profile.entity';
 @Injectable()
 export class CertificationsService {
     private readonly logger = new Logger(CertificationsService.name);
+    private readonly aiServiceBaseUrl: string;
 
     constructor(
         private readonly fileStorageService: FileStorageService,
+        private readonly configService: ConfigService,
         @InjectRepository(Certification)
         private readonly certificationRepository: Repository<Certification>,
         @InjectRepository(EmployeeProfile)
         private readonly profileRepository: Repository<EmployeeProfile>,
-    ) { }
+    ) {
+        this.aiServiceBaseUrl =
+            this.configService.get<string>('AI_SERVICE_URL')?.replace(/\/+$/, '') ||
+            'http://127.0.0.1:8000';
+    }
 
     async saveEmployeeCertification(userId: string, file: Express.Multer.File) {
         // 1. Call AI service for OCR parsing
@@ -26,7 +33,8 @@ export class CertificationsService {
             const blob = new Blob([file.buffer as any], { type: file.mimetype });
             formData.append('file', blob, file.originalname);
 
-            const aiResponse = await fetch('http://localhost:8000/api/v1/parsing/certification', {
+            const aiUrl = `${this.aiServiceBaseUrl}/api/v1/parsing/certification`;
+            const aiResponse = await fetch(aiUrl, {
                 method: 'POST',
                 body: formData,
             });
@@ -35,10 +43,17 @@ export class CertificationsService {
                 parsedData = await aiResponse.json();
                 this.logger.log(`AI parsing successful for certification: ${JSON.stringify(parsedData)}`);
             } else {
-                this.logger.error(`AI parsing failed: ${aiResponse.statusText}`);
+                this.logger.error(`AI parsing failed (${aiResponse.status}) for ${aiUrl}: ${aiResponse.statusText}`);
             }
         } catch (error) {
-            this.logger.error(`Error during AI parsing: ${error.message}`);
+            const message = error instanceof Error ? error.message : String(error);
+            const cause =
+                error && typeof error === 'object' && 'cause' in error
+                    ? String((error as { cause?: unknown }).cause)
+                    : undefined;
+            this.logger.error(
+                `Error during AI parsing (base URL: ${this.aiServiceBaseUrl}): ${message}${cause ? ` | cause: ${cause}` : ''}`
+            );
         }
 
         // 2. Save file to storage
