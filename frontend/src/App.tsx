@@ -36,7 +36,7 @@ const App = () => (
             </Route>
 
             {/* Manager Routes */}
-            <Route element={<MainLayout requiredRole="manager" />}>
+            <Route element={<MainLayout requiredRole="team_manager" />}>
               <Route path="/manager/dashboard" element={<ManagerDashboard />} />
               <Route path="/manager/team" element={<TeamMembersPage />} />
               <Route path="/manager/member/:memberId" element={<MemberProfilePage />} />

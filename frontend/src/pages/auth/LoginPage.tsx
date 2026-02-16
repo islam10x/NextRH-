@@ -8,13 +8,14 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { FileText, User, Users, Briefcase, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 
 const LoginPage: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [selectedRole, setSelectedRole] = useState<UserRole>('employee');
   const [isLoading, setIsLoading] = useState(false);
-  const { login } = useAuth();
+  const { login, logout } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -25,11 +26,18 @@ const LoginPage: React.FC = () => {
     setIsLoading(false);
 
     if (user) {
+      // Check if selected role matches user's actual role
+      if (user.role !== selectedRole) {
+        toast.error(`Access Denied: Your account is registered as a ${user.role.replace('_', ' ')}.`);
+        logout();
+        return;
+      }
+
       const role = user.role;
       const redirectPath =
         role === 'employee'
           ? '/employee/dashboard'
-          : role === 'manager'
+          : role === 'team_manager'
             ? '/manager/dashboard'
             : '/bid/dashboard';
       navigate(redirectPath);
@@ -45,7 +53,7 @@ const LoginPage: React.FC = () => {
       color: 'bg-primary',
     },
     {
-      role: 'manager' as UserRole,
+      role: 'team_manager' as UserRole,
       title: 'Team Manager',
       description: 'Monitor your team\'s certifications and skills',
       icon: Users,
@@ -92,8 +100,8 @@ const LoginPage: React.FC = () => {
                       type="button"
                       onClick={() => setSelectedRole(card.role)}
                       className={`flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${selectedRole === card.role
-                          ? 'border-primary bg-primary/5 shadow-sm'
-                          : 'border-muted hover:border-primary/50 hover:bg-muted/50'
+                        ? 'border-primary bg-primary/5 shadow-sm'
+                        : 'border-muted hover:border-primary/50 hover:bg-muted/50'
                         }`}
                     >
                       <div

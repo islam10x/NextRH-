@@ -34,7 +34,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ title, showSearch, requi
       // Redirect to appropriate dashboard based on user role
       const redirectPath = user?.role === 'employee'
         ? '/employee/dashboard'
-        : user?.role === 'manager'
+        : user?.role === 'team_manager'
           ? '/manager/dashboard'
           : '/bid/dashboard';
       return <Navigate to={redirectPath} replace />;
