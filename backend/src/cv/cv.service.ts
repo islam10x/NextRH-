@@ -1,5 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 import { MetadataSnapshot } from './entities/metadata-snapshot.entity';
 import { User } from '../users/entities/user.entity';
@@ -14,6 +15,7 @@ import { FileStorageService } from '../file-storage/file-storage.service';
 @Injectable()
 export class CvService {
     private readonly logger = new Logger(CvService.name);
+    private readonly aiServiceBaseUrl: string;
 
     constructor(
         @InjectRepository(MetadataSnapshot)
@@ -32,8 +34,13 @@ export class CvService {
         private projectRepository: Repository<Project>,
         @InjectRepository(ProjectParticipant)
         private participantRepository: Repository<ProjectParticipant>,
-        private readonly fileStorageService: FileStorageService
-    ) { }
+        private readonly fileStorageService: FileStorageService,
+        private readonly configService: ConfigService,
+    ) {
+        this.aiServiceBaseUrl =
+            this.configService.get<string>('AI_SERVICE_URL')?.replace(/\/+$/, '') ||
+            'http://127.0.0.1:8000';
+    }
 
     /**
      * Rania's Logic: Physical file storage management
@@ -49,7 +56,8 @@ export class CvService {
             const blob = new Blob([file.buffer as any], { type: file.mimetype });
             formData.append('file', blob, file.originalname);
 
-            const aiResponse = await fetch('http://localhost:8000/api/v1/parsing/cv', {
+            const aiUrl = `${this.aiServiceBaseUrl}/api/v1/parsing/cv`;
+            const aiResponse = await fetch(aiUrl, {
                 method: 'POST',
                 body: formData,
             });
@@ -78,11 +86,18 @@ export class CvService {
                     user: updatedUser
                 };
             } else {
-                this.logger.error(`AI parsing failed: ${aiResponse.statusText}`);
+                this.logger.error(`AI parsing failed (${aiResponse.status}) for ${aiUrl}: ${aiResponse.statusText}`);
                 throw new Error('AI parsing failed');
             }
         } catch (error) {
-            this.logger.error(`Error during AI parsing orchestration: ${error.message}`);
+            const message = error instanceof Error ? error.message : String(error);
+            const cause =
+                error && typeof error === 'object' && 'cause' in error
+                    ? String((error as { cause?: unknown }).cause)
+                    : undefined;
+            this.logger.error(
+                `Error during AI parsing orchestration (base URL: ${this.aiServiceBaseUrl}): ${message}${cause ? ` | cause: ${cause}` : ''}`
+            );
             throw error;
         }
     }
@@ -199,14 +214,12 @@ export class CvService {
                 const projectName = projectData.name || 'Unknown Project';
                 const projectDesc = projectData.description || '';
                 const clientName = projectData.client || null;
-                const projectYear = projectData.date || null;
 
                 let project = await this.projectRepository.findOne({
                     where: {
                         projectName: projectName,
                         projectDescription: projectDesc,
-                        clientName: clientName,
-                        projectYear: projectYear
+                        clientName: clientName
                     }
                 });
 
@@ -214,11 +227,10 @@ export class CvService {
                     project = this.projectRepository.create({
                         projectName: projectName,
                         projectDescription: projectDesc,
-                        clientName: clientName,
-                        projectYear: projectYear
+                        clientName: clientName
                     });
                     project = await this.projectRepository.save(project);
-                    this.logger.log(`Created new project: ${projectName} for client: ${clientName} (${projectYear})`);
+                    this.logger.log(`Created new project: ${projectName} for client: ${clientName}`);
                 }
 
                 if (processedProjectIds.has(project.project_id)) {
