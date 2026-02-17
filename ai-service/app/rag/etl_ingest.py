@@ -17,7 +17,6 @@ from app.config import settings
 from app.rag.db import SessionLocal
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-QDRANT_PATH = REPO_ROOT / "qdrant_local"
 
 
 @dataclass
@@ -135,6 +134,11 @@ def build_golden_record(employee: EmployeeRow, payload: dict[str, Any]) -> tuple
         lines.append(f"Core skills: {', '.join(skills)}.")
     if certifications:
         lines.append(f"Certifications: {', '.join(certifications)}.")
+    # Explicitly inject certs and skills into the searchable text to boost keyword recall.
+    if certifications:
+        lines.append(" | ".join(certifications))
+    if skills:
+        lines.append("Skills keywords: " + ", ".join(skills))
 
     if experiences:
         lines.append("Work experience:")
@@ -174,7 +178,8 @@ def build_golden_record(employee: EmployeeRow, payload: dict[str, Any]) -> tuple
         "certifications": certifications,
         "experiences": experiences,
         "projects": projects,
-        "filename": payload.get("filename"),
+        # Use employee name as filename fallback to avoid mismatches.
+        "filename": payload.get("filename") or full_name,
         "last_update": payload.get("last_update"),
     }
 
@@ -204,8 +209,7 @@ def load_employees() -> list[EmployeeRow]:
     return [EmployeeRow(**row) for row in rows]
 
 
-def run_ingestion(limit: int | None, dry_run: bool) -> None:
-    QDRANT_PATH.mkdir(exist_ok=True)
+def trigger_embedding_pipeline(employee_id: UUID | str | None = None, limit: int | None = None, dry_run: bool = False) -> None:
     roots = resolve_metadata_roots()
     metadata_index = discover_metadata_index(roots)
 
@@ -214,6 +218,9 @@ def run_ingestion(limit: int | None, dry_run: bool) -> None:
         base_url=settings.OLLAMA_URL,
     )
     employees = load_employees()
+    if employee_id is not None:
+        target = UUID(str(employee_id))
+        employees = [emp for emp in employees if emp.user_id == target]
     if limit is not None:
         employees = employees[:limit]
 
@@ -247,7 +254,7 @@ def run_ingestion(limit: int | None, dry_run: bool) -> None:
         print("No documents to index; nothing written to Qdrant.")
         return
 
-    client = QdrantClient(path=str(QDRANT_PATH))
+    client = QdrantClient(url="http://localhost:6333")
     client.recreate_collection(
         collection_name="employees",
         vectors_config=models.VectorParams(
@@ -278,4 +285,4 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_args()
-    run_ingestion(limit=args.limit, dry_run=args.dry_run)
+    trigger_embedding_pipeline(limit=args.limit, dry_run=args.dry_run)

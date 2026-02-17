@@ -19,20 +19,25 @@ export class FileStorageService {
     private readonly logger = new Logger(FileStorageService.name);
     constructor(private readonly usersService: UsersService) { }
 
-    async saveEmployeeFile(userId: string, file: Express.Multer.File, category: EmployeeStorageCategory) {
+    async saveEmployeeFile(
+        userId: string,
+        file: Express.Multer.File,
+        category: EmployeeStorageCategory,
+        preferredName?: string, // parsed full name (e.g., from CV)
+    ) {
         const user = await this.usersService.findById(userId);
         if (!user) {
             throw new NotFoundException('User not found');
         }
 
+        const parsedName = preferredName?.trim();
+
         const fallbackName = [user.firstName, user.lastName].filter(Boolean).join(' ').trim()
             || user.email?.split('@')[0]
             || 'employee';
 
-        const existingBaseDir = await this.findBaseDirByOwner(user.user_id);
-        const employeeName = fallbackName;
-
-        const baseDir = existingBaseDir || await this.resolveEmployeeBaseDir(employeeName, user.user_id, user.email);
+        const employeeName = parsedName || fallbackName;
+        const baseDir = await this.resolveEmployeeBaseDir(employeeName, user.user_id, user.email);
 
         this.logger.log(`[CV Upload] User: ${userId}, Employee Name: ${employeeName}, Base Dir: ${baseDir}`);
 

@@ -1,7 +1,9 @@
 from pydantic import model_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
     APP_NAME: str = "AI CV Parser Service"
     DEBUG: bool = True
     API_V1_STR: str = "/api/v1"
@@ -18,7 +20,7 @@ class Settings(BaseSettings):
 
     # Reuse the same PostgreSQL settings used by the main backend when needed.
     DB_HOST: str = "127.0.0.1"
-    DB_PORT: int = 5433
+    DB_PORT: int = 5435
     DB_USER: str = "postgres"
     DB_PASSWORD: str = "change_me"
     DB_NAME: str = "cv_management"
@@ -30,6 +32,8 @@ class Settings(BaseSettings):
     # Ollama embedding model config used by RAG ingestion.
     OLLAMA_URL: str = "http://127.0.0.1:11434"
     EMBEDDING_MODEL: str = "nomic-embed-text"
+    # Qdrant vector DB
+    QDRANT_URL: str = "http://localhost:6333"
     # Comma-separated candidate roots for employee metadata.json files.
     RAG_METADATA_ROOTS: str = "backend/local-storage,backend/file-storage/CV_Database"
 
@@ -41,8 +45,5 @@ class Settings(BaseSettings):
                 f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
             )
         return self
-
-    class Config:
-        env_file = ".env"
 
 settings = Settings()
