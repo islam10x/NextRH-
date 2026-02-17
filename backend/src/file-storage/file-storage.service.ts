@@ -255,7 +255,11 @@ export class FileStorageService {
             .split(' ')
             .map((token) => token.charAt(0).toUpperCase() + token.slice(1).toLowerCase())
             .join('_');
-        return this.sanitizeFileName(normalized);
+
+        // Extract first 8 characters of userId for brevity (e.g., "12345678-..." -> "12345678")
+        const userIdShort = userId.replace(/-/g, '').substring(0, 8);
+
+        return this.sanitizeFileName(`${normalized}_${userIdShort}`);
     }
 
     private resolveExtension(file: Express.Multer.File, originalName: string) {

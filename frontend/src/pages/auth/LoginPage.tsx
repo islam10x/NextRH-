@@ -6,16 +6,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { FileText, User, Users, Briefcase, Loader2 } from 'lucide-react';
+import { FileText, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 const LoginPage: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [selectedRole, setSelectedRole] = useState<UserRole>('employee');
   const [isLoading, setIsLoading] = useState(false);
-  const { login, logout } = useAuth();
+  const { login } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -26,13 +24,6 @@ const LoginPage: React.FC = () => {
     setIsLoading(false);
 
     if (user) {
-      // Check if selected role matches user's actual role
-      if (user.role !== selectedRole) {
-        toast.error(`Access Denied: Your account is registered as a ${user.role.replace('_', ' ')}.`);
-        logout();
-        return;
-      }
-
       const role = user.role;
       const redirectPath =
         role === 'employee'
@@ -44,29 +35,7 @@ const LoginPage: React.FC = () => {
     }
   };
 
-  const roleCards = [
-    {
-      role: 'employee' as UserRole,
-      title: 'Employee',
-      description: 'Access your CV, certifications, and training records',
-      icon: User,
-      color: 'bg-primary',
-    },
-    {
-      role: 'team_manager' as UserRole,
-      title: 'Team Manager',
-      description: 'Monitor your team\'s certifications and skills',
-      icon: Users,
-      color: 'bg-accent',
-    },
-    {
-      role: 'bid_manager' as UserRole,
-      title: 'BID Manager',
-      description: 'Search profiles, use AI assistant, generate CVs',
-      icon: Briefcase,
-      color: 'bg-success',
-    },
-  ];
+
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/5 via-background to-accent/5 p-4">
@@ -90,44 +59,6 @@ const LoginPage: React.FC = () => {
 
           <form onSubmit={handleSubmit}>
             <CardContent className="space-y-6">
-              {/* Role Selection */}
-              <div className="space-y-3">
-                <Label className="text-sm font-medium">Select Your Role</Label>
-                <div className="grid grid-cols-3 gap-3">
-                  {roleCards.map((card) => (
-                    <button
-                      key={card.role}
-                      type="button"
-                      onClick={() => setSelectedRole(card.role)}
-                      className={`flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all ${selectedRole === card.role
-                        ? 'border-primary bg-primary/5 shadow-sm'
-                        : 'border-muted hover:border-primary/50 hover:bg-muted/50'
-                        }`}
-                    >
-                      <div
-                        className={`p-2 rounded-lg ${selectedRole === card.role ? card.color : 'bg-muted'
-                          }`}
-                      >
-                        <card.icon
-                          className={`h-5 w-5 ${selectedRole === card.role ? 'text-white' : 'text-muted-foreground'
-                            }`}
-                        />
-                      </div>
-                      <span
-                        className={`text-xs font-medium ${selectedRole === card.role ? 'text-primary' : 'text-muted-foreground'
-                          }`}
-                      >
-                        {card.title}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-                <p className="text-xs text-muted-foreground text-center">
-                  {roleCards.find((c) => c.role === selectedRole)?.description}
-                </p>
-              </div>
-
-              {/* Login Form */}
               <div className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="email">Email</Label>
