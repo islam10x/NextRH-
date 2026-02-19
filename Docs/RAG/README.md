@@ -245,3 +245,37 @@ Install (aligned versions):
 pip install qdrant-client langchain-qdrant langchain-ollama langchain langchain-core langchain-community langchain-text-splitters
 ```
 Keep all LangChain packages on matching 0.3.x versions to avoid resolver conflicts.
+## 10) Dockerized Workflow (Recommended)
+
+The entire AI stack is now containerized and optimized for high-performance retrieval using `pgvector`.
+
+### 10.1 Running the Stack
+Ensure you have the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) installed for GPU support.
+```powershell
+docker compose up -d
+```
+This starts:
+- `ollama`: LLM and Embedding server with NVIDIA GPU acceleration.
+- `postgres`: Relational DB + Vector storage.
+- `ollama-pull-models`: Automatically provisions `qwen2.5:0.5b-instruct` and `nomic-embed-text`.
+- `ai-service`: The FastAPI AI service.
+
+### 10.2 Optimized RAG Flow
+The RAG system no longer uses Qdrant. It uses **PostgreSQL pgvector** exclusively to save RAM and simplify the architecture.
+
+**Key Optimization**: The ingestion process now builds "Golden Records" by joining data from `skills`, `projects`, `experience`, `education`, and `certifications` tables, ensuring the AI has a 360-degree view of every employee.
+
+**Initialize RAG Schema:**
+```powershell
+docker compose exec ai-service python -m app.rag.init_db
+```
+
+**Run Comprehensive Ingestion:**
+```powershell
+docker compose exec ai-service python -m app.rag.etl_ingest
+```
+
+**Start Chat Agent:**
+```powershell
+docker compose exec ai-service python -m app.rag.chat_agent
+```
