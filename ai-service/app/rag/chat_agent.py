@@ -1,171 +1,246 @@
+﻿"""
+Bid Manager chat agent — RAG pipeline optimized for small local LLMs.
+
+Flow: query → keyword extractor → Qdrant vector search → shrink → LLM
+No LLM contextualization step — saves one full round trip per query.
+
+Key design decision: NO payload filtering.
+Payload MatchText filtering is unreliable on small collections (<10k points)
+because Qdrant uses flat scan segments that ignore payload indexes at this scale.
+Pure vector similarity search via nomic-embed-text handles recall correctly.
 """
-Interactive Bid Manager chat agent using Qdrant + Hybrid (BM25 + semantic) retrieval.
-"""
-from collections import defaultdict
+
+import os
+import re
 import time
+from collections import defaultdict
 from typing import Dict, List
 
-from langchain.chains import create_history_aware_retriever, create_retrieval_chain
+from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain_community.retrievers import BM25Retriever
-from langchain.retrievers import EnsembleRetriever
-from langchain_core.retrievers import BaseRetriever
-from langchain_qdrant import QdrantVectorStore
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.runnables import RunnableWithMessageHistory
+from langchain_core.retrievers import BaseRetriever
+from langchain_core.runnables import RunnableLambda, RunnableWithMessageHistory
 from langchain_ollama import ChatOllama, OllamaEmbeddings
-from qdrant_client import QdrantClient
-from qdrant_client.http import models
-from sqlalchemy import select
+from langchain_qdrant import QdrantVectorStore
 
 from app.config import settings
 from app.rag.db import SessionLocal
-from app.rag.models import AISearchQuery, EmployeeRagVector
-def build_chain():
+from app.rag.models import AISearchQuery
+
+os.environ.setdefault("OLLAMA_KEEP_ALIVE", "-1")
+
+# ── Keyword extraction ────────────────────────────────────────────────────────
+
+STOP_WORDS = {
+    "did", "do", "does", "anyone", "who", "has", "have", "had",
+    "worked", "work", "works", "working", "studied", "study",
+    "at", "in", "with", "for", "of", "to", "from", "by", "on",
+    "the", "a", "an", "is", "are", "was", "were", "be", "been",
+    "can", "could", "would", "should", "will", "may", "might",
+    "find", "me", "show", "list", "give", "tell", "get",
+    "any", "all", "some", "what", "which", "how", "many", "much",
+    "someone", "somebody", "people", "person", "employee", "employees",
+    "please", "thank", "thanks", "okay", "ok", "yes", "no",
+    "their", "they", "them", "our", "we", "us", "or", "and", "but",
+    "where", "when",
+}
+
+GREETING_WORDS = {"hi", "hello", "hey", "bonjour", "salut", "bonsoir"}
+
+
+def _extract_search_query(inputs: dict) -> str:
+    text = inputs.get("input", "").strip()
+    if text.lower() in GREETING_WORDS:
+        print("[KEYWORDS] greeting detected, skipping retrieval")
+        return ""
+    tokens = re.findall(r"\b[a-zA-Z0-9][a-zA-Z0-9\.\+\#\-]*\b", text)
+    keywords = [t for t in tokens if t.lower() not in STOP_WORDS and len(t) > 1]
+    result = " ".join(keywords) if keywords else text
+    print(f"[KEYWORDS] '{text}' → '{result}'")
+    return result
+
+
+# ── Retriever ─────────────────────────────────────────────────────────────────
+
+class QdrantFilteredRetriever(BaseRetriever):
+    vectorstore: QdrantVectorStore
+    k: int = 3
+
+    def __init__(self, vectorstore: QdrantVectorStore, k: int = 3):
+        super().__init__(vectorstore=vectorstore, k=k)
+
+    def _shrink(self, doc: Document, query: str) -> Document:
+        meta = doc.metadata or {}
+        name = meta.get("name") or "Unknown"
+        certs = meta.get("certifications") or []
+        skills = meta.get("skills") or []
+        experience_years = meta.get("experience_years")
+        experiences = meta.get("experiences") or []
+        projects = meta.get("projects") or []
+        education = meta.get("education") or []
+        # If education not directly in metadata, try full payload
+        if not education:
+            payload = meta.get("metadata") or {}
+            education = payload.get("structured_data", {}).get("education", []) if isinstance(payload, dict) else []
+
+        parts: List[str] = [f"Candidate: {name}"]
+        if certs:
+            parts.append("Certifications: " + ", ".join(certs))
+        if skills:
+            parts.append("Skills: " + ", ".join(skills[:8]))
+        if experience_years:
+            parts.append(f"Experience: {experience_years} years")
+        if experiences:
+            companies = [
+                str(e.get("company") or "").strip()
+                for e in experiences
+                if isinstance(e, dict) and str(e.get("company") or "").strip()
+            ]
+            if companies:
+                parts.append("Companies: " + ", ".join(companies))
+        if projects:
+            clients = [
+                str(p.get("client") or "").strip()
+                for p in projects
+                if isinstance(p, dict) and str(p.get("client") or "").strip()
+            ]
+            if clients:
+                parts.append("Clients: " + ", ".join(clients[:10]))
+
+        if education:
+            edu_lines = []
+            for ed in education:
+                if not isinstance(ed, dict):
+                    continue
+                school = str(ed.get("institution") or ed.get("school") or "").strip()
+                degree = str(ed.get("degree_name") or ed.get("degree") or "").strip()
+                end = str(ed.get("end_date") or "").strip()
+                piece = ", ".join(filter(None, [school, degree]))
+                if end:
+                    piece = f"{piece} ({end})" if piece else end
+                if piece:
+                    edu_lines.append(piece)
+            if edu_lines:
+                parts.append("Education: " + " | ".join(edu_lines[:2]))
+
+        doc.page_content = " | ".join(parts)
+        doc.metadata = {"name": name, "user_id": meta.get("user_id")}
+        return doc
+
+    def _get_relevant_documents(self, query: str) -> List[Document]:
+        if not query.strip():
+            return []
+        docs = self.vectorstore.similarity_search(
+            query, k=self.k, search_params={"hnsw_ef": 128}
+        )
+        print(f"[RETRIEVER] query='{query}' results={len(docs)}")
+        return [self._shrink(doc, query) for doc in docs]
+
+
+# ── History ───────────────────────────────────────────────────────────────────
+
+class CappedChatMessageHistory(InMemoryChatMessageHistory):
+    model_config = {"extra": "allow"}
+
+    def __init__(self, max_turns: int = 3, **kwargs):
+        super().__init__(**kwargs)
+        object.__setattr__(self, "_max_messages", max_turns * 2)
+
+    def add_message(self, message) -> None:  # type: ignore[override]
+        super().add_message(message)
+        max_messages = getattr(self, "_max_messages", 6)
+        if len(self.messages) > max_messages:
+            self.messages = self.messages[-max_messages:]
+
+
+# ── Chain ─────────────────────────────────────────────────────────────────────
+
+def build_chain() -> tuple[RunnableWithMessageHistory, QdrantFilteredRetriever]:
     embedder = OllamaEmbeddings(
         model=settings.EMBEDDING_MODEL,
         base_url=settings.OLLAMA_URL,
     )
-    # Dense semantic retriever from Qdrant (stable LC 0.3.x API)
     vectorstore = QdrantVectorStore.from_existing_collection(
         embedding=embedder,
-        collection_name="employees",  # ensure this matches the Qdrant collection name
+        collection_name="employees",
         url=settings.QDRANT_URL,
+        timeout=15.0,
     )
-    dense_retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
-
-    # Build BM25 retriever from raw CV text stored in Postgres
-    with SessionLocal() as db:
-        rows = db.execute(
-            select(EmployeeRagVector.content, EmployeeRagVector.metadata_json)
-        ).all()
-    docs: List[Document] = [
-        Document(page_content=row[0], metadata=row[1] or {}) for row in rows if row[0]
-    ]
-    bm25 = BM25Retriever.from_documents(docs) if docs else BM25Retriever.from_texts([])
-    bm25.k = 5
-
-    base_retriever = EnsembleRetriever(retrievers=[bm25, dense_retriever], weights=[0.7, 0.3])
-
-    def select_metadata(query: str, meta: dict) -> dict:
-        q = query.lower()
-        selected: dict = {}
-        if "name" in meta:
-            selected["name"] = meta["name"]
-        if any(word in q for word in ("certif", "cisco")):
-            if "certifications" in meta:
-                selected["certifications"] = meta["certifications"]
-        elif "project" in q:
-            if "projects" in meta:
-                selected["projects"] = meta["projects"]
-        else:
-            if "skills" in meta:
-                selected["skills"] = meta["skills"]
-        return selected
-
-    class FilteredRetriever(BaseRetriever):
-        def _get_relevant_documents(self, query: str) -> List[Document]:
-            docs = base_retriever.invoke(query)
-            filtered_docs: List[Document] = []
-            for d in docs:
-                meta = d.metadata or {}
-                subset = select_metadata(query, meta)
-                q = query.lower()
-                # keyword-level pruning for certifications
-                matching_certs: List[str] = []
-                if "certifications" in subset and subset["certifications"]:
-                    certs = subset["certifications"]
-                    cert_list = certs if isinstance(certs, list) else [certs]
-                    for c in cert_list:
-                        c_str = str(c)
-                        if any(kw in c_str.lower() for kw in q.split()):
-                            matching_certs.append(c_str)
-                parts: List[str] = []
-                name = subset.get("name", "Unknown")
-                parts.append(f"Candidate: {name}")
-                if matching_certs:
-                    parts.append("Matching Certs: " + ", ".join(matching_certs))
-                elif "skills" in subset and subset["skills"]:
-                    skills = subset["skills"]
-                    parts.append(
-                        "Skills: "
-                        + (", ".join(skills) if isinstance(skills, list) else str(skills))
-                    )
-                elif "projects" in subset and subset["projects"]:
-                    projects = subset["projects"]
-                    if isinstance(projects, list):
-                        parts.append("Projects: " + "; ".join([str(p) for p in projects]))
-                    else:
-                        parts.append(f"Projects: {projects}")
-
-                slim_content = " | ".join(parts)
-                d.page_content = slim_content
-                d.metadata = {"name": name, "matching_certs": matching_certs}
-                filtered_docs.append(d)
-            return filtered_docs
-
-    retriever = FilteredRetriever()
+    retriever = QdrantFilteredRetriever(vectorstore=vectorstore, k=3)
 
     llm = ChatOllama(
         model="qwen2.5:1.5b-instruct",
         base_url=settings.OLLAMA_URL,
         temperature=0.0,
-        disable_streaming=False,
         streaming=True,
         request_timeout=120,
-        num_ctx=4096,
-        num_predict=200,
+        num_ctx=2048,
+        num_predict=512,
     )
 
-    contextualize_prompt = ChatPromptTemplate.from_template(
-        "Rewrite the user's question to be a standalone search query using the history.\n"
-        "History: {chat_history}\n"
-        "Question: {input}\n"
-        "Search Query:"
-    )
-    history_aware_retriever = create_history_aware_retriever(
-        llm=llm,
-        retriever=retriever,
-        prompt=contextualize_prompt,
-    )
+    keyword_retriever = RunnableLambda(_extract_search_query) | retriever
 
-    qa_prompt = ChatPromptTemplate.from_template(
-        """
-Analyze the CONTEXT and list the employees who have the requested qualification.
-Rules:
-- Format: [Name]: [Specific matching certs]
-- Do NOT repeat the same candidate twice.
-- If no match is found, say 'No candidates found.'
-Context: {context}
-Question: {question}
-Answer:
-"""
-    )
+    qa_prompt = ChatPromptTemplate.from_messages([
+        (
+            "system",
+            "You are a recruitment assistant. Use ONLY the context.\n"
+            "For greetings, reply normally.\n"
+            "Otherwise: [Name]: [Evidence] — list ALL matches, never stop early.\n"
+            "If context is empty: 'No candidates found.'\n\n"
+            "CONTEXT:\n{context}",
+        ),
+        MessagesPlaceholder("chat_history"),
+        ("human", "{input}"),
+    ])
+
     qa_chain = create_stuff_documents_chain(llm=llm, prompt=qa_prompt)
-    rag_chain = create_retrieval_chain(history_aware_retriever, qa_chain)
+    rag_chain = create_retrieval_chain(keyword_retriever, qa_chain)
 
-    store: Dict[str, InMemoryChatMessageHistory] = defaultdict(InMemoryChatMessageHistory)
-    conversational_chain = RunnableWithMessageHistory(
-        rag_chain,
-        lambda session_id: store[session_id],
-        input_messages_key="input",
-        history_messages_key="chat_history",
-        output_messages_key="answer",
+    store: Dict[str, CappedChatMessageHistory] = defaultdict(
+        lambda: CappedChatMessageHistory(max_turns=3)
     )
-    return conversational_chain, retriever
+    return (
+        RunnableWithMessageHistory(
+            rag_chain,
+            lambda session_id: store[session_id],
+            input_messages_key="input",
+            history_messages_key="chat_history",
+            output_messages_key="answer",
+        ),
+        retriever,
+    )
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
+def _stream_answer(chain: RunnableWithMessageHistory, session_id: str, user_input: str) -> str:
+    collected: List[str] = []
+    for chunk in chain.stream(
+        {"input": user_input},
+        config={"configurable": {"session_id": session_id}},
+    ):
+        token = chunk.get("answer")
+        if token:
+            collected.append(token)
+            print(token, end="", flush=True)
+    print()
+    return "".join(collected)
 
 
 def chat_loop():
     try:
         chain, retriever = build_chain()
     except Exception as exc:
-        print("[ERROR] Failed to initialize retrievers. Does the Qdrant collection 'employees' exist?")
+        print("[ERROR] Failed to initialise. Is the 'employees' Qdrant collection ready?")
         print("Detail:", exc)
         return
+
     session_id = "cli"
     print("Bid Manager ready. Type 'exit' to quit.\n")
+
     while True:
         try:
             user_input = input("You: ").strip()
@@ -177,41 +252,24 @@ def chat_loop():
         if user_input.lower() in {"exit", "quit", "q"}:
             print("Bye.")
             break
-        t0 = time.perf_counter()
-        # Show raw retrieved docs for debugging false positives
-        try:
-            docs = retriever.invoke(user_input)
-            print("\n[DEBUG] Retrieved documents:")
-            for i, doc in enumerate(docs, 1):
-                print(f"  #{i} meta={doc.metadata} preview={doc.page_content[:150]}")
-        except Exception as exc:
-            print(f"[WARN] Could not fetch debug docs: {exc}")
 
-        print("...retrieving + generating (please wait)", flush=True)
-        result = chain.invoke(
-            {"input": user_input, "question": user_input},
-            config={"configurable": {"session_id": session_id}},
-        )
+        t0 = time.perf_counter()
+        print("...streaming reply:\n", end="", flush=True)
+        answer = _stream_answer(chain, session_id, user_input)
         dt = time.perf_counter() - t0
-        execution_time_ms = int(dt * 1000)
-        context_docs = result.get("context") or result.get("source_documents") or []
-        result_count = len(context_docs) if hasattr(context_docs, "__len__") else 0
 
         try:
             with SessionLocal() as db:
-                db.add(
-                    AISearchQuery(
-                        query_text=user_input,
-                        execution_time_ms=execution_time_ms,
-                        result_count=result_count,
-                    )
-                )
+                db.add(AISearchQuery(
+                    query_text=user_input,
+                    execution_time_ms=int(dt * 1000),
+                    result_count=0,
+                ))
                 db.commit()
         except Exception as exc:
-            print(f"[WARN] Failed to log chat query (non-blocking): {exc}")
+            print(f"[WARN] DB log failed: {exc}")
 
-        answer = result.get("answer") or "The documents do not contain this information"
-        print(f"Bid Manager: {answer}\n(took {dt:.1f}s)\n")
+        print(f"\n(took {dt:.1f}s)\n")
 
 
 if __name__ == "__main__":

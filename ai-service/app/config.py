@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     QDRANT_URL: str = "http://localhost:6333"
     # Comma-separated candidate roots for employee metadata.json files.
     RAG_METADATA_ROOTS: str = "backend/local-storage,backend/file-storage/CV_Database"
+    # RAG semantic chunking defaults (approximate token counts, whitespace-based).
+    RAG_CHUNK_TOKENS: int = 800
+    RAG_CHUNK_OVERLAP: int = 0  # semantic sections, no overlap needed
 
     @model_validator(mode="after")
     def build_database_url(self) -> "Settings":

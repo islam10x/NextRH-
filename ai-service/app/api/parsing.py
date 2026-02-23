@@ -1,8 +1,9 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
 from app.services.cv_parser import CVParserService
 from app.models.cv_data import CVData # Not used in response yet but good to have imported
 from app.ocr.certification_ocr import CertificationOCR
 from app.utils.logger import logger
+from app.rag.etl_ingest import sync_metadata_files_to_qdrant
 import os
 
 router = APIRouter()
@@ -11,10 +12,17 @@ cert_ocr_service = CertificationOCR()
 
 
 @router.post("/cv")
-async def parse_cv(file: UploadFile = File(...), user_id: str = Form(...)):
+async def parse_cv(
+    file: UploadFile = File(...),
+    user_id: str = Form(...),
+    background_tasks: BackgroundTasks = None,
+):
     """Parse CV and return structured data"""
     try:
         result = await cv_parser_service.parse_cv(file, user_id)
+        # Kick off embedding refresh for this user in the background.
+        if background_tasks:
+            background_tasks.add_task(sync_metadata_files_to_qdrant)
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

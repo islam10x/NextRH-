@@ -57,6 +57,8 @@ services:
   ai-service:
     build: ./ai-service
     container_name: cv-ai-service
+    environment:
+      OLLAMA_KEEP_ALIVE: "-1"
     volumes:
       - ./file-storage:/app/file-storage
     ports:
@@ -83,6 +85,8 @@ services:
   ollama:
     image: ollama/ollama:latest
     container_name: cv-ollama
+    environment:
+      OLLAMA_KEEP_ALIVE: "-1"
     ports:
       - "11434:11434"
     volumes:
