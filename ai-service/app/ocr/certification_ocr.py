@@ -46,7 +46,7 @@ class CertificationOCR:
             "The Open Group","TOGAF","Object Management Group","OMG","ISTQB","EXIN",
             "Blockchain Council","Kryterion","Pearson VUE","Global Knowledge","Learning Tree",
             "edX","Coursera","Udacity","Google Developers","Android","Meta Blueprint","HubSpot",
-            "Shopify","Zendesk","Twilio","Kaggle","DeepLearning.AI"
+            "Shopify","Zendesk","Twilio","Kaggle","DeepLearning.AI",'DELL'
         ]
         
         self.use_easyocr = settings.OCR_ENGINE == "easyocr"

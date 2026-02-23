@@ -31,7 +31,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       id: backendUser.id || backendUser.user_id,
       email: backendUser.email,
       name,
-      role: backendUser.role === 'team_manager' ? 'manager' : backendUser.role as UserRole,
+      role: backendUser.role as UserRole,
       title: 'Employee', // Default, backend doesn't send yet
       yearsOfExperience: 0 // Default
     };

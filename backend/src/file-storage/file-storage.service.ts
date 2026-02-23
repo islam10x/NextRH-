@@ -36,8 +36,27 @@ export class FileStorageService {
             || user.email?.split('@')[0]
             || 'employee';
 
-        const employeeName = parsedName || fallbackName;
-        const baseDir = await this.resolveEmployeeBaseDir(employeeName, user.user_id, user.email);
+        const existingBaseDir = await this.findBaseDirByOwner(user.user_id);
+        const employeeName = fallbackName;
+
+        let baseDir: string;
+        if (existingBaseDir) {
+            // Check if we need to rename the existing folder
+            const currentFolderName = path.basename(existingBaseDir);
+            const expectedFolderName = this.buildSafeFolderName(employeeName, user.user_id);
+
+            if (currentFolderName !== expectedFolderName) {
+                const rootDir = this.getStorageRoot();
+                const newBaseDir = path.join(rootDir, expectedFolderName);
+                this.logger.log(`[Folder Rename] Renaming from ${currentFolderName} to ${expectedFolderName}`);
+                await fs.rename(existingBaseDir, newBaseDir);
+                baseDir = newBaseDir;
+            } else {
+                baseDir = existingBaseDir;
+            }
+        } else {
+            baseDir = await this.resolveEmployeeBaseDir(employeeName, user.user_id, user.email);
+        }
 
         this.logger.log(`[CV Upload] User: ${userId}, Employee Name: ${employeeName}, Base Dir: ${baseDir}`);
 
@@ -117,17 +136,17 @@ export class FileStorageService {
 
 
     private async findBaseDirByOwner(userId: string): Promise<string | null> {
-        const user = await this.usersService.findById(userId);
-        if (!user || !user.firstName || !user.lastName) {
-            return null;
-        }
-
         const rootDir = this.getStorageRoot();
-        const folderName = this.buildSafeFolderName(`${user.firstName} ${user.lastName}`, userId);
-        const baseDir = path.join(rootDir, folderName);
+        if (!existsSync(rootDir)) return null;
 
-        if (existsSync(baseDir)) {
-            return baseDir;
+        const folders = await fs.readdir(rootDir);
+        const userIdShort = userId.replace(/-/g, '').substring(0, 8);
+
+        // Find folder that ends with our userIdShort suffix
+        const ownerFolder = folders.find(folder => folder.endsWith(`_${userIdShort}`));
+
+        if (ownerFolder) {
+            return path.join(rootDir, ownerFolder);
         }
 
         return null;
@@ -260,7 +279,11 @@ export class FileStorageService {
             .split(' ')
             .map((token) => token.charAt(0).toUpperCase() + token.slice(1).toLowerCase())
             .join('_');
-        return this.sanitizeFileName(normalized);
+
+        // Extract first 8 characters of userId for brevity (e.g., "12345678-..." -> "12345678")
+        const userIdShort = userId.replace(/-/g, '').substring(0, 8);
+
+        return this.sanitizeFileName(`${normalized}_${userIdShort}`);
     }
 
     private resolveExtension(file: Express.Multer.File, originalName: string) {

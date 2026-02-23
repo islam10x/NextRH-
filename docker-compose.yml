@@ -53,19 +53,63 @@ services:
       - cv-network
     command: npm run start:dev
 
-  # Python AI Service (Optional - add when needed)
+  # Python AI Service
   ai-service:
     build: ./ai-service
     container_name: cv-ai-service
     environment:
-      OLLAMA_KEEP_ALIVE: "-1"
+      - DATABASE_URL=postgresql+psycopg://postgres:${DB_PASSWORD}@postgres:5432/cv_management
+      - OLLAMA_URL=http://ollama:11434
     volumes:
       - ./file-storage:/app/file-storage
+      - ./ai-service/app:/app/app
     ports:
       - "8000:8000"
     networks:
       - cv-network
+    depends_on:
+      - postgres
+      - ollama
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Ollama for LLM and Embeddings
+  ollama:
+    image: ollama/ollama:latest
+    container_name: cv-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - cv-network
+
+  # Helper to pull models automatically
+  ollama-pull-models:
+    image: curlimages/curl:latest
+    container_name: cv-ollama-puller
+    networks:
+      - cv-network
+    depends_on:
+      - ollama
+    entrypoint: /bin/sh
+    command:
+      - "-c"
+      - |
+        echo "Waiting for Ollama to start..."
+        until curl -s http://ollama:11434/api/tags > /dev/null; do sleep 2; done
+        echo "Pulling Qwen 2.5 1.5B instruct..."
+        curl -X POST http://ollama:11434/api/pull -d '{"name": "qwen2.5:1.5b-instruct"}'
+        echo "Pulling Nomic Embed Text..."
+        curl -X POST http://ollama:11434/api/pull -d '{"name": "nomic-embed-text"}'
+        echo "Models pulled successfully."
+
 
   # React Frontend
   frontend:
@@ -111,5 +155,4 @@ networks:
 
 volumes:
   postgres-data:
-  ollama_data:
-  qdrant_data:
+  ollama-data:

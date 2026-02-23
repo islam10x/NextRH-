@@ -79,7 +79,7 @@ export const AppSidebar: React.FC = () => {
     switch (user?.role) {
       case 'employee':
         return employeeNavItems;
-      case 'manager':
+      case 'team_manager':
         return managerNavItems;
       case 'bid_manager':
         return bidManagerNavItems;
@@ -92,7 +92,7 @@ export const AppSidebar: React.FC = () => {
     switch (user?.role) {
       case 'employee':
         return 'Employee Portal';
-      case 'manager':
+      case 'team_manager':
         return 'Team Manager';
       case 'bid_manager':
         return 'BID Manager';

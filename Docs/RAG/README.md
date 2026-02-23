@@ -245,131 +245,37 @@ Install (aligned versions):
 pip install qdrant-client langchain-qdrant langchain-ollama langchain langchain-core langchain-community langchain-text-splitters
 ```
 Keep all LangChain packages on matching 0.3.x versions to avoid resolver conflicts.
+## 10) Dockerized Workflow (Recommended)
 
-Docker Updates
+The entire AI stack is now containerized and optimized for high-performance retrieval using `pgvector`.
 
-Added ollama service (ollama/ollama:latest) on port 11434 with named volume ollama_data at /root/.ollama in docker-compose.yml.
-Added qdrant service (qdrant/qdrant:latest) on port 6333 with named volume qdrant_data at /qdrant/storage in docker-compose.yml.
-Declared volumes ollama_data and qdrant_data under volumes: so they persist outside container lifecycles.
-How persistence works
+### 10.1 Running the Stack
+Ensure you have the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) installed for GPU support.
+```powershell
+docker compose up -d
+```
+This starts:
+- `ollama`: LLM and Embedding server with NVIDIA GPU acceleration.
+- `postgres`: Relational DB + Vector storage.
+- `ollama-pull-models`: Automatically provisions `qwen2.5:0.5b-instruct` and `nomic-embed-text`.
+- `ai-service`: The FastAPI AI service.
 
-Named volumes live in Docker’s volume store, not the container filesystem, so model files and vector data remain intact across container restarts, rebuilds, or image updates; containers mount the same volume path on each start.
-Images in use
+### 10.2 Optimized RAG Flow
+The RAG system no longer uses Qdrant. It uses **PostgreSQL pgvector** exclusively to save RAM and simplify the architecture.
 
-Ollama: ollama/ollama:latest
-Qdrant: qdrant/qdrant:latest
-How to test
+**Key Optimization**: The ingestion process now builds "Golden Records" by joining data from `skills`, `projects`, `experience`, `education`, and `certifications` tables, ensuring the AI has a 360-degree view of every employee.
 
-Start services in background: docker-compose up -d ollama qdrant
-Pull the model inside Ollama: docker exec -it cv-ollama ollama pull qwen2.5:1.5b-instruct
+**Initialize RAG Schema:**
+```powershell
+docker compose exec ai-service python -m app.rag.init_db
+```
 
-Updated Qdrant connections to the Docker endpoint in etl_ingest.py and chat_agent.py (QdrantClient(url="http://localhost:6333")).
-Added AISearchQuery ORM model to models.py mapped exactly to the existing ai_search_queries table (UUID PK, FK to users, text/int/jsonb/timestamp columns).
-How to test quickly:
+**Run Comprehensive Ingestion:**
+```powershell
+docker compose exec ai-service python -m app.rag.etl_ingest
+```
 
-Bring up Qdrant (and Ollama if needed): docker-compose up -d qdrant ollama
-Verify the new ORM mapping and DB connectivity:
-cd ai-service
-venv\Scripts\python - <<'PY'
-from sqlalchemy import create_engine, inspect, text
-from app.config import settings
-from app.rag.models import AISearchQuery  # ensures model imports fine
-
-engine = create_engine(settings.DATABASE_URL)
-with engine.connect() as conn:
-    print("table present:", "ai_search_queries" in inspect(conn).get_table_names())
-    conn.execute(text("SELECT 1 FROM ai_search_queries LIMIT 1")).fetchone()
-print("OK")
-PY
-Sanity-check Qdrant client URL is reachable:
-cd ai-service
-venv\Scripts\python - <<'PY'
-from qdrant_client import QdrantClient
-client = QdrantClient(url="http://localhost:6333")
-print("collections:", client.get_collections())
-PY
-
-ETL pipeline can be triggered dynamically while logging every user query, its retrieved results, and the LLM’s execution time in the database without interrupting the user’s chat experience.:
-test:
-Do this next, step by step:
-
-Test commands (PowerShell):
-
-Recreate containers (pull GPU-aware Ollama):
-docker-compose up -d --force-recreate --build ollama qdrant
-Pull the embedding + chat model if not present:
-docker exec -it cv-ollama ollama pull nomic-embed-text
-docker exec -it cv-ollama ollama pull qwen2.5:1.5b-instruct
-Re-run ETL to fill Qdrant:
-cd C:\Users\Rania\Desktop\PFE\NextRH\ai-service
-python -m app.rag.etl_ingest
-Run chat agent (logs queries, prints retrieved docs):
-cd C:\Users\Rania\Desktop\PFE\NextRH\ai-service
-python -m app.rag.chat_agent
-To verify the log row via Docker (no local psql needed):
-docker exec -it cv-postgres psql -U postgres -d cv_management -c "SELECT query_text, result_count, execution_time_ms, created_at FROM ai_search_queries ORDER BY created_at DESC LIMIT 5;"
-
-
-Added FastAPI background endpoint in main.py: imports BackgroundTasks and trigger_embedding_pipeline, defines POST /api/embeddings/update that schedules trigger_embedding_pipeline as a background task and immediately returns {"status": "Processing started in the background"}. Imports updated accordingly.
-HOW it avoids timeouts:
-
-BackgroundTasks queues the ingestion function to run after the response is sent, so the HTTP request returns immediately instead of waiting for long-running embedding generation.
-TOOLS used:
-
-FastAPI BackgroundTasks, FastAPI app instance, and the existing trigger_embedding_pipeline from app.rag.etl_ingest.
-How to test:
-
-Start the API server (from ai-service):
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-Trigger the background ingestion (from any shell):
-curl -X POST http://localhost:8000/api/embeddings/update
-Expect JSON: {"status": "Processing started in the background"} while the embedding pipeline runs asynchronously.
-
-Hybrid search added and wired up.
-
-What changed
-
-chat_agent.py now builds an EnsembleRetriever combining:
-Dense retriever from pgvector (PGVector using employee_rag_vectors with your Ollama embeddings).
-Keyword retriever (BM25Retriever) built from all CV texts pulled from EmployeeRagVector.content.
-Combined with equal weights [0.5, 0.5].
-New imports for BM25Retriever, EnsembleRetriever, PGVector, Document, and SQLAlchemy select. Qdrant imports were removed.
-Why this helps
-
-BM25 requires exact term matches, so a query like “Python” will boost candidates whose CVs actually contain the word, reducing fuzzy “similar but wrong” matches from pure dense search. The ensemble balances semantic recall with literal keyword precision.
-How to use / test
-
-Install the BM25 dependency once: pip install rank_bm25.
-Start the AI service (use the current port you’re using for the app, e.g., 8005):
-cd C:\Users\Rania\Desktop\PFE\NextRH\ai-service
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8005 --reload
-Ask a keyword-sensitive question via your chat agent; you should see more exact matches for terms like “Python”.
-Notes
-
-This relies on vectors and text stored in the employee_rag_vectors table. Ensure it’s populated (run your ingestion if needed) and that Postgres is reachable on your configured port.
-
-
-emory-ready RAG agent is in place.
-
-Key changes in chat_agent.py
-
-Kept InMemoryChatMessageHistory with RunnableWithMessageHistory; history lives only in RAM and is keyed by session_id.
-Updated the contextualization prompt to the strict, concise format:
-Combine the Chat History and the User Question into one standalone search query.
-History: {chat_history}
-Question: {input}
-Standalone Query:
-Still uses create_history_aware_retriever to rewrite follow-ups before hitting the retrievers.
-Technical breakdown 
-
-TOOLS USED: InMemoryChatMessageHistory stores turns in RAM; RunnableWithMessageHistory injects/retrieves that history; create_history_aware_retriever generates context-aware queries.
-DATA FLOW: User input + past messages → history-aware LLM builds the “Standalone Query” → that query is sent to the hybrid retriever (BM25 + pgvector) → results go to the QA chain.
-STORAGE LOCATION: Only in-memory dict (store in chat_agent.py). No Postgres or disk writes. Restarting the process clears all history.
-HOW TO TEST: Run python -m app.rag.chat_agent, ask:
-“Find a Java dev”
-then “Do they know React?”
-The second turn is rewritten to a standalone query that includes the first turn’s intent (Java dev) plus “React,” so it should search Java profiles and check for React without you restating context.
-You can start the agent with:
-
-cd C:\Users\Rania\Desktop\PFE\NextRH\ai-service
-python -m app.rag.chat_agent
+**Start Chat Agent:**
+```powershell
+docker compose exec ai-service python -m app.rag.chat_agent
+```

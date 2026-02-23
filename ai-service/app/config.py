@@ -20,7 +20,7 @@ class Settings(BaseSettings):
 
     # Reuse the same PostgreSQL settings used by the main backend when needed.
     DB_HOST: str = "127.0.0.1"
-    DB_PORT: int = 5435
+    DB_PORT: int = 5432
     DB_USER: str = "postgres"
     DB_PASSWORD: str = "change_me"
     DB_NAME: str = "cv_management"

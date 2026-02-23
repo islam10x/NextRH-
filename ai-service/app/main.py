@@ -1,6 +1,6 @@
 from fastapi import BackgroundTasks, FastAPI
 from app.config import settings
-from app.api import parsing, chat
+from app.api import parsing, rag
 from app.utils.logger import logger
 from app.rag.models import init_rag_schema
 from app.rag.etl_ingest import trigger_embedding_pipeline, sync_metadata_files_to_qdrant
@@ -17,13 +17,7 @@ def test_path():
 
 # Include routers
 app.include_router(parsing.router, prefix=f"{settings.API_V1_STR}/parsing", tags=["parsing"])
-app.include_router(chat.router, prefix=f"{settings.API_V1_STR}", tags=["chat"])
-
-
-@app.post("/api/embeddings/update")
-async def update_embeddings(background_tasks: BackgroundTasks):
-    background_tasks.add_task(sync_metadata_files_to_qdrant)
-    return {"status": "Processing started in the background (file-storage → Qdrant)"}
+app.include_router(rag.router, prefix=f"{settings.API_V1_STR}/rag", tags=["rag"])
 
 @app.on_event("startup")
 async def startup_event():

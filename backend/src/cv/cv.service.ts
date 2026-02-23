@@ -11,6 +11,7 @@ import { Certification } from '../certifications/entities/certification.entity';
 import { Project } from '../projects/entities/project.entity';
 import { ProjectParticipant } from '../projects/entities/participant.entity';
 import { FileStorageService } from '../file-storage/file-storage.service';
+import { RagService } from '../rag/rag.service';
 
 @Injectable()
 export class CvService {
@@ -36,6 +37,7 @@ export class CvService {
         private participantRepository: Repository<ProjectParticipant>,
         private readonly fileStorageService: FileStorageService,
         private readonly configService: ConfigService,
+        private readonly ragService: RagService,
     ) {
         this.aiServiceBaseUrl =
             this.configService.get<string>('AI_SERVICE_URL')?.replace(/\/+$/, '') ||
@@ -257,6 +259,9 @@ export class CvService {
                 processedProjectIds.add(project.project_id);
             }
         }
+
+        // 8. Trigger RAG Sync
+        await this.ragService.triggerUserSync(userId);
 
         return { message: 'CV processed successfully', profileId: profile.profile_id };
     }

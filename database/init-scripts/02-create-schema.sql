@@ -278,7 +278,7 @@ EXECUTE FUNCTION update_certification_status_func();
 CREATE OR REPLACE FUNCTION update_timestamp_func() 
 RETURNS TRIGGER AS $$
 BEGIN
-    NEW.updated_at = CURRENT_TIMESTAMP;
+    NEW.updated_at := CURRENT_TIMESTAMP;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;

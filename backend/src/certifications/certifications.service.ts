@@ -5,6 +5,7 @@ import { Repository } from 'typeorm';
 import { FileStorageService } from '../file-storage/file-storage.service';
 import { Certification } from './entities/certification.entity';
 import { EmployeeProfile } from '../employees/entities/employee-profile.entity';
+import { RagService } from '../rag/rag.service';
 
 @Injectable()
 export class CertificationsService {
@@ -18,6 +19,7 @@ export class CertificationsService {
         private readonly certificationRepository: Repository<Certification>,
         @InjectRepository(EmployeeProfile)
         private readonly profileRepository: Repository<EmployeeProfile>,
+        private readonly ragService: RagService,
     ) {
         this.aiServiceBaseUrl =
             this.configService.get<string>('AI_SERVICE_URL')?.replace(/\/+$/, '') ||
@@ -100,5 +102,8 @@ export class CertificationsService {
 
         await this.certificationRepository.save(certification);
         this.logger.log(`Saved certification to database for user ${userId}`);
+
+        // Trigger RAG Sync
+        await this.ragService.triggerUserSync(userId);
     }
 }

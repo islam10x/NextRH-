@@ -1,5 +1,5 @@
 // User Roles
-export type UserRole = 'employee' | 'manager' | 'bid_manager';
+export type UserRole = 'employee' | 'team_manager' | 'bid_manager';
 
 export interface User {
   id: string;
