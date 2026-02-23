@@ -137,91 +137,141 @@ def extract_certifications(payload: dict[str, Any]) -> list[str]:
 
 def build_chunks(employee: EmployeeRow, payload: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     """
-    Build multiple focused text chunks per employee, one per section.
-    Returns a list of (content, metadata) pairs.
+    Build focused chunks plus entry-level chunks so retrieval can target
+    single projects/experiences and support comparisons reliably.
     """
     full_name = f"{employee.first_name} {employee.last_name}"
     user_id_str = str(employee.user_id)
 
-    # Deduplicate skills and certs from both DB and metadata.json
     db_skills = employee.skills or []
     payload_skills = as_string_list(payload.get("skills"))
     all_skills = list(dict.fromkeys(db_skills + payload_skills))
 
     db_certs = employee.certifications or []
     payload_certs = extract_certifications(payload)
-    # Combine, deduplicate, then merge stray fragments from both sources
     combined_certs: list[str] = []
-    for c in list(dict.fromkeys(db_certs + payload_certs)):
-        if _is_cert_fragment(c) and combined_certs:
-            combined_certs[-1] = combined_certs[-1] + " " + c
+    for cert in list(dict.fromkeys(db_certs + payload_certs)):
+        if _is_cert_fragment(cert) and combined_certs:
+            combined_certs[-1] = combined_certs[-1] + " " + cert
         else:
-            combined_certs.append(c)
-    # Final dedup after possible fragment-merging duplicates
+            combined_certs.append(cert)
     all_certs = list(dict.fromkeys(combined_certs))
+
+    experience_count = len(employee.experience or [])
+    project_count = len(employee.projects or [])
 
     base_meta = {
         "user_id": user_id_str,
         "name": full_name,
         "email": employee.email,
     }
-
     chunks: list[tuple[str, dict[str, Any]]] = []
 
-    # ── 1. Profile / overview chunk ──────────────────────────────────
     title = employee.current_position or "Employee"
-    lines = [f"{full_name} is a {title}."]
-    lines.append(f"They have approximately {employee.total_experience_years or 0} years of experience.")
+    profile_lines = [f"{full_name} is a {title}."]
+    if isinstance(employee.total_experience_years, int) and employee.total_experience_years > 0:
+        profile_lines.append(f"They have approximately {employee.total_experience_years} years of experience.")
+    profile_lines.append(f"Recorded work experience entries: {experience_count}.")
+    profile_lines.append(f"Recorded project entries: {project_count}.")
     if employee.professional_summary:
-        lines.append(f"Professional summary: {employee.professional_summary.strip()}")
+        profile_lines.append(f"Professional summary: {employee.professional_summary.strip()}")
     if employee.email:
-        lines.append(f"Email: {employee.email}")
+        profile_lines.append(f"Email: {employee.email}")
     chunks.append((
-        "\n".join(lines),
-        {**base_meta, "chunk_type": "profile", "chunk_id": f"{user_id_str}_profile"}
+        "\n".join(profile_lines),
+        {
+            **base_meta,
+            "chunk_type": "profile",
+            "chunk_id": f"{user_id_str}_profile",
+            "experience_count": experience_count,
+            "project_count": project_count,
+        }
     ))
 
-    # ── 2. Skills chunk ──────────────────────────────────────────────
     if all_skills:
-        content = f"{full_name} — Skills:\n" + "\n".join(f"- {s}" for s in all_skills)
         chunks.append((
-            content,
+            f"{full_name} - Skills:\n" + "\n".join(f"- {skill}" for skill in all_skills),
             {**base_meta, "chunk_type": "skills", "chunk_id": f"{user_id_str}_skills"}
         ))
 
-    # ── 3. Certifications chunk ──────────────────────────────────────
     if all_certs:
-        content = f"{full_name} — Certifications:\n" + "\n".join(f"- {full_name}: {c}" for c in all_certs)
         chunks.append((
-            content,
-            {**base_meta, "chunk_type": "certifications", "chunk_id": f"{user_id_str}_certifications",
-             "certifications": all_certs}
+            f"{full_name} - Certifications:\n" + "\n".join(f"- {full_name}: {cert}" for cert in all_certs),
+            {
+                **base_meta,
+                "chunk_type": "certifications",
+                "chunk_id": f"{user_id_str}_certifications",
+                "certifications": all_certs,
+            }
         ))
+        for idx, cert in enumerate(all_certs):
+            chunks.append((
+                f"Certification Entry for {full_name}\nCertification: {cert}",
+                {
+                    **base_meta,
+                    "chunk_type": "certification_entry",
+                    "chunk_id": f"{user_id_str}_certification_entry_{idx}",
+                    "certification_name": cert,
+                }
+            ))
 
-    # ── 4. Work Experience chunk ─────────────────────────────────────
     if employee.experience:
-        lines = [f"{full_name} — Work Experience:"]
-        for exp in employee.experience:
+        summary_lines = [f"{full_name} - Work Experience:"]
+        for idx, exp in enumerate(employee.experience):
+            company = str(exp.get("company_name") or "Unknown")
+            role = str(exp.get("job_title") or "Unknown")
+            start_date = str(exp.get("start_date") or "")
+            end_date = str(exp.get("end_date") or "")
+            description = str(exp.get("description") or "")
             period = ""
-            if exp.get("start_date"):
-                period = f" ({exp['start_date']} - {exp.get('end_date') or 'Present'})"
-            desc = exp.get("description", "")
-            lines.append(f"- {full_name} at {exp.get('company_name', 'Unknown')}: {exp.get('job_title', 'Unknown')}{period}.")
-            if desc:
-                lines.append(f"  {desc}")
+            if start_date:
+                period = f" ({start_date} - {end_date or 'Present'})"
+            summary_lines.append(f"- {full_name} at {company}: {role}{period}.")
+            if description:
+                summary_lines.append(f"  {description}")
+
+            entry_lines = [
+                f"Experience Entry for {full_name}",
+                f"Company: {company}",
+                f"Role: {role}",
+            ]
+            if start_date:
+                entry_lines.append(f"Start date: {start_date}")
+            if end_date:
+                entry_lines.append(f"End date: {end_date}")
+            if description:
+                entry_lines.append(f"Description: {description}")
+            chunks.append((
+                "\n".join(entry_lines),
+                {
+                    **base_meta,
+                    "chunk_type": "experience_entry",
+                    "chunk_id": f"{user_id_str}_experience_entry_{idx}",
+                    "company_name": company,
+                    "job_title": role,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "description": description,
+                }
+            ))
+
         chunks.append((
-            "\n".join(lines),
-            {**base_meta, "chunk_type": "experience", "chunk_id": f"{user_id_str}_experience"}
+            "\n".join(summary_lines),
+            {
+                **base_meta,
+                "chunk_type": "experience",
+                "chunk_id": f"{user_id_str}_experience",
+                "experience_count": experience_count,
+            }
         ))
 
-    # ── 5. Education chunk ───────────────────────────────────────────
     if employee.education:
-        lines = [f"{full_name} — Education:"]
-        for edu in employee.education:
-            degree = edu.get("degree") or ""
-            field = edu.get("field_of_study") or ""
-            institution = edu.get("institution") or ""
-            end_date = edu.get("end_date") or ""
+        lines = [f"{full_name} - Education:"]
+        for idx, edu in enumerate(employee.education):
+            degree = str(edu.get("degree") or "")
+            field = str(edu.get("field_of_study") or "")
+            institution = str(edu.get("institution") or "")
+            end_date = str(edu.get("end_date") or "")
             parts = [f"{full_name}:"]
             if degree:
                 parts.append(degree)
@@ -232,32 +282,81 @@ def build_chunks(employee: EmployeeRow, payload: dict[str, Any]) -> list[tuple[s
             if end_date:
                 parts.append(f"({end_date})")
             lines.append(f"- {' '.join(parts)}" if len(parts) > 1 else f"- {full_name}: (details not available)")
+            entry_lines = [
+                f"Education Entry for {full_name}",
+            ]
+            if degree:
+                entry_lines.append(f"Degree: {degree}")
+            if field:
+                entry_lines.append(f"Field of study: {field}")
+            if institution:
+                entry_lines.append(f"Institution: {institution}")
+            if end_date:
+                entry_lines.append(f"End date: {end_date}")
+            chunks.append((
+                "\n".join(entry_lines),
+                {
+                    **base_meta,
+                    "chunk_type": "education_entry",
+                    "chunk_id": f"{user_id_str}_education_entry_{idx}",
+                    "degree": degree,
+                    "field_of_study": field,
+                    "institution": institution,
+                    "end_date": end_date,
+                }
+            ))
         chunks.append((
             "\n".join(lines),
             {**base_meta, "chunk_type": "education", "chunk_id": f"{user_id_str}_education"}
         ))
 
-    # ── 6. Projects chunk ────────────────────────────────────────────
     if employee.projects:
-        lines = [f"{full_name} — Projects:"]
-        for proj in employee.projects:
-            year = f" ({proj['project_year']})" if proj.get("project_year") else ""
-            client = proj.get("client_name") or "Unknown client"
-            desc = proj.get("project_description") or ""
-            pname = proj.get("project_name")
-            if not pname or pname.lower() == "unknown project":
-                pname = f"Project for {client}"
-            
-            lines.append(f"- {full_name}: {pname}{year}.")
-            if desc:
-                lines.append(f"  {desc}")
+        summary_lines = [f"{full_name} - Projects:"]
+        for idx, proj in enumerate(employee.projects):
+            project_name = str(proj.get("project_name") or "").strip()
+            client_name = str(proj.get("client_name") or "").strip() or "Unknown client"
+            project_year = str(proj.get("project_year") or "").strip()
+            project_desc = str(proj.get("project_description") or "").strip()
+            if not project_name or project_name.lower() == "unknown project":
+                project_name = f"Project for {client_name}"
+            year_suffix = f" ({project_year})" if project_year else ""
+            summary_lines.append(f"- {full_name}: {project_name}{year_suffix}.")
+            if project_desc:
+                summary_lines.append(f"  {project_desc}")
+
+            entry_lines = [
+                f"Project Entry for {full_name}",
+                f"Project name: {project_name}",
+                f"Client: {client_name}",
+            ]
+            if project_year:
+                entry_lines.append(f"Year: {project_year}")
+            if project_desc:
+                entry_lines.append(f"Description: {project_desc}")
+            chunks.append((
+                "\n".join(entry_lines),
+                {
+                    **base_meta,
+                    "chunk_type": "project_entry",
+                    "chunk_id": f"{user_id_str}_project_entry_{idx}",
+                    "project_name": project_name,
+                    "client_name": client_name,
+                    "project_year": project_year,
+                    "project_description": project_desc,
+                }
+            ))
+
         chunks.append((
-            "\n".join(lines),
-            {**base_meta, "chunk_type": "projects", "chunk_id": f"{user_id_str}_projects"}
+            "\n".join(summary_lines),
+            {
+                **base_meta,
+                "chunk_type": "projects",
+                "chunk_id": f"{user_id_str}_projects",
+                "project_count": project_count,
+            }
         ))
 
     return chunks
-
 
 def load_employees() -> list[EmployeeRow]:
     with SessionLocal() as session:
@@ -361,15 +460,10 @@ def ingest_employee(user_id: str | UUID, session: Any = None) -> bool:
 
 
 def ingest_directory(embedder: Any = None) -> None:
-    """Build/refresh the global employee directory chunk.
-    
-    This single chunk lists every employee by name so queries like
-    'how many employees do we have?' always see the full roster.
-    """
+    """Build/refresh the global employee directory chunk."""
     from app.rag.models import EmployeeRagVector, init_rag_schema
     import uuid as _uuid
 
-    # Fixed sentinel UUID for the directory — not tied to any real user
     DIRECTORY_UUID = _uuid.UUID("00000000-0000-0000-0000-000000000001")
     DIRECTORY_CHUNK_ID = "__directory__"
 
@@ -380,13 +474,37 @@ def ingest_directory(embedder: Any = None) -> None:
             base_url=settings.OLLAMA_URL,
         )
 
-    # Load all employees directly via a lightweight query
     with SessionLocal() as session:
         rows = session.execute(text("""
-            SELECT u.first_name, u.last_name, u.email, ep.current_position,
-                   ep.total_experience_years
+            SELECT
+                u.first_name,
+                u.last_name,
+                u.email,
+                ep.current_position,
+                ep.total_experience_years,
+                COALESCE(exp_stats.experience_entries, 0) AS experience_entries,
+                COALESCE(proj_stats.project_count, 0) AS project_count,
+                COALESCE(company_stats.companies, '') AS companies
             FROM users u
             JOIN employee_profiles ep ON ep.user_id = u.user_id
+            LEFT JOIN (
+                SELECT profile_id, COUNT(*) AS experience_entries
+                FROM work_experience
+                GROUP BY profile_id
+            ) exp_stats ON exp_stats.profile_id = ep.profile_id
+            LEFT JOIN (
+                SELECT profile_id, COUNT(*) AS project_count
+                FROM project_participants
+                GROUP BY profile_id
+            ) proj_stats ON proj_stats.profile_id = ep.profile_id
+            LEFT JOIN (
+                SELECT
+                    profile_id,
+                    STRING_AGG(DISTINCT company_name, ', ' ORDER BY company_name) AS companies
+                FROM work_experience
+                WHERE company_name IS NOT NULL AND TRIM(company_name) <> ''
+                GROUP BY profile_id
+            ) company_stats ON company_stats.profile_id = ep.profile_id
             WHERE u.role = 'employee'
             ORDER BY u.last_name, u.first_name
         """)).mappings().all()
@@ -394,35 +512,68 @@ def ingest_directory(embedder: Any = None) -> None:
     if not rows:
         return
 
-    lines = [f"Employee Directory — {len(rows)} employee(s) total:"]
-    for r in rows:
-        name = f"{r['first_name'] or ''} {r['last_name'] or ''}".strip() or r['email']
-        role = r['current_position'] or 'Employee'
-        exp = r['total_experience_years'] or 0
-        lines.append(f"- {name} ({role}, ~{exp} years experience, email: {r['email']})")
+    lines = [f"Employee Directory - {len(rows)} employee(s) total:"]
+    employees_meta: list[dict[str, Any]] = []
+    for row in rows:
+        name = f"{row['first_name'] or ''} {row['last_name'] or ''}".strip() or row['email']
+        role = row['current_position'] or 'Employee'
+        years_exp = row['total_experience_years']
+        exp_entries = int(row['experience_entries'] or 0)
+        project_count = int(row['project_count'] or 0)
+        companies_raw = str(row['companies'] or '').strip()
+        companies = [c.strip() for c in companies_raw.split(',') if c.strip()]
+
+        line = (
+            f"- {name} | role={role} | email={row['email']} "
+            f"| experience_entries={exp_entries} | project_count={project_count}"
+        )
+        if isinstance(years_exp, int) and years_exp > 0:
+            line += f" | experience_years~{years_exp}"
+        if companies:
+            line += f" | companies={'; '.join(companies)}"
+        lines.append(line)
+
+        employees_meta.append(
+            {
+                "name": name,
+                "email": row["email"],
+                "role": role,
+                "experience_entries": exp_entries,
+                "project_count": project_count,
+                "experience_years": int(years_exp) if isinstance(years_exp, int) else None,
+                "companies": companies,
+            }
+        )
 
     content = "\n".join(lines)
-    meta = {"chunk_type": "directory", "chunk_id": DIRECTORY_CHUNK_ID, "total_employees": len(rows)}
+    meta = {
+        "chunk_type": "directory",
+        "chunk_id": DIRECTORY_CHUNK_ID,
+        "total_employees": len(rows),
+        "employees": employees_meta,
+    }
     embedding = _embedder.embed_query(content)
 
-    with SessionLocal() as s:
+    with SessionLocal() as session:
         init_rag_schema()
-        existing = s.query(EmployeeRagVector).filter_by(chunk_id=DIRECTORY_CHUNK_ID).first()
+        existing = session.query(EmployeeRagVector).filter_by(chunk_id=DIRECTORY_CHUNK_ID).first()
         if existing:
             existing.content = content
             existing.metadata_json = meta
             existing.embedding = embedding
         else:
-            s.add(EmployeeRagVector(
-                user_id=DIRECTORY_UUID,
-                chunk_id=DIRECTORY_CHUNK_ID,
-                content=content,
-                metadata_json=meta,
-                embedding=embedding,
-            ))
-        s.commit()
-    print(f"[OK] Directory chunk updated — {len(rows)} employees listed")
+            session.add(
+                EmployeeRagVector(
+                    user_id=DIRECTORY_UUID,
+                    chunk_id=DIRECTORY_CHUNK_ID,
+                    content=content,
+                    metadata_json=meta,
+                    embedding=embedding,
+                )
+            )
+        session.commit()
 
+    print(f"[OK] Directory chunk updated - {len(rows)} employees listed")
 
 def run_ingestion(limit: int | None, dry_run: bool) -> None:
     from app.rag.models import init_rag_schema
@@ -474,3 +625,5 @@ def parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     args = parse_args()
     run_ingestion(limit=args.limit, dry_run=args.dry_run)
+
+
