@@ -21,28 +21,6 @@ from langchain_core.runnables import RunnableLambda, RunnableWithMessageHistory
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 
 from app.config import settings
-from app.rag.db import SessionLocal
-from app.rag.models import AISearchQuery
-
-os.environ.setdefault("OLLAMA_KEEP_ALIVE", "-1")
-
-# ── Keyword extraction ────────────────────────────────────────────────────────
-
-STOP_WORDS = {
-    "did", "do", "does", "anyone", "who", "has", "have", "had",
-    "worked", "work", "works", "working", "studied", "study",
-    "at", "in", "with", "for", "of", "to", "from", "by", "on",
-    "the", "a", "an", "is", "are", "was", "were", "be", "been",
-    "can", "could", "would", "should", "will", "may", "might",
-    "find", "me", "show", "list", "give", "tell", "get",
-    "any", "all", "some", "what", "which", "how", "many", "much",
-    "someone", "somebody", "people", "person", "employee", "employees",
-    "please", "thank", "thanks", "okay", "ok", "yes", "no",
-    "their", "they", "them", "our", "we", "us", "or", "and", "but",
-    "where", "when",
-}
-
-GREETING_WORDS = {"hi", "hello", "hey", "bonjour", "salut", "bonsoir"}
 
 LLM_MODEL = "qwen2.5:1.5b-instruct"
 LLM_MODEL_FALLBACK = "qwen2.5:0.5b-instruct"
@@ -1705,42 +1683,11 @@ Context:
         history_messages_key="chat_history",
         output_messages_key="answer",
     )
-    return (
-        RunnableWithMessageHistory(
-            rag_chain,
-            lambda session_id: store[session_id],
-            input_messages_key="input",
-            history_messages_key="chat_history",
-            output_messages_key="answer",
-        ),
-        retriever,
-    )
-
-
-# ── CLI ───────────────────────────────────────────────────────────────────────
-
-def _stream_answer(chain: RunnableWithMessageHistory, session_id: str, user_input: str) -> str:
-    collected: List[str] = []
-    for chunk in chain.stream(
-        {"input": user_input},
-        config={"configurable": {"session_id": session_id}},
-    ):
-        token = chunk.get("answer")
-        if token:
-            collected.append(token)
-            print(token, end="", flush=True)
-    print()
-    return "".join(collected)
+    return conversational_chain
 
 
 def chat_loop():
-    try:
-        chain, retriever = build_chain()
-    except Exception as exc:
-        print("[ERROR] Failed to initialise. Is the 'employees' Qdrant collection ready?")
-        print("Detail:", exc)
-        return
-
+    chain = build_chain()
     session_id = "cli"
     print("Bid Manager ready. Type 'exit' to quit.\n")
 

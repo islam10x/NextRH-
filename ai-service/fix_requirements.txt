@@ -1,9 +1,0 @@
-langchain-core==0.3.35
-langchain-community==0.3.13
-langchain==0.3.13
-langsmith==0.1.147
-langchain-ollama==0.2.0
-langchain-qdrant==0.2.0
-langchain-text-splitters==0.3.3
-packaging==24.2
-protobuf==4.25.3

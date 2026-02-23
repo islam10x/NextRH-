@@ -19,18 +19,11 @@ export class FileStorageService {
     private readonly logger = new Logger(FileStorageService.name);
     constructor(private readonly usersService: UsersService) { }
 
-    async saveEmployeeFile(
-        userId: string,
-        file: Express.Multer.File,
-        category: EmployeeStorageCategory,
-        preferredName?: string, // parsed full name (e.g., from CV)
-    ) {
+    async saveEmployeeFile(userId: string, file: Express.Multer.File, category: EmployeeStorageCategory) {
         const user = await this.usersService.findById(userId);
         if (!user) {
             throw new NotFoundException('User not found');
         }
-
-        const parsedName = preferredName?.trim();
 
         const fallbackName = [user.firstName, user.lastName].filter(Boolean).join(' ').trim()
             || user.email?.split('@')[0]

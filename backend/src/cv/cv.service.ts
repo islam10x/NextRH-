@@ -75,17 +75,7 @@ export class CvService {
                 updatedUser = await this.userRepository.findOne({ where: { user_id: userId } });
 
                 // 3. NOW save the file (folder will use updated name from DB)
-                // Prefer folder name derived from parsed CV data when available.
-                const parsedFirst = parsingResult?.structured_data?.first_name || '';
-                const parsedLast = parsingResult?.structured_data?.last_name || '';
-                const parsedFullName = [parsedFirst, parsedLast].filter(Boolean).join(' ').trim() || undefined;
-
-                const storageResult = await this.fileStorageService.saveEmployeeFile(
-                    userId,
-                    file,
-                    'CV',
-                    parsedFullName,
-                );
+                const storageResult = await this.fileStorageService.saveEmployeeFile(userId, file, 'CV');
 
                 // 4. Save the full parsed data to metadata.json
                 await this.fileStorageService.saveMetadata(userId, parsingResult);
