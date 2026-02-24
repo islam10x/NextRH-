@@ -6,6 +6,7 @@ import { FileStorageService } from '../file-storage/file-storage.service';
 import { Certification } from './entities/certification.entity';
 import { EmployeeProfile } from '../employees/entities/employee-profile.entity';
 import { RagService } from '../rag/rag.service';
+import { FileValidationService } from '../file-validation/file-validation.service';
 
 @Injectable()
 export class CertificationsService {
@@ -20,6 +21,7 @@ export class CertificationsService {
         @InjectRepository(EmployeeProfile)
         private readonly profileRepository: Repository<EmployeeProfile>,
         private readonly ragService: RagService,
+        private readonly fileValidationService: FileValidationService,
     ) {
         this.aiServiceBaseUrl =
             this.configService.get<string>('AI_SERVICE_URL')?.replace(/\/+$/, '') ||
@@ -27,6 +29,8 @@ export class CertificationsService {
     }
 
     async saveEmployeeCertification(userId: string, file: Express.Multer.File) {
+        await this.fileValidationService.validate(file, 'certification');
+
         // 1. Call AI service for OCR parsing
         let parsedData = null;
         try {

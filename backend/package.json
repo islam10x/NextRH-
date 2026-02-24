@@ -33,6 +33,7 @@
         "@nestjs/typeorm": "^10.0.0",
         "@types/nodemailer": "^7.0.9",
         "bcryptjs": "^3.0.3",
+        "clamscan": "^2.0.4",
         "class-transformer": "^0.5.1",
         "class-validator": "^0.14.0",
         "multer": "^2.0.2",
