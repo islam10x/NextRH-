@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS certifications (
     status certification_status DEFAULT 'active',
     file_path VARCHAR(512),
     credential_id VARCHAR(255),
+    is_uploaded BOOLEAN DEFAULT FALSE,
     uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

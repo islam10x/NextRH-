@@ -57,7 +57,6 @@ export class CertificationsController {
             throw new BadRequestException('File is required');
         }
 
-        const userId = user.user_id || user.id;
-        return this.certificationsService.saveEmployeeCertification(userId, file);
+        return this.certificationsService.saveEmployeeCertification(user, file);
     }
 }
