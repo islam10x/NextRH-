@@ -12,6 +12,7 @@ import { Project } from '../projects/entities/project.entity';
 import { ProjectParticipant } from '../projects/entities/participant.entity';
 import { FileStorageService } from '../file-storage/file-storage.service';
 import { RagService } from '../rag/rag.service';
+import { FileValidationService } from '../file-validation/file-validation.service';
 
 @Injectable()
 export class CvService {
@@ -38,6 +39,7 @@ export class CvService {
         private readonly fileStorageService: FileStorageService,
         private readonly configService: ConfigService,
         private readonly ragService: RagService,
+        private readonly fileValidationService: FileValidationService,
     ) {
         this.aiServiceBaseUrl =
             this.configService.get<string>('AI_SERVICE_URL')?.replace(/\/+$/, '') ||
@@ -50,6 +52,8 @@ export class CvService {
      */
     async saveEmployeeCv(userId: string, file: Express.Multer.File) {
         let updatedUser = null;
+
+        await this.fileValidationService.validate(file, 'cv');
 
         // 1. Parse CV FIRST to get the name
         try {

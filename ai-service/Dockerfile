@@ -6,7 +6,6 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     libtesseract-dev \
-    libgl1-mesa-glx \
     libgl1 \
     libglib2.0-0 \
     poppler-utils \

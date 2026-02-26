@@ -6,6 +6,7 @@ import { FileStorageService } from '../file-storage/file-storage.service';
 import { Certification } from './entities/certification.entity';
 import { EmployeeProfile } from '../employees/entities/employee-profile.entity';
 import { RagService } from '../rag/rag.service';
+import { FileValidationService } from '../file-validation/file-validation.service';
 
 @Injectable()
 export class CertificationsService {
@@ -20,6 +21,7 @@ export class CertificationsService {
         @InjectRepository(EmployeeProfile)
         private readonly profileRepository: Repository<EmployeeProfile>,
         private readonly ragService: RagService,
+        private readonly fileValidationService: FileValidationService,
     ) {
         this.aiServiceBaseUrl =
             this.configService.get<string>('AI_SERVICE_URL')?.replace(/\/+$/, '') ||
@@ -27,7 +29,8 @@ export class CertificationsService {
     }
 
     async saveEmployeeCertification(user: any, file: Express.Multer.File) {
-        const userId = user.user_id || user.id;
+        await this.fileValidationService.validate(file, 'certification');
+        const userId = typeof user === 'string' ? user : user.user_id || user.id;
 
         // 1. Call AI service for OCR parsing
         let parsedData = null;
@@ -35,8 +38,10 @@ export class CertificationsService {
             const formData = new FormData();
             formData.append('user_id', userId);
 
-            if (user.firstName) formData.append('first_name', user.firstName);
-            if (user.lastName) formData.append('last_name', user.lastName);
+            if (typeof user === 'object' && user) {
+                if (user.firstName) formData.append('first_name', user.firstName);
+                if (user.lastName) formData.append('last_name', user.lastName);
+            }
 
             const blob = new Blob([file.buffer as any], { type: file.mimetype });
             formData.append('file', blob, file.originalname);

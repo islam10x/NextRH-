@@ -13,7 +13,8 @@ services:
       - postgres-data:/var/lib/postgresql/data
       - ./database/init-scripts:/docker-entrypoint-initdb.d
     ports:
-      - "5432:5432"
+      # Expose on 5435 to avoid clashing with any local Postgres already on 5432
+      - "5435:5432"
     networks:
       - cv-network
   pgadmin:
@@ -44,6 +45,10 @@ services:
       DB_NAME: cv_management
       DATABASE_URL: postgresql://postgres:${DB_PASSWORD}@postgres:5432/cv_management
       JWT_SECRET: ${JWT_SECRET}
+      CLAMAV_ENABLED: 'true'
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: 3310
+      CLAMAV_TIMEOUT: 60000
     volumes:
       - ./file-storage:/app/file-storage
       - ./backend/src:/app/src    # Hot reload in dev
@@ -82,13 +87,6 @@ services:
       - "11434:11434"
     volumes:
       - ollama-data:/root/.ollama
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     networks:
       - cv-network
 
@@ -112,6 +110,26 @@ services:
         curl -X POST http://ollama:11434/api/pull -d '{"name": "nomic-embed-text"}'
         echo "Models pulled successfully."
 
+  # ClamAV daemon for antivirus scanning
+  clamav:
+    image: clamav/clamav:stable
+    container_name: cv-clamav
+    volumes:
+      - clamav-db:/var/lib/clamav
+    networks:
+      - cv-network
+    ports:
+      - "3310:3310"
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan --version || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
 
   # React Frontend
   frontend:
@@ -134,3 +152,4 @@ networks:
 volumes:
   postgres-data:
   ollama-data:
+  clamav-db:

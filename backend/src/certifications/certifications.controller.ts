@@ -15,6 +15,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { UserRole } from '../users/entities/user.entity';
 import { CertificationsService } from './certifications.service';
+import { ALLOWED_UPLOAD_MIME_TYPES, MAX_UPLOAD_BYTES } from '../file-validation/file-validation.constants';
 
 @Controller('certifications')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -25,15 +26,9 @@ export class CertificationsController {
     @Roles(UserRole.EMPLOYEE)
     @UseInterceptors(
         FileInterceptor('file', {
-            limits: { fileSize: 10 * 1024 * 1024 },
+            limits: { fileSize: MAX_UPLOAD_BYTES },
             fileFilter: (_req, file, cb) => {
-                const allowed = [
-                    'application/pdf',
-                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                    'image/png',
-                    'image/jpeg',
-                ];
-                if (!allowed.includes(file.mimetype)) {
+                if (!ALLOWED_UPLOAD_MIME_TYPES.includes((file.mimetype || '').toLowerCase())) {
                     return cb(new BadRequestException('Unsupported file type'), false);
                 }
                 return cb(null, true);
@@ -43,7 +38,7 @@ export class CertificationsController {
     async uploadCertification(
         @UploadedFile(
             new ParseFilePipeBuilder()
-                .addMaxSizeValidator({ maxSize: 10 * 1024 * 1024 })
+                .addMaxSizeValidator({ maxSize: MAX_UPLOAD_BYTES })
                 .addFileTypeValidator({
                     fileType:
                         /^(application\/pdf|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|image\/png|image\/jpeg)$/i,
