@@ -1,38 +1,83 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { StatusBadge } from '@/components/common';
-import { mockEmployees, mockNotifications } from '@/data/mockData';
-import { Employee } from '@/types';
-import { Award, FileText, GraduationCap, Bell, ChevronRight, Upload, Clock } from 'lucide-react';
+import { Training, Notification } from '@/types';
+import { GraduationCap, Bell, Upload, FileText, Clock, Play, CheckCircle2, Link as LinkIcon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
+import { trainingService } from '@/services/training.service';
+import { notificationService } from '@/services/notification.service';
+
+const statusTone = (status?: string) => {
+  if (status === 'completed') return 'bg-success/15 text-success border border-success/20';
+  if (status === 'in_progress') return 'bg-primary/15 text-primary border border-primary/20';
+  return 'bg-secondary text-secondary-foreground';
+};
 
 const EmployeeDashboard: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [trainings, setTrainings] = useState<Training[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [loadingTrainings, setLoadingTrainings] = useState(false);
+  const [loadingNotifications, setLoadingNotifications] = useState(false);
 
-  // Get employee data
-  const employeeData = mockEmployees.find((emp) => emp.id === user?.id) as Employee | undefined;
-  const notifications = mockNotifications.filter((n) => n.userId === user?.id && !n.read);
+  const notificationsToShow = notifications.slice(0, 4);
 
-  const certStats = {
-    active: employeeData?.certifications.filter((c) => c.status === 'active').length || 0,
-    expiring: employeeData?.certifications.filter((c) => c.status === 'expiring_soon').length || 0,
-    expired: employeeData?.certifications.filter((c) => c.status === 'expired').length || 0,
+  const loadTrainings = async () => {
+    if (!user) {
+      setTrainings([]);
+      return;
+    }
+    setLoadingTrainings(true);
+    try {
+      const data = await trainingService.listMine();
+      setTrainings(data);
+    } catch {
+      setTrainings([]);
+    } finally {
+      setLoadingTrainings(false);
+    }
   };
 
-  const chartData = [
-    { name: 'Active', value: certStats.active, color: 'hsl(var(--success))' },
-    { name: 'Expiring', value: certStats.expiring, color: 'hsl(var(--warning))' },
-    { name: 'Expired', value: certStats.expired, color: 'hsl(var(--destructive))' },
-  ].filter((d) => d.value > 0);
+  const loadNotifications = async () => {
+    if (!user) {
+      setNotifications([]);
+      return;
+    }
+    setLoadingNotifications(true);
+    try {
+      const data = await notificationService.listMine();
+      setNotifications(data);
+    } catch {
+      setNotifications([]);
+    } finally {
+      setLoadingNotifications(false);
+    }
+  };
+
+  useEffect(() => {
+    loadTrainings();
+    loadNotifications();
+  }, [user]);
+
+  useEffect(() => {
+    const handler = () => loadNotifications();
+    window.addEventListener('notifications:updated', handler);
+    return () => window.removeEventListener('notifications:updated', handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const trainingCounts = {
+    total: trainings.length,
+    inProgress: trainings.filter((t) => t.status === 'in_progress').length,
+    completed: trainings.filter((t) => t.status === 'completed').length,
+  };
 
   const quickActions = [
-    { label: 'Upload CV', icon: Upload, onClick: () => navigate('/employee/cv-upload') },
-    { label: 'Add Certification', icon: Award, onClick: () => navigate('/employee/certifications') },
-    { label: 'View CV', icon: FileText, onClick: () => navigate('/employee/cv-preview') },
+    { label: 'Upload CV', onClick: () => navigate('/employee/cv-upload') },
+    { label: 'Add Certification', onClick: () => navigate('/employee/certifications') },
+    { label: 'View CV', onClick: () => navigate('/employee/cv-preview') },
   ];
 
   return (
@@ -40,13 +85,12 @@ const EmployeeDashboard: React.FC = () => {
       {/* Welcome Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Welcome back, {user?.name?.split(' ')[0]}!</h1>
-          <p className="text-muted-foreground">{employeeData?.title} • {employeeData?.yearsOfExperience} years experience</p>
+          <h1 className="text-2xl font-bold text-foreground">Welcome back, {user?.name?.split(' ')[0] || 'there'}!</h1>
+          <p className="text-muted-foreground">Track your trainings and notifications</p>
         </div>
         <div className="flex gap-2">
           {quickActions.map((action) => (
             <Button key={action.label} variant="outline" size="sm" onClick={action.onClick}>
-              <action.icon className="h-4 w-4 mr-2" />
               {action.label}
             </Button>
           ))}
@@ -57,123 +101,78 @@ const EmployeeDashboard: React.FC = () => {
       <div className="grid gap-4 md:grid-cols-3">
         <Card className="animate-fade-in" style={{ animationDelay: '0ms' }}>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Total Certifications</CardTitle>
-            <Award className="h-4 w-4 text-primary" />
+            <CardTitle className="text-sm font-medium text-muted-foreground">Assigned Trainings</CardTitle>
+            <GraduationCap className="h-4 w-4 text-primary" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold">{employeeData?.certifications.length || 0}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {certStats.active} active, {certStats.expiring} expiring soon
-            </p>
+            <div className="text-3xl font-bold">{trainingCounts.total}</div>
+            <p className="text-xs text-muted-foreground mt-1">Total trainings assigned to you</p>
           </CardContent>
         </Card>
 
         <Card className="animate-fade-in" style={{ animationDelay: '100ms' }}>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Training Completed</CardTitle>
-            <GraduationCap className="h-4 w-4 text-accent" />
+            <CardTitle className="text-sm font-medium text-muted-foreground">In Progress</CardTitle>
+            <Play className="h-4 w-4 text-accent" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold">{employeeData?.trainings.length || 0}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Professional development courses
-            </p>
+            <div className="text-3xl font-bold">{trainingCounts.inProgress}</div>
+            <p className="text-xs text-muted-foreground mt-1">Currently underway</p>
           </CardContent>
         </Card>
 
         <Card className="animate-fade-in" style={{ animationDelay: '200ms' }}>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Projects</CardTitle>
-            <FileText className="h-4 w-4 text-success" />
+            <CardTitle className="text-sm font-medium text-muted-foreground">Completed</CardTitle>
+            <CheckCircle2 className="h-4 w-4 text-success" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold">{employeeData?.projects.length || 0}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Client engagements
-            </p>
+            <div className="text-3xl font-bold">{trainingCounts.completed}</div>
+            <p className="text-xs text-muted-foreground mt-1">Finished trainings</p>
           </CardContent>
         </Card>
       </div>
 
       {/* Main Content Grid */}
       <div className="grid gap-6 lg:grid-cols-3">
-        {/* Certification Status */}
+        {/* Trainings List */}
         <Card className="lg:col-span-2 animate-fade-in" style={{ animationDelay: '300ms' }}>
           <CardHeader>
-            <CardTitle className="text-lg">Certification Status</CardTitle>
-            <CardDescription>Overview of your professional certifications</CardDescription>
+            <CardTitle className="text-lg">Your Trainings</CardTitle>
+            <CardDescription>Assigned trainings and their status</CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="flex flex-col md:flex-row gap-6">
-              {/* Chart */}
-              <div className="w-full md:w-48 h-48">
-                {chartData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={chartData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={50}
-                        outerRadius={70}
-                        paddingAngle={5}
-                        dataKey="value"
-                      >
-                        {chartData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip 
-                        contentStyle={{ 
-                          backgroundColor: 'hsl(var(--popover))',
-                          border: '1px solid hsl(var(--border))',
-                          borderRadius: '8px'
-                        }}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
-                    No certifications yet
-                  </div>
-                )}
+          <CardContent className="space-y-3">
+            {loadingTrainings ? (
+              <p className="text-sm text-muted-foreground">Loading trainings...</p>
+            ) : trainings.length === 0 ? (
+              <div className="text-center py-10 text-muted-foreground">
+                <GraduationCap className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                <p className="text-sm">No trainings assigned yet</p>
               </div>
-
-              {/* Certification List */}
-              <div className="flex-1 space-y-3">
-                {employeeData?.certifications.slice(0, 4).map((cert) => (
-                  <div
-                    key={cert.id}
-                    className="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-sm truncate">{cert.name}</p>
-                      <p className="text-xs text-muted-foreground">{cert.issuer}</p>
+            ) : (
+              trainings.map((t) => (
+                <div key={t.id} className="p-3 rounded-lg bg-muted/40 border border-border">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <GraduationCap className="h-4 w-4 text-primary" />
+                      <span className="font-medium">{t.name}</span>
                     </div>
-                    <StatusBadge status={cert.status} />
+                    <span className={`px-2 py-1 rounded-md text-xs font-semibold ${statusTone(t.status)}`}>
+                      {t.status || 'assigned'}
+                    </span>
                   </div>
-                ))}
-                {(!employeeData?.certifications || employeeData.certifications.length === 0) && (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <Award className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                    <p className="text-sm">No certifications added yet</p>
-                    <Button variant="link" size="sm" onClick={() => navigate('/employee/certifications')}>
-                      Add your first certification
-                    </Button>
+                  {t.provider && <p className="text-xs text-muted-foreground">{t.provider}</p>}
+                  <div className="flex gap-3 text-xs text-muted-foreground mt-1 flex-wrap">
+                    <span>Due: {t.dueDate || 'n/a'}</span>
+                    {t.trainingUrl && (
+                      <a href={t.trainingUrl} target="_blank" rel="noreferrer" className="text-primary inline-flex items-center gap-1 hover:underline">
+                        <LinkIcon className="h-3 w-3" /> Link
+                      </a>
+                    )}
                   </div>
-                )}
-                {employeeData?.certifications && employeeData.certifications.length > 4 && (
-                  <Button
-                    variant="ghost"
-                    className="w-full text-primary"
-                    onClick={() => navigate('/employee/certifications')}
-                  >
-                    View all certifications
-                    <ChevronRight className="h-4 w-4 ml-1" />
-                  </Button>
-                )}
-              </div>
-            </div>
+                </div>
+              ))
+            )}
           </CardContent>
         </Card>
 
@@ -186,8 +185,10 @@ const EmployeeDashboard: React.FC = () => {
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            {notifications.length > 0 ? (
-              notifications.map((notif) => (
+            {loadingNotifications ? (
+              <p className="text-sm text-muted-foreground">Loading notifications...</p>
+            ) : notificationsToShow.length > 0 ? (
+              notificationsToShow.map((notif) => (
                 <div
                   key={notif.id}
                   className={`p-3 rounded-lg border-l-4 ${
@@ -232,10 +233,10 @@ const EmployeeDashboard: React.FC = () => {
               <FileText className="h-6 w-6 text-primary" />
             </div>
             <div className="flex-1">
-              <p className="font-medium">{user?.name}_CV.pdf</p>
+              <p className="font-medium">{user?.name || 'Your Name'}_CV.pdf</p>
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Clock className="h-3 w-3" />
-                Last updated: {employeeData?.cvLastUpdated || 'Never'}
+                Last updated: Not available
               </div>
             </div>
             <Button onClick={() => navigate('/employee/cv-upload')}>

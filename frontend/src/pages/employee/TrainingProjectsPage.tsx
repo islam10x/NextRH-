@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -7,8 +7,8 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { mockEmployees } from '@/data/mockData';
-import { Employee, Training, Project } from '@/types';
+import { Training, Project } from '@/types';
+import { trainingService } from '@/services/training.service';
 import {
   Dialog,
   DialogContent,
@@ -29,15 +29,19 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { format } from 'date-fns';
+import { toast } from 'sonner';
 
 const TrainingProjectsPage: React.FC = () => {
   const { user } = useAuth();
-  const [isTrainingDialogOpen, setIsTrainingDialogOpen] = useState(false);
   const [isProjectDialogOpen, setIsProjectDialogOpen] = useState(false);
-
-  const employeeData = mockEmployees.find((emp) => emp.id === user?.id) as Employee | undefined;
-  const trainings = employeeData?.trainings || [];
-  const projects = employeeData?.projects || [];
+  const [trainings, setTrainings] = useState<Training[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [completionDialogOpen, setCompletionDialogOpen] = useState(false);
+  const [selectedTraining, setSelectedTraining] = useState<Training | null>(null);
+  const [completionEndDate, setCompletionEndDate] = useState<string>('');
+  const [completionComment, setCompletionComment] = useState<string>('');
+  const [completionFile, setCompletionFile] = useState<File | null>(null);
+  const projects: Project[] = [];
 
   const formatDate = (dateString: string) => {
     try {
@@ -45,6 +49,88 @@ const TrainingProjectsPage: React.FC = () => {
     } catch {
       return dateString;
     }
+  };
+
+  const openCompletionDialog = (training: Training) => {
+    setSelectedTraining(training);
+    setCompletionEndDate('');
+    setCompletionComment('');
+    setCompletionFile(null);
+    setCompletionDialogOpen(true);
+  };
+
+  const handleComplete = async () => {
+    if (!selectedTraining) return;
+    if (!completionEndDate) {
+      toast.error('Please select an end date');
+      return;
+    }
+    try {
+          if (completionFile) {
+            await trainingService.uploadProof(selectedTraining.id, completionFile, {
+              endDate: completionEndDate || undefined,
+          description: completionComment || undefined,
+            });
+          } else {
+            await trainingService.completeWithoutProof(selectedTraining.id, {
+              endDate: completionEndDate || undefined,
+          description: completionComment || undefined,
+            });
+          }
+      toast.success('Training marked as completed');
+      setCompletionDialogOpen(false);
+      loadTrainings();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.message || 'Unable to complete training');
+    }
+  };
+
+  const loadTrainings = async () => {
+    if (!user) return;
+    setIsLoading(true);
+    try {
+      const data = await trainingService.listMine();
+      setTrainings(data);
+    } catch (error: any) {
+      console.error('Failed to fetch trainings', error);
+      toast.error(error?.response?.data?.message || 'Failed to load trainings');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadTrainings();
+  }, [user]);
+
+  const handleStart = async (trainingId: string) => {
+    try {
+      await trainingService.start(trainingId);
+      toast.success('Training marked as started');
+      loadTrainings();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.message || 'Unable to start training');
+    }
+  };
+
+  const handleUploadProof = async (trainingId: string, file?: File | null) => {
+    if (!file) {
+      toast.error('Please select a file');
+      return;
+    }
+    try {
+      await trainingService.uploadProof(trainingId, file);
+      toast.success('Proof uploaded, training completed');
+      loadTrainings();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.message || 'Upload failed');
+    }
+  };
+
+  const statusBadge = (status?: string) => {
+    if (status === 'completed') return <Badge className="bg-success/15 text-success">Completed</Badge>;
+    if (status === 'in_progress') return <Badge className="bg-primary/15 text-primary">In progress</Badge>;
+    return <Badge variant="secondary">Assigned</Badge>;
   };
 
   const TrainingCard: React.FC<{ training: Training }> = ({ training }) => (
@@ -55,23 +141,46 @@ const TrainingProjectsPage: React.FC = () => {
             <GraduationCap className="h-5 w-5 text-accent" />
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-foreground">{training.name}</h3>
-            <p className="text-sm text-muted-foreground">{training.provider}</p>
+            <div className="flex items-center gap-2">
+              <h3 className="font-semibold text-foreground">{training.name}</h3>
+              {statusBadge(training.status)}
+            </div>
+            {training.provider && (
+              <p className="text-sm text-muted-foreground">{training.provider}</p>
+            )}
             <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
               <span className="flex items-center gap-1">
                 <Calendar className="h-3 w-3" />
-                {formatDate(training.completionDate)}
+                {training.dueDate ? formatDate(training.dueDate) : 'No due date'}
               </span>
-              <span className="flex items-center gap-1">
-                <Clock className="h-3 w-3" />
-                {training.duration}
-              </span>
+              {training.trainingUrl && (
+                <a
+                  href={training.trainingUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-primary hover:underline"
+                >
+                  <ChevronRight className="h-3 w-3" />
+                  Training link
+                </a>
+              )}
             </div>
-            {training.description && (
-              <p className="text-sm text-muted-foreground mt-2 line-clamp-2">
-                {training.description}
-              </p>
-            )}
+            {/* comment hidden from employee view */}
+            <div className="flex items-center gap-2 mt-3">
+              {training.status !== 'in_progress' && training.status !== 'completed' && (
+                <Button size="sm" variant="outline" onClick={() => handleStart(training.id)}>
+                  Start
+                </Button>
+              )}
+              {training.status === 'in_progress' && (
+                <Button size="sm" onClick={() => openCompletionDialog(training)}>
+                  Mark as completed
+                </Button>
+              )}
+              {training.proofFilePath && (
+                <span className="text-xs text-muted-foreground truncate">{training.proofFilePath}</span>
+              )}
+            </div>
           </div>
         </div>
       </CardContent>
@@ -145,56 +254,9 @@ const TrainingProjectsPage: React.FC = () => {
 
         {/* Training Tab */}
         <TabsContent value="trainings" className="space-y-4">
-          <div className="flex justify-end">
-            <Dialog open={isTrainingDialogOpen} onOpenChange={setIsTrainingDialogOpen}>
-              <DialogTrigger asChild>
-                <Button>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Add Training
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Add Training</DialogTitle>
-                  <DialogDescription>
-                    Add a new training or course you've completed.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4 py-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="trainingName">Training Name</Label>
-                    <Input id="trainingName" placeholder="e.g., Advanced Kubernetes" />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="provider">Provider</Label>
-                    <Input id="provider" placeholder="e.g., Coursera, Udemy" />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="completionDate">Completion Date</Label>
-                      <Input id="completionDate" type="date" />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="duration">Duration</Label>
-                      <Input id="duration" placeholder="e.g., 40 hours" />
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="trainingDesc">Description (Optional)</Label>
-                    <Textarea id="trainingDesc" placeholder="Brief description of what you learned..." />
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setIsTrainingDialogOpen(false)}>
-                    Cancel
-                  </Button>
-                  <Button onClick={() => setIsTrainingDialogOpen(false)}>Add Training</Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
-          </div>
-
-          {trainings.length > 0 ? (
+          {isLoading ? (
+            <Card><CardContent className="py-8 text-center text-muted-foreground">Loading trainings...</CardContent></Card>
+          ) : trainings.length > 0 ? (
             <div className="grid gap-4 md:grid-cols-2">
               {trainings.map((training) => (
                 <TrainingCard key={training.id} training={training} />
@@ -202,16 +264,12 @@ const TrainingProjectsPage: React.FC = () => {
             </div>
           ) : (
             <Card>
-              <CardContent className="py-16 text-center">
+              <CardContent className="py-12 text-center">
                 <GraduationCap className="h-12 w-12 mx-auto text-muted-foreground/50 mb-4" />
                 <h3 className="font-medium text-lg mb-1">No training records</h3>
-                <p className="text-muted-foreground text-sm mb-4">
-                  Add your completed training and courses
+                <p className="text-muted-foreground text-sm">
+                  Trainings are assigned by your manager. Check back soon.
                 </p>
-                <Button onClick={() => setIsTrainingDialogOpen(true)}>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Add Training
-                </Button>
               </CardContent>
             </Card>
           )}
@@ -299,6 +357,65 @@ const TrainingProjectsPage: React.FC = () => {
           )}
         </TabsContent>
       </Tabs>
+
+      <Dialog open={completionDialogOpen} onOpenChange={setCompletionDialogOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Complete Training</DialogTitle>
+            <DialogDescription>
+              Confirm completion and optionally attach a certification proof.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1">
+              <Label>Training</Label>
+              <p className="text-sm font-medium">{selectedTraining?.name}</p>
+            </div>
+            <div className="space-y-1">
+              <Label>Start date</Label>
+              <Input value={selectedTraining?.startDate || 'Not started'} readOnly />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="endDate">End date</Label>
+              <Input
+                id="endDate"
+                type="date"
+                value={completionEndDate}
+                onChange={(e) => setCompletionEndDate(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="description">Comment for manager (optional)</Label>
+              <Textarea
+                id="description"
+                value={completionComment}
+                onChange={(e) => setCompletionComment(e.target.value)}
+                placeholder="Notes for your manager (optional)"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="proof">Upload certification (optional)</Label>
+              <Input
+                id="proof"
+                type="file"
+                accept=".pdf,.docx,.png,.jpg,.jpeg"
+                onChange={(e) => setCompletionFile(e.target.files?.[0] || null)}
+              />
+              {completionFile && (
+                <p className="text-xs text-muted-foreground">Selected: {completionFile.name}</p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCompletionDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleComplete} disabled={!selectedTraining}>
+              Confirm completion
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

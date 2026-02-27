@@ -27,15 +27,24 @@ export interface Certification {
   documentUrl?: string;
 }
 
+export type TrainingStatus = 'assigned' | 'in_progress' | 'completed';
+
 // Training
 export interface Training {
   id: string;
-  employeeId: string;
+  employeeId?: string;
   name: string;
-  provider: string;
-  completionDate: string;
-  duration: string;
+  provider?: string;
+  completionDate?: string;
+  duration?: string;
   description?: string;
+  status?: TrainingStatus;
+  dueDate?: string;
+  trainingUrl?: string;
+  proofFilePath?: string;
+  assigneeName?: string;
+  assignedAt?: string;
+  startDate?: string;
 }
 
 // Project
@@ -98,6 +107,9 @@ export interface Notification {
   type: 'info' | 'warning' | 'error' | 'success';
   read: boolean;
   createdAt: string;
+  notificationType?: string;
+  relatedEntityType?: string;
+  relatedEntityId?: string;
 }
 
 // AI Chat
