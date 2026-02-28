@@ -7,6 +7,7 @@ import { Certification } from './entities/certification.entity';
 import { EmployeeProfile } from '../employees/entities/employee-profile.entity';
 import { RagService } from '../rag/rag.service';
 import { FileValidationService } from '../file-validation/file-validation.service';
+import { formatIsoDate, normalizeFlexibleDate } from '../utils/date-normalizer';
 
 @Injectable()
 export class CertificationsService {
@@ -72,6 +73,8 @@ export class CertificationsService {
         if (!parsedData || !parsedData.success) {
             throw new BadRequestException(parsedData?.error || 'Failed to parse certification or verify name match.');
         }
+        const parsedExpirationDate = normalizeFlexibleDate(parsedData.expiration_date, 'end');
+        const parsedIssueDate = normalizeFlexibleDate(parsedData.issue_date, 'start');
 
         // 2. Save file to storage
         const storageResult = await this.fileStorageService.saveEmployeeFile(userId, file, 'Certifications');
@@ -80,11 +83,11 @@ export class CertificationsService {
         await this.fileStorageService.addCertificationToMetadata(userId, {
             name: parsedData.certification_name,
             issuer: parsedData.issuer,
-            expiration: parsedData.expiration_date,
+            expiration: formatIsoDate(parsedExpirationDate) || parsedData.expiration_date || null,
         });
 
         // 4. Save to database
-        await this.saveCertificationToDatabase(userId, parsedData);
+        await this.saveCertificationToDatabase(userId, parsedData, parsedIssueDate, parsedExpirationDate);
 
         return {
             ...storageResult,
@@ -92,7 +95,12 @@ export class CertificationsService {
         };
     }
 
-    private async saveCertificationToDatabase(userId: string, parsedData: any) {
+    private async saveCertificationToDatabase(
+        userId: string,
+        parsedData: any,
+        parsedIssueDate: Date | null,
+        parsedExpirationDate: Date | null,
+    ) {
         // Find user's profile
         const profile = await this.profileRepository.findOne({
             where: { user: { user_id: userId } },
@@ -116,7 +124,8 @@ export class CertificationsService {
             // Upgrade existing CV-parsed cert to a verified uploaded cert
             existingCert.isUploaded = true;
             existingCert.issuingOrganization = parsedData.issuer || existingCert.issuingOrganization;
-            existingCert.expirationDate = parsedData.expiration_date || existingCert.expirationDate;
+            existingCert.issueDate = parsedIssueDate || existingCert.issueDate;
+            existingCert.expirationDate = parsedExpirationDate || existingCert.expirationDate;
             existingCert.credentialId = parsedData.credential_id || existingCert.credentialId;
 
             await this.certificationRepository.save(existingCert);
@@ -127,7 +136,8 @@ export class CertificationsService {
                 profile: profile,
                 certificationName: certName,
                 issuingOrganization: parsedData.issuer,
-                expirationDate: parsedData.expiration_date,
+                issueDate: parsedIssueDate,
+                expirationDate: parsedExpirationDate,
                 credentialId: parsedData.credential_id,
                 isUploaded: true,
             });

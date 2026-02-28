@@ -1,6 +1,6 @@
 """
-OCR-based Certification Parser using Tesseract (with EasyOCR fallback)
-Extracts certification name, issuer, and expiration date from images
+OCR-based Certification Parser using Tesseract (with EasyOCR and llm fallback)
+Extracts certification name, issuer, expiration date, and credential ID from images
 """
 import pytesseract
 import cv2

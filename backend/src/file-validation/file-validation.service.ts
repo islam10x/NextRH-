@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Readable } from 'stream';
 import {
     ALLOWED_UPLOAD_MIME_TYPES,
     MAX_UPLOAD_BYTES,
@@ -58,13 +59,17 @@ export class FileValidationService {
         }
 
         try {
-            const { isInfected, viruses } = await clam.scanBuffer(file.buffer);
+            const fileStream = Readable.from(file.buffer);
+            const { isInfected, viruses } = await clam.scanStream(fileStream);
             if (isInfected) {
                 const signature = Array.isArray(viruses) ? viruses.join(', ') : String(viruses);
                 this.logger.warn(`Blocked infected ${context} upload: ${signature}`);
                 throw new BadRequestException(`Upload rejected: malware detected (${signature || 'unknown signature'})`);
             }
         } catch (error) {
+            if (error instanceof BadRequestException) {
+                throw error;
+            }
             this.logger.error(`Virus scan failed: ${error instanceof Error ? error.message : error}`);
             throw new BadRequestException('Unable to scan file for viruses');
         }

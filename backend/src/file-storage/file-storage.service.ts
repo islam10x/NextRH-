@@ -164,6 +164,15 @@ export class FileStorageService {
             return;
         }
 
+        const metadataPath = path.join(baseDir, 'metadata.json');
+        let existingMetadata: any = {};
+        try {
+            const existingRaw = await fs.readFile(metadataPath, 'utf8');
+            existingMetadata = JSON.parse(existingRaw);
+        } catch {
+            existingMetadata = {};
+        }
+
         // Build enhanced metadata with summary fields
         const firstName = parsedData.structured_data?.first_name || '';
         const lastName = parsedData.structured_data?.last_name || '';
@@ -173,18 +182,88 @@ export class FileStorageService {
         const cleanedData = { ...parsedData };
         delete cleanedData.metadata;
 
-        const enhancedMetadata = {
-            name: fullName,
-            skills: [], // Can be populated from structured_data if available
-            certifications: parsedData.structured_data?.certifications?.map((c: any) => c.name) || [],
-            experience_years: 0, // Calculate from experience if needed
-            last_update: new Date().toISOString(),
-            ...cleanedData
+        const dedupeTextList = (values: any[]) => {
+            const normalized = values
+                .map((value: any) => (value == null ? '' : String(value).trim()))
+                .filter((value: string) => value.length > 0);
+
+            const output: string[] = [];
+            const seenKeys = new Set<string>();
+            for (const value of normalized) {
+                const key = value
+                    .normalize('NFD')
+                    .replace(/[\u0300-\u036f]/g, '')
+                    .toLowerCase();
+                if (seenKeys.has(key)) {
+                    continue;
+                }
+                seenKeys.add(key);
+                output.push(value);
+            }
+            return output;
         };
 
-        const metadataPath = path.join(baseDir, 'metadata.json');
+        // Keep top-level skills aligned with structured_data.skills for UI/API consumers.
+        const rawSkills = Array.isArray(parsedData?.structured_data?.skills)
+            ? parsedData.structured_data.skills
+            : [];
+        const dedupedSkills = dedupeTextList(rawSkills);
+
+        const existingCertifications = Array.isArray(existingMetadata?.certifications)
+            ? existingMetadata.certifications.map((cert: any) => {
+                if (typeof cert === 'string') return cert;
+                if (cert && typeof cert === 'object') return cert.name || '';
+                return '';
+            })
+            : [];
+        const parsedCertifications = Array.isArray(parsedData?.structured_data?.certifications)
+            ? parsedData.structured_data.certifications.map((cert: any) => {
+                if (typeof cert === 'string') return cert;
+                if (cert && typeof cert === 'object') return cert.name || '';
+                return '';
+            })
+            : [];
+        const dedupedCertifications = dedupeTextList([...existingCertifications, ...parsedCertifications]);
+
+        const enhancedMetadata = {
+            ...existingMetadata,
+            ...cleanedData,
+            name: fullName,
+            skills: dedupedSkills,
+            certifications: dedupedCertifications,
+            experience_years: typeof existingMetadata.experience_years === 'number' ? existingMetadata.experience_years : 0,
+            last_update: new Date().toISOString(),
+        };
+
         await fs.writeFile(metadataPath, JSON.stringify(enhancedMetadata, null, 2));
         this.logger.log(`Saved parsed CV metadata to ${metadataPath}`);
+    }
+
+    async updateExperienceYearsInMetadata(userId: string, experienceYears: number | null) {
+        if (typeof experienceYears !== 'number' || !Number.isFinite(experienceYears)) {
+            return;
+        }
+
+        const baseDir = await this.findBaseDirByOwner(userId);
+        if (!baseDir) {
+            this.logger.warn(`No base directory found for user ${userId}, cannot update experience years`);
+            return;
+        }
+
+        const metadataPath = path.join(baseDir, 'metadata.json');
+        let metadata: any = {};
+        try {
+            const raw = await fs.readFile(metadataPath, 'utf8');
+            metadata = JSON.parse(raw);
+        } catch {
+            metadata = {};
+        }
+
+        metadata.experience_years = Math.max(0, Math.floor(experienceYears));
+        metadata.last_update = new Date().toISOString();
+
+        await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+        this.logger.log(`Updated metadata experience_years to ${metadata.experience_years} for user ${userId}`);
     }
 
     async addCertificationToMetadata(userId: string, certData: { name: string; issuer?: string; expiration?: string }) {
