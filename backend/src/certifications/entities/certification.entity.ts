@@ -48,6 +48,9 @@ export class Certification {
     @Column({ name: 'credential_id', nullable: true })
     credentialId: string;
 
+    @Column({ name: 'is_uploaded', default: false })
+    isUploaded: boolean;
+
     @CreateDateColumn({ name: 'uploaded_at' })
     uploadedAt: Date;
 }

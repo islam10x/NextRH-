@@ -1,6 +1,7 @@
-import fitz
+﻿import fitz
 import re
 import unicodedata
+from bisect import bisect_right
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import logger
@@ -20,13 +21,23 @@ class TemplateCVParser:
         Handles bilingual (French/English) CVs with table-like structures.
         """
         text = ""
+        self._layout_lines: List[Dict[str, Any]] = []
         try:
             with fitz.open(file_path) as doc:
-                for page in doc:
+                page_offset = 0.0
+                for page_index, page in enumerate(doc):
                     text += page.get_text("text", sort=True)
+                    self._layout_lines.extend(
+                        self._build_layout_lines(page, page_index, page_offset)
+                    )
+                    page_offset += float(page.rect.height) + 120.0
         except Exception as exc:
             logger.error(f"Failed to read PDF: {exc}")
             raise ValueError("Could not read file")
+
+        self._layout_lines.sort(key=lambda item: (item["page"], item["y0"], item["x0"]))
+        for order, item in enumerate(self._layout_lines):
+            item["order"] = order
 
         text = text.replace("\xa0", " ")
         text = re.sub(r"\n{3,}", "\n\n", text)
@@ -53,11 +64,70 @@ class TemplateCVParser:
         data["address"] = self._extract_address(text)
         data["experience"] = self._extract_experience(text, lines)
         data["certifications"] = self._extract_certifications(text, lines, file_path)
-        data["education"] = self._extract_education(text, lines)
+        data["education"] = self._extract_education(text, lines, file_path)
         data["projects"] = self._extract_projects(text, lines)
         data["skills"] = self._extract_skills(text, lines)
 
         return data
+
+    def _build_layout_lines(
+        self, page: fitz.Page, page_index: int, page_offset: float
+    ) -> List[Dict[str, Any]]:
+        """Build line-level layout items from PyMuPDF text spans."""
+        try:
+            text_dict = page.get_text("dict")
+        except Exception:
+            return []
+
+        layout_lines: List[Dict[str, Any]] = []
+        for block in text_dict.get("blocks", []):
+            if block.get("type") != 0:
+                continue
+
+            for line in block.get("lines", []):
+                spans = [span for span in line.get("spans", []) if span.get("text")]
+                if not spans:
+                    continue
+
+                ordered_spans = sorted(
+                    spans, key=lambda span: float(span.get("bbox", [0.0])[0])
+                )
+                parts: List[str] = []
+                previous_x1: Optional[float] = None
+                for span in ordered_spans:
+                    bbox = span.get("bbox", [0.0, 0.0, 0.0, 0.0])
+                    x0 = float(bbox[0])
+                    x1 = float(bbox[2])
+                    span_text = str(span.get("text", ""))
+                    if not span_text:
+                        continue
+                    if previous_x1 is not None and x0 - previous_x1 > 1.5:
+                        parts.append(" ")
+                    parts.append(span_text)
+                    previous_x1 = x1
+
+                line_text = re.sub(r"\s+", " ", "".join(parts)).strip()
+                if not line_text:
+                    continue
+
+                x0 = min(float(span.get("bbox", [0.0, 0.0, 0.0, 0.0])[0]) for span in spans)
+                y0 = min(float(span.get("bbox", [0.0, 0.0, 0.0, 0.0])[1]) for span in spans)
+                x1 = max(float(span.get("bbox", [0.0, 0.0, 0.0, 0.0])[2]) for span in spans)
+                y1 = max(float(span.get("bbox", [0.0, 0.0, 0.0, 0.0])[3]) for span in spans)
+
+                layout_lines.append(
+                    {
+                        "page": page_index,
+                        "x0": x0,
+                        "y0": y0,
+                        "x1": x1,
+                        "y1": y1,
+                        "global_y": page_offset + ((y0 + y1) / 2.0),
+                        "text": line_text,
+                    }
+                )
+
+        return layout_lines
 
     def _normalize_for_match(self, value: str) -> str:
         value = unicodedata.normalize("NFKD", value or "")
@@ -90,17 +160,32 @@ class TemplateCVParser:
         return bool(re.fullmatch(r"\d+", line.strip()))
 
     def _extract_month_year(self, line: str) -> Optional[str]:
-        match = re.search(rf"(?i)\b{self.MONTH_RE}\s+\d{{4}}\b", line)
-        if match:
-            return match.group(0).strip()
+        patterns = [
+            rf"(?i)\b{self.MONTH_RE}\s+\d{{4}}\b",
+            r"\b\d{1,2}/\d{4}\b",
+            r"\b(?:19|20)\d{2}\b"
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, line)
+            if match:
+                return match.group(0).strip()
         return None
 
     def _extract_date_from_line(self, line: str) -> Optional[str]:
+        present_pattern = r"(?:present|pr(?:[eéè\u00e9\ufffd]|&eacute;)sent|current|aujourd['\u2019]?hui)"
+        dash_or_to = rf"(?:{self.DASH_RE}|[àa]|to|-)"
+        
         date_patterns = [
             rf"(?i)\b(?:depuis|since)\s+{self.MONTH_RE}\s+\d{{4}}\b",
-            rf"(?i)\b{self.MONTH_RE}\s+\d{{4}}\s*{self.DASH_RE}\s*(?:{self.MONTH_RE}\s+\d{{4}}|\d{{4}}|present|pr[ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©e]sent|current|aujourd['ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¾ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢]hui)\b",
+            rf"(?i)\b{self.MONTH_RE}\s+\d{{4}}\s*{dash_or_to}\s*(?:{self.MONTH_RE}\s+\d{{4}}|\d{{4}}|{present_pattern})\b",
+            rf"(?i)\b\d{{1,2}}/\d{{4}}\s*{dash_or_to}\s*(?:\d{{1,2}}/\d{{4}}|\d{{4}}|{present_pattern})\b",
+            rf"(?i)\b\d{{4}}\s*{dash_or_to}\s*(?:\d{{4}}|{present_pattern})\b",
             rf"\b\d{{4}}\s*{self.DASH_RE}\s*\d{{4}}\b",
             rf"(?i)\b{self.MONTH_RE}\s+\d{{4}}\b",
+            rf"(?i)\b(?:depuis|since)\s+\d{{1,2}}/\d{{4}}\b",
+            rf"(?i)\b(?:depuis|since)\s+\d{{4}}\b",
+            r"\b\d{1,2}/\d{4}\b",
+            r"\b(?:19|20)\d{2}\b",
         ]
 
         for pattern in date_patterns:
@@ -127,7 +212,7 @@ class TemplateCVParser:
 
         spaced_parts = [
             self._clean_text(part)
-            for part in re.split(r"\s{2,}|\t+", cleaned)
+            for part in re.split(r"\s{2,}|\t+", value)
             if self._clean_text(part)
         ]
         if len(spaced_parts) >= 2:
@@ -980,7 +1065,111 @@ class TemplateCVParser:
 
         return merged_certifications
 
-    def _extract_education(self, text: str, lines: List[str]) -> List[Dict[str, str]]:
+    def _extract_education_from_tables(self, file_path: str) -> List[Dict[str, str]]:
+        """Extract education using detected PDF table cells when available."""
+        if not file_path or not file_path.lower().endswith(".pdf"):
+            return []
+
+        edu_rows: List[Dict[str, str]] = []
+        try:
+            with fitz.open(file_path) as doc:
+                for page in doc:
+                    page_text = self._normalize_for_match(page.get_text("text"))
+                    if not any(
+                        keyword in page_text
+                        for keyword in ("formation", "education", "diplome", "academic")
+                    ):
+                        continue
+
+                    try:
+                        tables = page.find_tables().tables
+                    except Exception:
+                        continue
+
+                    for table in tables:
+                        rows = table.extract() or []
+                        if not rows:
+                            continue
+
+                        clean_rows: List[List[str]] = []
+                        for row in rows:
+                            cells = [self._clean_text(str(cell) if cell is not None else "") for cell in row]
+                            clean_rows.append(cells)
+
+                        header = clean_rows[0] if clean_rows else []
+                        header_norm = " ".join(self._normalize_for_match(cell) for cell in header if cell)
+                        
+                        if "projet" in header_norm or "project" in header_norm or "client" in header_norm:
+                            continue
+                            
+                        has_edu_table = "diplome" in header_norm or "institution" in header_norm or "annee" in header_norm
+                        
+                        data_rows = clean_rows[1:] if has_edu_table else clean_rows
+                        if not data_rows:
+                            continue
+
+                        year_like_rows = 0
+                        for row in data_rows:
+                            joined = self._clean_text(" ".join(cell for cell in row if cell))
+                            if not joined:
+                                continue
+                            if re.search(r"\b(?:19|20)\d{2}\b", joined):
+                                year_like_rows += 1
+
+                        is_edu_table = has_edu_table or (
+                            year_like_rows >= max(2, len(data_rows) // 2) and any("diplome" in self._normalize_for_match(c) or "universi" in self._normalize_for_match(c) for r in data_rows for c in r)
+                        )
+                        
+                        if not is_edu_table:
+                            continue
+
+                        for row in data_rows:
+                            if not row:
+                                continue
+                            
+                            dense_row = [self._clean_text(cell) for cell in row if self._clean_text(cell)]
+                            if not dense_row:
+                                continue
+
+                            date = ""
+                            institution = ""
+                            degree = ""
+                            
+                            if len(dense_row) >= 3:
+                                # Assume standard Année, Institution, Diplôme
+                                date = dense_row[0]
+                                institution = dense_row[1]
+                                degree = " ".join(dense_row[2:])
+                            else:
+                                # Fallback scanning
+                                for cell in dense_row:
+                                    if re.search(r"^(annee|institution|diplome|degree)\b", self._normalize_for_match(cell)):
+                                        continue
+
+                                    detected = self._extract_month_year(cell) or (re.search(r"\b(?:19|20)\d{2}\b", cell) and re.search(r"\b(?:19|20)\d{2}\b", cell).group(0))
+                                    if detected and not date:
+                                        remainder = self._clean_text(cell.replace(detected, "", 1))
+                                        if remainder:
+                                            institution = remainder
+                                        date = detected
+                                    elif not institution:
+                                        institution = cell
+                                    else:
+                                        degree = self._clean_text(f"{degree} {cell}")
+                            
+                            if not date and not institution and not degree:
+                                continue
+                            if not date and not degree:
+                                # Skip floating text shards created by PyMuPDF row wraps
+                                continue
+                            edu_rows.append({"end_date": date, "institution": institution, "degree": degree})
+        except Exception as e:
+            logger.warning(f"Failed to extract education tables: {e}")
+            return []
+
+        return edu_rows
+
+    def _extract_education(self, text: str, lines: List[str], file_path: Optional[str] = None) -> List[Dict[str, str]]:
         """Extract education entries from table and wrapped-line formats."""
         start_keywords = [
             "Formation academique",
@@ -1008,6 +1197,14 @@ class TemplateCVParser:
         ]
 
         section_lines = self._find_section_lines(start_keywords, end_keywords, lines)
+        
+        table_education: List[Dict[str, str]] = []
+        if file_path:
+            table_education = self._extract_education_from_tables(file_path)
+            
+        if table_education:
+            return table_education
+
         if not section_lines:
             return []
 
@@ -1294,6 +1491,433 @@ class TemplateCVParser:
 
         return normalized_education
 
+    def _extract_projects_from_layout(
+        self,
+        start_keywords: List[str],
+        end_keywords: List[str],
+    ) -> List[Dict[str, str]]:
+        """
+        Parse projects from positioned lines instead of plain text order.
+
+        The extractor identifies project rows from the date column, then
+        attaches surrounding client/description lines using vertical midpoints
+        between consecutive date rows and horizontal column bands.
+        """
+        layout_lines = getattr(self, "_layout_lines", None) or []
+        if not layout_lines:
+            return []
+
+        def extract_date_start(raw_value: str) -> Tuple[str, str]:
+            year_pattern = re.compile(
+                rf"^\s*((?:19|20)\d{{2}}(?:\s*{self.DASH_RE}\s*(?:19|20)\d{{2}})?)\b(.*)$",
+                re.IGNORECASE,
+            )
+            month_pattern = re.compile(
+                rf"^\s*((?:{self.MONTH_RE}\s+\d{{4}}(?:\s*{self.DASH_RE}\s*(?:{self.MONTH_RE}\s+\d{{4}}|\d{{4}}))?))\b(.*)$",
+                re.IGNORECASE,
+            )
+
+            year_match = year_pattern.match(raw_value)
+            if year_match:
+                return self._clean_text(year_match.group(1)), year_match.group(2)
+
+            month_match = month_pattern.match(raw_value)
+            if month_match:
+                return self._clean_text(month_match.group(1)), month_match.group(2)
+
+            return "", raw_value
+
+        def median(values: List[float]) -> float:
+            if not values:
+                return 0.0
+            ordered = sorted(values)
+            mid = len(ordered) // 2
+            if len(ordered) % 2:
+                return ordered[mid]
+            return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+        def cluster_positions(values: List[float], tolerance: float = 24.0) -> List[Dict[str, float]]:
+            if not values:
+                return []
+            ordered = sorted(values)
+            clusters: List[List[float]] = [[ordered[0]]]
+            for value in ordered[1:]:
+                current = clusters[-1]
+                center = sum(current) / len(current)
+                if abs(value - center) <= tolerance:
+                    current.append(value)
+                else:
+                    clusters.append([value])
+            return [
+                {
+                    "x": sum(cluster) / len(cluster),
+                    "count": float(len(cluster)),
+                    "min": min(cluster),
+                    "max": max(cluster),
+                }
+                for cluster in clusters
+            ]
+
+        def is_table_label(value: str) -> bool:
+            norm = self._normalize_for_match(value)
+            if not norm:
+                return True
+            if norm in {
+                "projets",
+                "projects",
+                "annee",
+                "year",
+                "date",
+                "periode",
+                "period",
+                "client",
+                "projet",
+                "project",
+                "description",
+            }:
+                return True
+            return False
+
+        start_order: Optional[int] = None
+        for line in layout_lines:
+            text_value = self._clean_text(str(line.get("text", "")))
+            if not text_value:
+                continue
+            if any(self._match_keyword(text_value, keyword) for keyword in start_keywords):
+                start_order = int(line.get("order", -1))
+                break
+
+        if start_order is None:
+            return []
+
+        end_order: Optional[int] = None
+        for line in layout_lines:
+            order = int(line.get("order", -1))
+            if order <= start_order:
+                continue
+            text_value = self._clean_text(str(line.get("text", "")))
+            if not text_value or is_table_label(text_value):
+                continue
+            if any(self._match_keyword(text_value, keyword) for keyword in end_keywords):
+                end_order = order
+                break
+
+        section_layout_lines = [
+            line
+            for line in layout_lines
+            if int(line.get("order", -1)) > start_order
+            and (end_order is None or int(line.get("order", -1)) < end_order)
+        ]
+        if not section_layout_lines:
+            return []
+
+        client_header_xs: List[float] = []
+        description_header_xs: List[float] = []
+        for line in section_layout_lines:
+            text_value = self._clean_text(str(line.get("text", "")))
+            norm = self._normalize_for_match(text_value)
+            if not norm:
+                continue
+            x0 = float(line.get("x0", 0.0))
+            if re.search(r"\b(client|company|societe|societe|organisme)\b", norm):
+                client_header_xs.append(x0)
+            if re.search(r"\b(project|projet|description|mission|role)\b", norm):
+                description_header_xs.append(x0)
+
+        marker_candidates: List[Dict[str, Any]] = []
+        for line in section_layout_lines:
+            text_value = self._clean_text(str(line.get("text", "")))
+            if not text_value or is_table_label(text_value):
+                continue
+
+            date_value, remainder = extract_date_start(text_value)
+            if not date_value and self._is_page_artifact(text_value):
+                continue
+            if not date_value:
+                continue
+
+            marker_candidates.append(
+                {
+                    "order": int(line.get("order", -1)),
+                    "x0": float(line.get("x0", 0.0)),
+                    "global_y": float(line.get("global_y", 0.0)),
+                    "date": date_value,
+                    "remainder": self._clean_text(remainder),
+                }
+            )
+
+        if not marker_candidates:
+            return []
+
+        date_column_x = median([marker["x0"] for marker in marker_candidates])
+        date_markers = [
+            marker for marker in marker_candidates if marker["x0"] <= date_column_x + 36.0
+        ]
+        if not date_markers:
+            date_markers = marker_candidates
+
+        date_markers.sort(key=lambda item: (item["global_y"], item["x0"]))
+        deduped_markers: List[Dict[str, Any]] = []
+        for marker in date_markers:
+            if deduped_markers:
+                prev = deduped_markers[-1]
+                if (
+                    abs(marker["global_y"] - prev["global_y"]) <= 6.0
+                    and marker["date"] == prev["date"]
+                ):
+                    continue
+            deduped_markers.append(marker)
+        date_markers = deduped_markers
+        if not date_markers:
+            return []
+
+        marker_orders = {marker["order"] for marker in date_markers}
+        non_marker_xs: List[float] = []
+        for line in section_layout_lines:
+            order = int(line.get("order", -1))
+            if order in marker_orders:
+                continue
+            text_value = self._clean_text(str(line.get("text", "")))
+            if not text_value or self._is_page_artifact(text_value) or is_table_label(text_value):
+                continue
+            date_value, _ = extract_date_start(text_value)
+            if date_value and float(line.get("x0", 0.0)) <= date_column_x + 36.0:
+                continue
+            x0 = float(line.get("x0", 0.0))
+            if x0 > date_column_x + 12.0:
+                non_marker_xs.append(x0)
+
+        clusters = cluster_positions(non_marker_xs)
+        clusters.sort(key=lambda item: item["x"])
+
+        client_column_x: Optional[float] = None
+        description_column_x: Optional[float] = None
+        if len(clusters) >= 2 and (clusters[-1]["x"] - clusters[0]["x"]) >= 42.0:
+            client_column_x = clusters[0]["min"]
+            right_side = [
+                cluster
+                for cluster in clusters
+                if cluster["x"] >= (client_column_x + 42.0)
+            ]
+            if right_side:
+                description_column_x = max(
+                    right_side,
+                    key=lambda cluster: (cluster["count"], cluster["x"]),
+                )["min"]
+
+        if client_column_x is None and client_header_xs:
+            client_column_x = min(client_header_xs)
+
+        if description_column_x is None:
+            right_side_x = [
+                cluster["min"]
+                for cluster in clusters
+                if client_column_x is None or cluster["x"] >= client_column_x + 42.0
+            ]
+            if right_side_x:
+                description_column_x = max(right_side_x)
+
+        if description_column_x is None and description_header_xs:
+            header_x = min(description_header_xs)
+            if client_column_x is None or header_x >= client_column_x + 24.0:
+                description_column_x = header_x
+
+        if client_column_x is None and description_column_x is not None:
+            client_column_x = max(date_column_x + 36.0, description_column_x - 130.0)
+        if description_column_x is None and client_column_x is not None:
+            description_column_x = client_column_x + 95.0
+        if client_column_x is None and description_column_x is None:
+            return []
+
+        def has_client_band_content(marker: Dict[str, Any]) -> bool:
+            if client_column_x is None:
+                return False
+            client_upper_x = (
+                description_column_x - 18.0
+                if description_column_x is not None
+                else client_column_x + 120.0
+            )
+
+            for line in section_layout_lines:
+                if int(line.get("order", -1)) == marker["order"]:
+                    continue
+                text_value = self._clean_text(str(line.get("text", "")))
+                if not text_value or self._is_page_artifact(text_value) or is_table_label(text_value):
+                    continue
+                if abs(float(line.get("global_y", 0.0)) - marker["global_y"]) > 9.0:
+                    continue
+                x0 = float(line.get("x0", 0.0))
+                if x0 < (client_column_x - 18.0) or x0 >= client_upper_x:
+                    continue
+                marker_date, _ = extract_date_start(text_value)
+                if marker_date:
+                    continue
+                return True
+            return False
+
+        merged_markers: List[Dict[str, Any]] = []
+        for marker in date_markers:
+            if not merged_markers:
+                merged_markers.append(dict(marker))
+                continue
+
+            previous = merged_markers[-1]
+            vertical_gap = marker["global_y"] - previous["global_y"]
+            same_band = abs(marker["x0"] - previous["x0"]) <= 8.0
+            if vertical_gap <= 16.0 and same_band and not has_client_band_content(marker):
+                previous_norm = self._normalize_for_match(previous.get("date", ""))
+                marker_norm = self._normalize_for_match(marker.get("date", ""))
+                if marker_norm and marker_norm not in previous_norm:
+                    previous["date"] = self._clean_text(f"{previous['date']} - {marker['date']}")
+                continue
+
+            merged_markers.append(dict(marker))
+        date_markers = merged_markers
+
+        def has_same_row_description(marker: Dict[str, Any]) -> bool:
+            if description_column_x is None:
+                return False
+            for line in section_layout_lines:
+                if int(line.get("order", -1)) in marker_orders:
+                    continue
+                text_value = self._clean_text(str(line.get("text", "")))
+                if not text_value or self._is_page_artifact(text_value) or is_table_label(text_value):
+                    continue
+                marker_date, _ = extract_date_start(text_value)
+                if marker_date:
+                    continue
+                y_distance = abs(float(line.get("global_y", 0.0)) - marker["global_y"])
+                if y_distance > 4.0:
+                    continue
+                if float(line.get("x0", 0.0)) >= description_column_x - 18.0:
+                    return True
+            return False
+
+        def has_month_token(date_value: str) -> bool:
+            return bool(re.search(rf"(?i)\b{self.MONTH_RE}\b", date_value or ""))
+
+        midpoints: List[float] = []
+        for idx in range(len(date_markers) - 1):
+            current_marker = date_markers[idx]
+            next_marker = date_markers[idx + 1]
+            midpoint = (current_marker["global_y"] + next_marker["global_y"]) / 2.0
+
+            next_has_inline_description = has_same_row_description(next_marker)
+            month_based_pair = has_month_token(current_marker.get("date", "")) or has_month_token(
+                next_marker.get("date", "")
+            )
+            if month_based_pair and next_has_inline_description:
+                shifted = max(midpoint, next_marker["global_y"] - 12.0)
+                midpoint = min(shifted, next_marker["global_y"] - 2.0)
+
+            midpoints.append(midpoint)
+
+        description_signals = (
+            "mise ",
+            "livraison",
+            "installation",
+            "migration",
+            "acquisition",
+            "solution",
+            "projet",
+            "project",
+            "renouvellement",
+            "configuration",
+            "cablage",
+            "câblage",
+        )
+
+        rows: List[Dict[str, Any]] = []
+        for marker in date_markers:
+            row: Dict[str, Any] = {
+                "date": marker["date"],
+                "client_parts": [],
+                "description_parts": [],
+            }
+            remainder = marker.get("remainder", "")
+            if remainder:
+                remainder_norm = self._normalize_for_match(remainder)
+                if ":" in remainder or any(signal in remainder_norm for signal in description_signals):
+                    row["description_parts"].append((marker["global_y"], remainder))
+                else:
+                    row["client_parts"].append((marker["global_y"], remainder))
+            rows.append(row)
+
+        ordered_section_lines = sorted(
+            section_layout_lines, key=lambda item: (float(item.get("global_y", 0.0)), float(item.get("x0", 0.0)))
+        )
+        for line in ordered_section_lines:
+            order = int(line.get("order", -1))
+            if order in marker_orders:
+                continue
+
+            text_value = self._clean_text(str(line.get("text", "")))
+            if not text_value or self._is_page_artifact(text_value) or is_table_label(text_value):
+                continue
+
+            date_value, _ = extract_date_start(text_value)
+            x0 = float(line.get("x0", 0.0))
+            if date_value and x0 <= date_column_x + 36.0:
+                continue
+
+            row_index = bisect_right(midpoints, float(line.get("global_y", 0.0)))
+            if row_index < 0 or row_index >= len(rows):
+                continue
+
+            if description_column_x is not None and x0 >= description_column_x - 18.0:
+                rows[row_index]["description_parts"].append((float(line.get("global_y", 0.0)), text_value))
+                continue
+            if client_column_x is not None and x0 >= client_column_x - 18.0:
+                rows[row_index]["client_parts"].append((float(line.get("global_y", 0.0)), text_value))
+                continue
+            if x0 > date_column_x + 10.0:
+                rows[row_index]["description_parts"].append((float(line.get("global_y", 0.0)), text_value))
+
+        def merge_parts(parts: List[Tuple[float, str]]) -> str:
+            if not parts:
+                return ""
+            merged_tokens: List[str] = []
+            previous_norm = ""
+            for _, raw_value in sorted(parts, key=lambda item: item[0]):
+                cleaned = self._clean_text(raw_value)
+                if not cleaned:
+                    continue
+                current_norm = self._normalize_for_match(cleaned)
+                if current_norm and current_norm == previous_norm:
+                    continue
+                merged_tokens.append(cleaned)
+                previous_norm = current_norm
+            return self._clean_text(" ".join(merged_tokens))
+
+        projects: List[Dict[str, str]] = []
+        for row in rows:
+            date_value = self._clean_text(str(row.get("date", "")))
+            client_value = merge_parts(row.get("client_parts", []))
+            description_value = merge_parts(row.get("description_parts", []))
+            if not date_value and not client_value and not description_value:
+                continue
+            if not client_value and not description_value:
+                continue
+            projects.append(
+                {
+                    "date": date_value,
+                    "client": client_value,
+                    "description": description_value,
+                }
+            )
+
+        if not projects:
+            return []
+
+        dated_rows = sum(1 for project in projects if project.get("date"))
+        structured_rows = sum(
+            1 for project in projects if project.get("client") and project.get("description")
+        )
+        if dated_rows >= 2 and structured_rows >= max(1, int(dated_rows * 0.4)):
+            return projects
+
+        return []
+
     def _extract_projects(self, text: str, lines: List[str]) -> List[Dict[str, str]]:
         """Extract project entries from table or bullet-list formats."""
         start_keywords = [
@@ -1319,14 +1943,17 @@ class TemplateCVParser:
         ]
 
         section_lines = self._find_section_lines(start_keywords, end_keywords, lines)
-        if not section_lines:
+        layout_projects = self._extract_projects_from_layout(start_keywords, end_keywords)
+        projects: List[Dict[str, str]] = list(layout_projects)
+        if not section_lines and not projects:
             return []
+        if projects:
+            section_lines = []
 
-        projects: List[Dict[str, str]] = []
         current_proj: Dict[str, str] = {}
         current_mode = ""
-        pending_client_parts: List[str] = []
-        pending_description_parts: List[str] = []
+        client_col_hint: Optional[int] = None
+        description_col_hint: Optional[int] = None
 
         action_keywords = [
             "mise en place",
@@ -1353,6 +1980,21 @@ class TemplateCVParser:
             "open source",
             "antivirale",
         ]
+        continuation_prefixes = (
+            "et ",
+            "de ",
+            "du ",
+            "des ",
+            "la ",
+            "le ",
+            "l'",
+            "d'",
+            "pour ",
+            "avec ",
+            "dont ",
+            "ainsi ",
+            "solution ",
+        )
 
         project_date_pattern = re.compile(
             rf"^\s*((?:19|20)\d{{2}}(?:\s*{self.DASH_RE}\s*(?:19|20)\d{{2}})?)\b(.*)$",
@@ -1369,6 +2011,23 @@ class TemplateCVParser:
                 return False
             return any(keyword in norm for keyword in action_keywords)
 
+        def looks_like_continuation_description(value: str) -> bool:
+            cleaned = self._clean_text(value)
+            if not cleaned:
+                return False
+
+            norm = self._normalize_for_match(cleaned)
+            if not norm:
+                return False
+
+            if norm.startswith(continuation_prefixes):
+                return True
+            if cleaned[:1].islower():
+                return True
+            if cleaned.startswith(("(", "[", ",", ";", "/", "-", ":", "&")):
+                return True
+            return False
+
         def merge_text(base: str, extra: str, prepend: bool = False) -> str:
             base_clean = self._clean_text(base)
             extra_clean = self._clean_text(extra)
@@ -1380,28 +2039,39 @@ class TemplateCVParser:
                 return self._clean_text(f"{extra_clean} {base_clean}")
             return self._clean_text(f"{base_clean} {extra_clean}")
 
-        def split_table_tokens(raw_value: str) -> List[str]:
+        def split_table_segments(raw_value: str) -> List[Tuple[int, str]]:
             if not raw_value:
                 return []
-            parts = re.split(r"\s{2,}|\t+", raw_value.rstrip())
-            return [self._clean_text(part) for part in parts if self._clean_text(part)]
+            value = raw_value.rstrip().replace("\t", "    ")
+            segments: List[Tuple[int, str]] = []
+            for match in re.finditer(r"\S(?:.*?\S)?(?=(?:\s{2,}|$))", value):
+                token = self._clean_text(match.group(0))
+                if token:
+                    segments.append((match.start(), token))
+            return segments
 
-        def split_line_parts(raw_value: str) -> Tuple[str, str, List[str]]:
-            tokens = split_table_tokens(raw_value)
+        def split_line_parts(raw_value: str) -> Tuple[str, str, List[str], List[int]]:
+            segments = split_table_segments(raw_value)
+            tokens = [token for _, token in segments]
+            starts = [start for start, _ in segments]
             if not tokens:
-                return "", "", []
+                return "", "", [], []
 
             leading_spaces = len(raw_value) - len(raw_value.lstrip())
             if len(tokens) == 1:
                 token = tokens[0]
-                if looks_like_description(token) or leading_spaces >= 36:
-                    return "", token, []
-                return token, "", []
+                if (
+                    looks_like_description(token)
+                    or looks_like_continuation_description(token)
+                    or leading_spaces >= 28
+                ):
+                    return "", token, [], starts
+                return token, "", [], starts
 
             client = tokens[0]
             description = tokens[1]
             overflow = tokens[2:] if len(tokens) > 2 else []
-            return client, description, overflow
+            return client, description, overflow, starts
 
         connector_suffixes = (
             " de",
@@ -1430,6 +2100,8 @@ class TemplateCVParser:
         def should_continue_description(current_description: str, candidate: str) -> bool:
             candidate_norm = self._normalize_for_match(candidate)
             if candidate_norm.startswith(("et ", "de ", "du ", "des ", "le ", "la ", "l'", "d'", "au ", "aux ")):
+                return True
+            if looks_like_continuation_description(candidate):
                 return True
             if len(candidate.split()) <= 2:
                 return True
@@ -1473,22 +2145,6 @@ class TemplateCVParser:
 
             return "", raw_value
 
-        def next_significant_index(start_idx: int) -> Optional[int]:
-            idx = start_idx
-            while idx < len(section_lines):
-                raw_next = section_lines[idx].rstrip()
-                line_next = self._clean_text(raw_next)
-                date_next, _ = extract_date_start(raw_next)
-                if (
-                    not line_next
-                    or (self._is_page_artifact(line_next) and not date_next)
-                    or (self._is_header_line(line_next, "project") and not date_next)
-                ):
-                    idx += 1
-                    continue
-                return idx
-            return None
-
         def flush_current() -> None:
             nonlocal current_proj, current_mode
             if not current_proj:
@@ -1529,15 +2185,9 @@ class TemplateCVParser:
                 continue
 
             date_str, remainder = extract_date_start(raw)
-            next_idx = next_significant_index(idx + 1)
-            next_is_date = False
-            if next_idx is not None:
-                next_date, _ = extract_date_start(section_lines[next_idx].rstrip())
-                next_is_date = bool(next_date)
-
             if date_str:
                 flush_current()
-                client_part, description_part, overflow_parts = split_line_parts(remainder)
+                client_part, description_part, overflow_parts, col_starts = split_line_parts(remainder)
 
                 current_proj = {
                     "date": date_str,
@@ -1545,17 +2195,15 @@ class TemplateCVParser:
                     "description": description_part,
                 }
 
-                if pending_client_parts:
-                    pending_client = self._clean_text(" ".join(pending_client_parts))
-                    current_proj["client"] = merge_text(current_proj.get("client", ""), pending_client, prepend=True)
-                    pending_client_parts.clear()
-
-                if pending_description_parts:
-                    pending_description = self._clean_text(" ".join(pending_description_parts))
-                    current_proj["description"] = merge_text(
-                        current_proj.get("description", ""), pending_description, prepend=True
-                    )
-                    pending_description_parts.clear()
+                if col_starts:
+                    if client_part:
+                        hint = col_starts[0]
+                        client_col_hint = hint if client_col_hint is None else min(client_col_hint, hint)
+                    if description_part:
+                        desc_idx = 1 if client_part and len(col_starts) >= 2 else 0
+                        if desc_idx < len(col_starts):
+                            hint = col_starts[desc_idx]
+                            description_col_hint = hint if description_col_hint is None else min(description_col_hint, hint)
 
                 if overflow_parts:
                     overflow_text = self._clean_text(" ".join(overflow_parts))
@@ -1565,12 +2213,14 @@ class TemplateCVParser:
                                 current_proj.get("description", ""), overflow_text
                             )
                         else:
-                            pending_client_parts.append(overflow_text)
+                            current_proj["client"] = merge_text(
+                                current_proj.get("client", ""), overflow_text
+                            )
 
                 current_mode = "table"
                 continue
 
-            client_part, description_part, overflow_parts = split_line_parts(raw)
+            client_part, description_part, overflow_parts, col_starts = split_line_parts(raw)
             if overflow_parts:
                 overflow_text = self._clean_text(" ".join(overflow_parts))
                 if overflow_text:
@@ -1579,36 +2229,49 @@ class TemplateCVParser:
                     else:
                         client_part = merge_text(client_part, overflow_text)
 
+            single_segment_start = col_starts[0] if len(col_starts) == 1 else None
+            if (
+                current_proj
+                and client_part
+                and not description_part
+                and (
+                    (
+                        single_segment_start is not None
+                        and description_col_hint is not None
+                        and single_segment_start >= max(0, description_col_hint - 3)
+                    )
+                    or looks_like_continuation_description(client_part)
+                    or looks_like_description(client_part)
+                )
+            ):
+                description_part = client_part
+                client_part = ""
+
             if not client_part and not description_part:
                 continue
 
-            current_complete = bool(current_proj.get("client")) and bool(current_proj.get("description"))
-            should_seed_next = bool(current_proj) and current_complete and next_is_date
-
-            if should_seed_next:
-                if client_part and not description_part and should_continue_client(current_proj.get("client", ""), client_part):
-                    should_seed_next = False
-                elif description_part and not client_part and should_continue_description(
-                    current_proj.get("description", ""), description_part
-                ):
-                    should_seed_next = False
-                elif (
-                    client_part
-                    and description_part
-                    and should_continue_client(current_proj.get("client", ""), client_part)
-                    and should_continue_description(current_proj.get("description", ""), description_part)
-                ):
-                    should_seed_next = False
-
-            if should_seed_next or not current_proj:
-                if client_part:
-                    pending_client_parts.append(client_part)
-                if description_part:
-                    pending_description_parts.append(description_part)
+            if not current_proj:
+                current_proj = {
+                    "date": "",
+                    "client": client_part,
+                    "description": description_part,
+                }
                 continue
 
             if client_part:
-                current_proj["client"] = merge_text(current_proj.get("client", ""), client_part)
+                client_looks_description = looks_like_description(client_part) or looks_like_continuation_description(client_part)
+                if client_looks_description:
+                    current_proj["description"] = merge_text(current_proj.get("description", ""), client_part)
+                elif not current_proj.get("description") and should_continue_client(current_proj.get("client", ""), client_part):
+                    current_proj["client"] = merge_text(current_proj.get("client", ""), client_part)
+                elif (
+                    single_segment_start is not None
+                    and description_col_hint is not None
+                    and single_segment_start >= max(0, description_col_hint - 3)
+                ):
+                    current_proj["description"] = merge_text(current_proj.get("description", ""), client_part)
+                else:
+                    current_proj["client"] = merge_text(current_proj.get("client", ""), client_part)
             if description_part:
                 current_proj["description"] = merge_text(current_proj.get("description", ""), description_part)
 

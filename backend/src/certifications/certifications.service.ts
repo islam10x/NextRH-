@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -7,6 +7,7 @@ import { Certification } from './entities/certification.entity';
 import { EmployeeProfile } from '../employees/entities/employee-profile.entity';
 import { RagService } from '../rag/rag.service';
 import { FileValidationService } from '../file-validation/file-validation.service';
+import { formatIsoDate, normalizeFlexibleDate } from '../utils/date-normalizer';
 
 @Injectable()
 export class CertificationsService {
@@ -28,14 +29,21 @@ export class CertificationsService {
             'http://127.0.0.1:8000';
     }
 
-    async saveEmployeeCertification(userId: string, file: Express.Multer.File) {
+    async saveEmployeeCertification(user: any, file: Express.Multer.File) {
         await this.fileValidationService.validate(file, 'certification');
+        const userId = typeof user === 'string' ? user : user.user_id || user.id;
 
         // 1. Call AI service for OCR parsing
         let parsedData = null;
         try {
             const formData = new FormData();
             formData.append('user_id', userId);
+
+            if (typeof user === 'object' && user) {
+                if (user.firstName) formData.append('first_name', user.firstName);
+                if (user.lastName) formData.append('last_name', user.lastName);
+            }
+
             const blob = new Blob([file.buffer as any], { type: file.mimetype });
             formData.append('file', blob, file.originalname);
 
@@ -62,22 +70,24 @@ export class CertificationsService {
             );
         }
 
+        if (!parsedData || !parsedData.success) {
+            throw new BadRequestException(parsedData?.error || 'Failed to parse certification or verify name match.');
+        }
+        const parsedExpirationDate = normalizeFlexibleDate(parsedData.expiration_date, 'end');
+        const parsedIssueDate = normalizeFlexibleDate(parsedData.issue_date, 'start');
+
         // 2. Save file to storage
         const storageResult = await this.fileStorageService.saveEmployeeFile(userId, file, 'Certifications');
 
         // 3. Update metadata.json with certification
-        if (parsedData && parsedData.success) {
-            await this.fileStorageService.addCertificationToMetadata(userId, {
-                name: parsedData.certification_name,
-                issuer: parsedData.issuer,
-                expiration: parsedData.expiration_date,
-            });
-        }
+        await this.fileStorageService.addCertificationToMetadata(userId, {
+            name: parsedData.certification_name,
+            issuer: parsedData.issuer,
+            expiration: formatIsoDate(parsedExpirationDate) || parsedData.expiration_date || null,
+        });
 
         // 4. Save to database
-        if (parsedData && parsedData.success) {
-            await this.saveCertificationToDatabase(userId, parsedData);
-        }
+        await this.saveCertificationToDatabase(userId, parsedData, parsedIssueDate, parsedExpirationDate);
 
         return {
             ...storageResult,
@@ -85,7 +95,12 @@ export class CertificationsService {
         };
     }
 
-    private async saveCertificationToDatabase(userId: string, parsedData: any) {
+    private async saveCertificationToDatabase(
+        userId: string,
+        parsedData: any,
+        parsedIssueDate: Date | null,
+        parsedExpirationDate: Date | null,
+    ) {
         // Find user's profile
         const profile = await this.profileRepository.findOne({
             where: { user: { user_id: userId } },
@@ -96,16 +111,40 @@ export class CertificationsService {
             return;
         }
 
-        // Create and save certification
-        const certification = this.certificationRepository.create({
-            profile: profile,
-            certificationName: parsedData.certification_name || 'Unknown Certification',
-            issuingOrganization: parsedData.issuer,
-            expirationDate: parsedData.expiration_date,
+        // Check if a certification with this name already exists for this user (e.g. from a CV parse)
+        const certName = parsedData.certification_name || 'Unknown Certification';
+        const existingCert = await this.certificationRepository.findOne({
+            where: {
+                profile: { profile_id: profile.profile_id },
+                certificationName: certName,
+            }
         });
 
-        await this.certificationRepository.save(certification);
-        this.logger.log(`Saved certification to database for user ${userId}`);
+        if (existingCert) {
+            // Upgrade existing CV-parsed cert to a verified uploaded cert
+            existingCert.isUploaded = true;
+            existingCert.issuingOrganization = parsedData.issuer || existingCert.issuingOrganization;
+            existingCert.issueDate = parsedIssueDate || existingCert.issueDate;
+            existingCert.expirationDate = parsedExpirationDate || existingCert.expirationDate;
+            existingCert.credentialId = parsedData.credential_id || existingCert.credentialId;
+
+            await this.certificationRepository.save(existingCert);
+            this.logger.log(`Upgraded existing certification to uploaded status for user ${userId}`);
+        } else {
+            // Create and save new certification
+            const certification = this.certificationRepository.create({
+                profile: profile,
+                certificationName: certName,
+                issuingOrganization: parsedData.issuer,
+                issueDate: parsedIssueDate,
+                expirationDate: parsedExpirationDate,
+                credentialId: parsedData.credential_id,
+                isUploaded: true,
+            });
+
+            await this.certificationRepository.save(certification);
+            this.logger.log(`Saved new verified certification to database for user ${userId}`);
+        }
 
         // Trigger RAG Sync
         await this.ragService.triggerUserSync(userId);

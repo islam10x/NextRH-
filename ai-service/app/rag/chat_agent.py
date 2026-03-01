@@ -20,10 +20,8 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, Prom
 from langchain_core.runnables import RunnableLambda, RunnableWithMessageHistory
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 
-from app.config import settings
+from app.utils.llm import resolve_llm_model, parse_json_object
 
-LLM_MODEL = "qwen2.5:1.5b-instruct"
-LLM_MODEL_FALLBACK = "qwen2.5:0.5b-instruct"
 TOP_K = 12
 TOP_K_PER_MATCHED_EMPLOYEE = 20
 
@@ -562,29 +560,6 @@ def _build_structured_facts(
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def _parse_json_object(raw_text: str) -> dict[str, object] | None:
-    text = str(raw_text or "").strip()
-    if not text:
-        return None
-    try:
-        data = json.loads(text)
-        if isinstance(data, dict):
-            return data
-    except Exception:
-        pass
-
-    start = text.find("{")
-    end = text.rfind("}")
-    if start >= 0 and end > start:
-        try:
-            data = json.loads(text[start : end + 1])
-            if isinstance(data, dict):
-                return data
-        except Exception:
-            return None
-    return None
-
-
 def _render_grounded_project_answer(grounded_selection: dict[str, object]) -> str | None:
     raw_projects = grounded_selection.get("focus_projects")
     if not isinstance(raw_projects, list) or not raw_projects:
@@ -696,51 +671,6 @@ def _render_grounded_cert_answer(grounded_selection: dict[str, object]) -> str |
         certs = grouped[employee_name]
         lines.append(f"- {employee_name}: " + "; ".join(certs))
     return "\n".join(lines)
-
-
-def _resolve_llm_model() -> str:
-    """Return the strongest available local instruct model."""
-    import json as _json
-    import urllib.request
-
-    def _size_in_billions(model_name: str) -> float:
-        match = re.search(r":(\d+(?:\.\d+)?)b", model_name.lower())
-        if not match:
-            return 0.0
-        try:
-            return float(match.group(1))
-        except ValueError:
-            return 0.0
-
-    def _model_score(model_name: str) -> tuple[int, float, int]:
-        normalized = model_name.lower()
-        if normalized.startswith("qwen2.5"):
-            family_rank = 3
-        elif normalized.startswith("qwen2"):
-            family_rank = 2
-        elif normalized.startswith("llama3"):
-            family_rank = 1
-        else:
-            family_rank = 0
-        return (family_rank, _size_in_billions(model_name), 1 if "instruct" in normalized else 0)
-
-    try:
-        with urllib.request.urlopen(f"{settings.OLLAMA_URL}/api/tags", timeout=3) as resp:
-            data = _json.loads(resp.read())
-            available = [str(model.get("name") or "").strip() for model in data.get("models", [])]
-            available = [name for name in available if name]
-            if LLM_MODEL in available:
-                default_model = LLM_MODEL
-            else:
-                default_model = available[0] if available else LLM_MODEL_FALLBACK
-
-            instruct_candidates = [name for name in available if "instruct" in name.lower()]
-            if not instruct_candidates:
-                return default_model
-            return max(instruct_candidates, key=_model_score)
-    except Exception:
-        pass
-    return LLM_MODEL
 
 
 def build_chain():
@@ -1364,7 +1294,7 @@ ALL_PROJECTS|<exact employee name from EmployeeNames>""",
             )
             grounded = llm.invoke(messages)
             grounded_text = str(getattr(grounded, "content", "") or "").strip()
-            grounded_obj = _parse_json_object(grounded_text)
+            grounded_obj = parse_json_object(grounded_text)
             if not grounded_obj:
                 return fallback
 
@@ -1465,7 +1395,7 @@ ALL_PROJECTS|<exact employee name from EmployeeNames>""",
             )
             grounded = llm.invoke(messages)
             grounded_text = str(getattr(grounded, "content", "") or "").strip()
-            grounded_obj = _parse_json_object(grounded_text)
+            grounded_obj = parse_json_object(grounded_text)
             if not grounded_obj:
                 return fallback
 

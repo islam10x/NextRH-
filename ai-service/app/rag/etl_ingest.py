@@ -20,6 +20,28 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 class EmployeeRow:
     user_id: UUID
     first_name: str
+import argparse
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+from uuid import UUID
+
+from langchain_core.documents import Document
+from langchain_ollama import OllamaEmbeddings
+from sqlalchemy import text
+
+from app.config import settings
+from app.rag.db import SessionLocal
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+@dataclass
+class EmployeeRow:
+    user_id: UUID
+    first_name: str
     last_name: str
     email: str | None
     current_position: str | None
@@ -27,7 +49,7 @@ class EmployeeRow:
     professional_summary: str | None
     folder_path: str | None
     skills: list[str]
-    certifications: list[str]
+    certifications: list[dict[str, Any]]
     experience: list[dict[str, Any]]
     projects: list[dict[str, Any]]
     education: list[dict[str, Any]]
@@ -148,14 +170,47 @@ def build_chunks(employee: EmployeeRow, payload: dict[str, Any]) -> list[tuple[s
     all_skills = list(dict.fromkeys(db_skills + payload_skills))
 
     db_certs = employee.certifications or []
+    # payload_certs is handled below when merging
     payload_certs = extract_certifications(payload)
-    combined_certs: list[str] = []
-    for cert in list(dict.fromkeys(db_certs + payload_certs)):
-        if _is_cert_fragment(cert) and combined_certs:
-            combined_certs[-1] = combined_certs[-1] + " " + cert
+    
+    # Track certifications by name to deduplicate and merge metadata
+    cert_map: dict[str, dict[str, Any]] = {}
+
+    # 1. Process CV Payload certifications
+    for cert_name in list(dict.fromkeys(payload_certs)):
+        # Handle word fragments merging (existing logic)
+        merged_name = cert_name
+        if cert_map:
+            last_key = list(cert_map.keys())[-1]
+            if _is_cert_fragment(cert_name):
+                merged_name = f"{last_key} {cert_name}"
+                del cert_map[last_key]
+        
+        cert_map[merged_name] = {
+            "name": merged_name,
+            "is_uploaded": False,
+            "credential_id": None
+        }
+
+    # 2. Process DB certifications (which may be verified uploads)
+    for db_cert in db_certs:
+        name = db_cert.get("name")
+        if not name:
+            continue
+            
+        # If the DB says it's uploaded, or it has a credential ID, it overwrites the CV payload version
+        if name in cert_map:
+            cert_map[name]["is_uploaded"] = cert_map[name]["is_uploaded"] or db_cert.get("is_uploaded", False)
+            if db_cert.get("credential_id"):
+                cert_map[name]["credential_id"] = db_cert.get("credential_id")
         else:
-            combined_certs.append(cert)
-    all_certs = list(dict.fromkeys(combined_certs))
+            cert_map[name] = {
+                "name": name,
+                "is_uploaded": db_cert.get("is_uploaded", False),
+                "credential_id": db_cert.get("credential_id")
+            }
+
+    all_certs = list(cert_map.values())
 
     experience_count = len(employee.experience or [])
     project_count = len(employee.projects or [])
@@ -195,23 +250,46 @@ def build_chunks(employee: EmployeeRow, payload: dict[str, Any]) -> list[tuple[s
         ))
 
     if all_certs:
+        # Create a formatted list for the summary chunk
+        summary_lines = []
+        for c in all_certs:
+            status = " [Verified via direct upload]" if c.get("is_uploaded") else ""
+            cred = f" (ID: {c.get('credential_id')})" if c.get("credential_id") else ""
+            summary_lines.append(f"- {full_name}: {c['name']}{status}{cred}")
+            
         chunks.append((
-            f"{full_name} - Certifications:\n" + "\n".join(f"- {full_name}: {cert}" for cert in all_certs),
+            f"{full_name} - Certifications:\n" + "\n".join(summary_lines),
             {
                 **base_meta,
                 "chunk_type": "certifications",
                 "chunk_id": f"{user_id_str}_certifications",
-                "certifications": all_certs,
+                "certifications": [c["name"] for c in all_certs],
             }
         ))
+        
+        # Detailed chunk for each certification
         for idx, cert in enumerate(all_certs):
+            lines = [
+                f"Certification Entry for {full_name}",
+                f"Certification: {cert['name']}"
+            ]
+            if cert.get("is_uploaded"):
+                lines.append("Status: Verified via direct upload")
+            else:
+                lines.append("Status: Mentioned on CV")
+                
+            if cert.get("credential_id"):
+                lines.append(f"Credential ID: {cert['credential_id']}")
+                
             chunks.append((
-                f"Certification Entry for {full_name}\nCertification: {cert}",
+                "\n".join(lines),
                 {
                     **base_meta,
                     "chunk_type": "certification_entry",
                     "chunk_id": f"{user_id_str}_certification_entry_{idx}",
-                    "certification_name": cert,
+                    "certification_name": cert["name"],
+                    "is_uploaded": cert.get("is_uploaded", False),
+                    "credential_id": cert.get("credential_id"),
                 }
             ))
 
@@ -374,7 +452,13 @@ def load_employees() -> list[EmployeeRow]:
         for row in base_rows:
             p_id = row['profile_id']
             skills = session.execute(text("SELECT s.skill_name FROM employee_skills es JOIN skills s ON s.skill_id = es.skill_id WHERE es.profile_id = :p_id"), {"p_id": p_id}).scalars().all()
-            certs = session.execute(text("SELECT certification_name FROM certifications WHERE profile_id = :p_id"), {"p_id": p_id}).scalars().all()
+            
+            certs_result = session.execute(text("""
+                SELECT certification_name as name, is_uploaded, credential_id 
+                FROM certifications 
+                WHERE profile_id = :p_id
+            """), {"p_id": p_id}).mappings().all()
+            
             exp = session.execute(text("SELECT job_title, company_name, start_date, end_date, description FROM work_experience WHERE profile_id = :p_id"), {"p_id": p_id}).mappings().all()
             proj = session.execute(text("""
                 SELECT p.project_name, p.client_name, p.project_year, p.project_description 
@@ -394,13 +478,12 @@ def load_employees() -> list[EmployeeRow]:
                 professional_summary=row['professional_summary'],
                 folder_path=row['folder_path'],
                 skills=list(skills),
-                certifications=list(certs),
+                certifications=[dict(r) for r in certs_result],
                 experience=[dict(r) for r in exp],
                 projects=[dict(r) for r in proj],
                 education=[dict(r) for r in edu],
             ))
         return employees
-
 
 def ingest_employee(user_id: str | UUID, session: Any = None) -> bool:
     """Ingest/Update a single employee's vectors in RAG (one vector per section chunk)."""

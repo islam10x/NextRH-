@@ -1,6 +1,6 @@
 """
-OCR-based Certification Parser using Tesseract (with EasyOCR fallback)
-Extracts certification name, issuer, and expiration date from images
+OCR-based Certification Parser using Tesseract (with EasyOCR and llm fallback)
+Extracts certification name, issuer, expiration date, and credential ID from images
 """
 import pytesseract
 import cv2
@@ -16,6 +16,9 @@ import io
 import os
 import easyocr
 from app.config import settings
+from app.utils.llm import resolve_llm_model, parse_json_object
+from langchain_ollama import ChatOllama
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +68,13 @@ class CertificationOCR:
             # Check Tesseract
             self._check_tesseract()
 
-    def parse_certification(self, file_path: str, filename: str) -> Dict[str, Any]:
+    def parse_certification(
+        self, 
+        file_path: str, 
+        filename: str, 
+        user_first_name: Optional[str] = None, 
+        user_last_name: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Parse certification document and extract structured data
         
@@ -85,15 +94,72 @@ class CertificationOCR:
             
             logger.info(f"Extracted text length: {len(text)} characters")
             
-            # Parse the extracted text
-            cert_data = self._parse_text(text)
+            # Parse the extracted text using rules
+            cleaned_text = self._clean_ocr_noise(text)
+            cert_data = self._parse_text(cleaned_text)
             
+            # 1. Determine if rules failed or if data is incomplete
+            is_unknown = cert_data['name'] == "Unknown Certification"
+            name_lower = cert_data['name'].lower()
+            generic_exact = ["certificate of completion", "certificate of achievement", "certification", "certificate", "diploma", "diplôme", "attestation"]
+            generic_starts = ["id certified through", "valid through", "certificate number", "license number", "credential id", "date ", "issue date", "expiration date"]
+            is_generic = name_lower in generic_exact or any(name_lower.startswith(prefix) for prefix in generic_starts)
+            
+            # If the parser confidently grabbed the issuer's name as the cert name, it's a mistake worth falling back for
+            issuer_in_name = bool(cert_data['issuer']) and (cert_data['issuer'].lower() in cert_data['name'].lower() or cert_data['name'].lower() in cert_data['issuer'].lower())
+            
+            is_suspicious_name = len(cert_data['name']) > 80 or len(cert_data['name']) < 5 or issuer_in_name
+            
+            missing_issuer = not cert_data['issuer']
+            missing_expiry = not cert_data['expiration']
+            
+            needs_fallback = is_unknown or is_generic or is_suspicious_name or (missing_issuer and len(text) > 50) or missing_expiry
+            
+            # 2. Gatekeeper: Ensure it is likely a certificate before burning LLM cycles
+            if needs_fallback:
+                if self._is_likely_certificate(cleaned_text):
+                    logger.info("Rule-based parsing incomplete. Falling back to LLM extraction.")
+                    llm_data = self._llm_fallback_extraction(cleaned_text)
+                    
+                    # Merge LLM results (LLM takes precedence if rule engine failed)
+                    if llm_data:
+                        # Trust the LLM for the name if it provided one, as it's better at understanding context than regex
+                        llm_name = llm_data.get('name')
+                        if llm_name and llm_name.lower() not in ["null", "none", "", "unknown"]:
+                            cert_data['name'] = llm_name
+                            
+                        llm_issuer = llm_data.get('issuer')
+                        if llm_issuer and not (cert_data['issuer'] and not missing_issuer):
+                            cert_data['issuer'] = llm_issuer
+                            
+                        llm_expiry = llm_data.get('expiration_date')
+                        if llm_expiry:
+                            cert_data['expiration'] = llm_expiry
+                            
+                        llm_cred_id = llm_data.get('credential_id')
+                        if llm_cred_id:
+                            cert_data['credential_id'] = llm_cred_id
+                else:
+                    logger.info("Document failed certificate gatekeeper check. Skipping LLM fallback.")
+            
+            if user_first_name and user_last_name:
+                is_verified = self._verify_user_name(cleaned_text, user_first_name, user_last_name)
+                if not is_verified:
+                    logger.warning(f"Name verification failed for {user_first_name} {user_last_name}")
+                    return {
+                        'success': False,
+                        'error': 'Name verification failed. The certificate does not appear to belong to you.',
+                        'certification_name': cert_data['name'],
+                        'issuer': cert_data['issuer'],
+                    }
+
             return {
                 'success': True,
                 'certification_name': cert_data['name'],
                 'issuer': cert_data['issuer'],
                 'expiration_date': cert_data['expiration'],
-                'raw_text': text[:500]  # First 500 chars for debugging
+                'credential_id': cert_data.get('credential_id'),
+                'raw_text': cleaned_text[:1000]  # First 1000 chars for debugging
             }
             
         except Exception as e:
@@ -105,6 +171,67 @@ class CertificationOCR:
                 'issuer': None,
                 'expiration_date': None
             }
+            
+    def _is_likely_certificate(self, text: str) -> bool:
+        """Security guard to prevent LLM DDoS on non-certificate text dumps."""
+        if not text or len(text) < 20:
+            return False
+            
+        text_lower = text.lower()
+        
+        # Must contain at least one strong keyword
+        strong_keywords = [
+            "certif", "diplôm", "diplom", "attestation", "achievement", 
+            "completion", "issued", "license", "credential"
+        ]
+        
+        has_strong_keyword = any(kw in text_lower for kw in strong_keywords)
+        
+        # Or must contain a known tech issuer
+        has_known_issuer = any(issuer.lower() in text_lower for issuer in self.known_issuers)
+        
+        return has_strong_keyword or has_known_issuer
+
+    def _llm_fallback_extraction(self, text: str) -> Dict[str, Any]:
+        """Use local LLM to extract fields from messy certificate text."""
+        # Security: Truncate text to prevent massive context window processing
+        truncated_text = text[:3000]
+        
+        prompt = f"""
+You are an expert OCR document parser. Extract the certification details from the following raw text.
+Focus on identifying the actual name of the credential or course, skipping generic preambles like "certifies that...".
+Return ONLY a valid JSON object with EXACTLY these three keys:
+- "name": The exact name of the certification, course, or diploma. (e.g. "Compellent Storage Architect Technical")
+- "issuer": The organization that issued it. (e.g. "DELL", "Amazon Web Services"). If unknown, use null.
+- "expiration_date": The expiration date in YYYY-MM-DD format. If an issue date is present anywhere in the document (e.g. Jun 30, 2011) and the text mentions a separate validity period (e.g. "Valid for one year"), you MUST mathematically add the duration to the issue date and output the calculated expiration date (e.g. 2012-06-30). If it does not expire or is unknown, use null.
+- "credential_id": The credential ID, validation number, or certificate ID. If unknown, use null.
+
+Do NOT include markdown formatting, backticks, or any other text. Just the JSON object.
+
+RAW TEXT:
+{truncated_text}
+"""
+        try:
+            # We configure a timeout so a bad prompt doesn't hang the worker
+            llm = ChatOllama(
+                model=resolve_llm_model(),
+                base_url=settings.OLLAMA_URL,
+                temperature=0.0,
+                timeout=15.0  # 15 second strict timeout
+            )
+            
+            response = llm.invoke(prompt)
+            content = str(getattr(response, "content", "") or "").strip()
+            
+            data = parse_json_object(content)
+            if data and isinstance(data, dict):
+                return data
+                
+            return {}
+            
+        except Exception as e:
+            logger.error(f"LLM Fallback extraction failed: {str(e)}")
+            return {}
     
     def _check_tesseract(self):
         """Check if Tesseract is installed and reachable"""
@@ -148,6 +275,24 @@ class CertificationOCR:
             if len(img.shape) == 3:
                 img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
                 
+            # Check orientation and fix rotation
+            try:
+                self._check_tesseract()
+                osd = pytesseract.image_to_osd(img)
+                match = re.search(r'Rotate: (\d+)', osd)
+                if match:
+                    angle = int(match.group(1))
+                    if angle == 90:
+                        img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+                    elif angle == 180:
+                        img = cv2.rotate(img, cv2.ROTATE_180)
+                    elif angle == 270:
+                        img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                    if angle != 0:
+                        logger.info(f"Rotated image by {angle} degrees.")
+            except Exception as e:
+                logger.debug(f"OSD rotation detection skipped or failed: {str(e)}")
+                
             # Convert to grayscale
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             
@@ -180,6 +325,24 @@ class CertificationOCR:
                 pix = page.get_pixmap(dpi=400)  # Increased from 300 to 400
                 img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                 img_array = np.array(img)
+                
+                # Check orientation and fix rotation
+                try:
+                    self._check_tesseract()
+                    osd = pytesseract.image_to_osd(img_array)
+                    match = re.search(r'Rotate: (\d+)', osd)
+                    if match:
+                        angle = int(match.group(1))
+                        if angle == 90:
+                            img_array = cv2.rotate(img_array, cv2.ROTATE_90_CLOCKWISE)
+                        elif angle == 180:
+                            img_array = cv2.rotate(img_array, cv2.ROTATE_180)
+                        elif angle == 270:
+                            img_array = cv2.rotate(img_array, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                        if angle != 0:
+                            logger.info(f"Rotated image by {angle} degrees.")
+                except Exception as e:
+                    logger.debug(f"OSD rotation detection skipped or failed: {str(e)}")
                 
                 # Improved preprocessing for better OCR
                 gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
@@ -255,11 +418,8 @@ class CertificationOCR:
         
         return '\n'.join(clean_lines)
     
-    def _parse_text(self, text: str) -> Dict[str, Optional[str]]:
+    def _parse_text(self, cleaned_text: str) -> Dict[str, Optional[str]]:
         """Parse certification details from extracted text"""
-        
-        # Clean OCR noise first
-        cleaned_text = self._clean_ocr_noise(text)
         
         # Extract certification name
         cert_name = self._extract_certification_name(cleaned_text)
@@ -269,17 +429,23 @@ class CertificationOCR:
         
         # Extract expiration date
         expiration = self._extract_expiration_date(cleaned_text)
+
+        # Extract credential ID
+        credential_id = self._extract_credential_id(cleaned_text)
         
         return {
             'name': cert_name,
             'issuer': issuer,
-            'expiration': expiration
+            'expiration': expiration,
+            'credential_id': credential_id
         }
     
     def _extract_certification_name(self, text: str) -> str:
         """Extract certification name from text"""
         # Look for common patterns
         patterns = [
+            # Recognized as a pattern (Highest Priority)
+            r'recognized\s+as\s+(?:a|an)?\s*[:\-]*\s*\n*(?:[|\-]+\s*)*([A-Z][^\n]{10,80}?)(?:\s*\||\n|$)',
             # French Diploma patterns - try to keep the prefix (DIPLOME NATIONAL, etc.)
             r'((?:DIPLOME\s+NATIONAL|DIPLOME|ATTESTATION)\s+(?:D\')?.+?)(?:\s+est|,|$|\n\n)',
             # NSE certifications (Fortinet)
@@ -290,8 +456,8 @@ class CertificationOCR:
             r'(?:Is\s+now\s+a|has\s+achieved)[:\s]*\n*\s*([A-Z][A-Za-z\s]{10,60}?)(?:\n|held\s+on)',
             # Vendor + Certified patterns (e.g., "Sophos Certified Architect")
             r'([A-Z][a-z]+\s+Certified\s+[A-Za-z\s]{5,50}?)(?:\n|held\s+on|$)',
-            # "completion of X" pattern (NVIDIA, Coursera, etc.)
-            r'(?:completion\s+of|completing)[:\s]*\n*\s*([A-Z][^\n]{10,80}?)(?:\n\n|\n[A-Z]|$)',
+            # "completion of X" or "completed the course X" pattern (NVIDIA, Coursera, Dell, etc.)
+            r'(?:completion\s+of|completing|completed\s+(?:the\s+course)?)[:\s]*\n*\s*([A-Z0-9][^\n]{10,80}?)(?:\n\n|\n[A-Z]|$)',
             # Credential patterns - handle multi-line names
             r'credential\s+of[:\s]*\n*\s*([A-Z][^\n]{0,100}(?:\([A-Z]{2,6}\))?)',
             # Look for abbreviations in parentheses (e.g., "Nexpose Certified Administrator (NCA)")
@@ -325,6 +491,10 @@ class CertificationOCR:
                 
                 # Filter out generic phrases that aren't real certification names
                 if name.lower() in ['of achievement', 'of completion', 'of attainment', 'of excellence', 'of competency']:
+                    continue
+                    
+                # Filter out preamble mis-matches
+                if name.lower().endswith("acknowledges that"):
                     continue
                 
                 # Filter out very short matches that are likely just keywords
@@ -440,6 +610,46 @@ class CertificationOCR:
                     logger.info(f"Found explicit expiration date: {normalized}")
                     return normalized
 
+        # 2.5. Look for "Valid for X years" patterns and calculate the date from ANY issue date found
+        validity_match = re.search(r'Valid\s+for\s+(one|two|three|four|five|1|2|3|4|5)\s+year[s]?', text, re.IGNORECASE)
+        if validity_match:
+            years_str = validity_match.group(1).lower()
+            word_to_num = {'one': 1, '1': 1, 'two': 2, '2': 2, 'three': 3, '3': 3, 'four': 4, '4': 4, 'five': 5, '5': 5}
+            years = word_to_num.get(years_str, 1)
+            
+            # Find the first valid date in the text to act as the issue date
+            date_patterns = [
+                r'\w+\s+\d{1,2},?\s+\d{4}',
+                r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}',
+                r'\d{4}[/-]\d{1,2}[/-]\d{1,2}'
+            ]
+            
+            issue_date_str = None
+            for pattern in date_patterns:
+                dates = re.findall(pattern, text)
+                if dates:
+                    issue_date_str = dates[0].strip()
+                    break
+            issue_date_norm = self._normalize_date(issue_date_str)
+            
+            if issue_date_norm:
+                try:
+                    from datetime import datetime
+                    dt = datetime.strptime(issue_date_norm, '%Y-%m-%d')
+                    
+                    # Add the years
+                    try:
+                        exp_dt = dt.replace(year=dt.year + years)
+                    except ValueError:
+                        # Handle leap year Feb 29
+                        exp_dt = dt.replace(year=dt.year + years, day=28)
+                        
+                    calc_date = exp_dt.strftime('%Y-%m-%d')
+                    logger.info(f"Calculated expiration date {calc_date} from issue date {issue_date_norm} + {years} years")
+                    return calc_date
+                except Exception as e:
+                    logger.error(f"Error calculating date: {e}")
+
         # 3. If it's a diploma, don't try to guess an expiration date
         if is_diploma:
             logger.info("Document identified as a diploma. Skipping general date extraction for expiry.")
@@ -500,3 +710,59 @@ class CertificationOCR:
                 continue
         
         return None
+
+    def _extract_credential_id(self, text: str) -> Optional[str]:
+        """Extract credential ID / validation number from text"""
+        patterns = [
+            r'(?:Credential\s+ID|Validation\s+Number|Certificate\s+Number|ID\s+No\.?|ID)[:\s]+([A-Za-z0-9\-]+)(?:\n|$)',
+            r'(?:ID\s+Certifié|Numéro|N°|Ref)[:\s]+([A-Za-z0-9\-]+)(?:\n|$)',
+            # Course codes at the start of lines (like GSTB5362WBTS)
+            r'completed\s+(?:the\s+course)?[:\s]*\n*\s*([A-Z0-9]{8,15})\s+-'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                cred_id = match.group(1).strip()
+                if 5 <= len(cred_id) <= 40:
+                    return cred_id
+                    
+        return None
+
+    def _verify_user_name(self, text: str, first_name: str, last_name: str) -> bool:
+        """Verify if the uploaded certificate belongs to the user via fuzzy matching"""
+        import difflib
+        
+        # Clean up names
+        first = first_name.strip().lower()
+        last = last_name.strip().lower()
+        
+        if not first or not last:
+            return True # Cannot verify
+            
+        full_name = f"{first} {last}"
+        full_name_rev = f"{last} {first}"
+        
+        # Clean text
+        text_lower = text.lower()
+        
+        # Exact match
+        if first in text_lower and last in text_lower:
+            return True
+            
+        # Fuzzy match sliding window
+        words = text_lower.split()
+        name_word_count = len(full_name.split())
+        
+        # Try windows of sizes similar to the person's name length
+        for window_size in [max(1, name_word_count - 1), name_word_count, name_word_count + 1]:
+            for i in range(len(words) - window_size + 1):
+                window = " ".join(words[i:i + window_size])
+                ratio = max(
+                    difflib.SequenceMatcher(None, window, full_name).ratio(),
+                    difflib.SequenceMatcher(None, window, full_name_rev).ratio()
+                )
+                if ratio > 0.75:
+                    return True
+                
+        return False

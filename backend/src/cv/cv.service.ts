@@ -13,11 +13,13 @@ import { ProjectParticipant } from '../projects/entities/participant.entity';
 import { FileStorageService } from '../file-storage/file-storage.service';
 import { RagService } from '../rag/rag.service';
 import { FileValidationService } from '../file-validation/file-validation.service';
+import { normalizeFlexibleDate, parseFlexibleDateRange } from '../utils/date-normalizer';
 
 @Injectable()
 export class CvService {
     private readonly logger = new Logger(CvService.name);
     private readonly aiServiceBaseUrl: string;
+    private static readonly NEXT_STEP_COMPANY_KEYS = new Set(['nextstepit', 'nextstep']);
 
     constructor(
         @InjectRepository(MetadataSnapshot)
@@ -85,7 +87,13 @@ export class CvService {
                 await this.fileStorageService.saveMetadata(userId, parsingResult);
 
                 // 5. Process and store structured data in database
-                await this.processCvData(userId, parsingResult);
+                const processingResult = await this.processCvData(userId, parsingResult);
+
+                // 6. Keep metadata summary aligned with computed profile experience.
+                await this.fileStorageService.updateExperienceYearsInMetadata(
+                    userId,
+                    processingResult.totalExperienceYears,
+                );
 
                 return {
                     ...storageResult,
@@ -174,13 +182,31 @@ export class CvService {
 
             const experiences = data.structured_data.experience.map((exp: any) => {
                 const newExp = new WorkExperience();
+                const rawRange =
+                    exp.date_range ||
+                    exp.period ||
+                    exp.date ||
+                    exp.start_date ||
+                    '';
+                const parsedRange = parseFlexibleDateRange(rawRange);
+                const explicitStart = normalizeFlexibleDate(exp.start_date, 'start');
+                const explicitEnd = normalizeFlexibleDate(exp.end_date, 'end');
+
                 newExp.profile = profile;
                 newExp.jobTitle = exp.title || 'Unknown Role';
                 newExp.companyName = exp.company || 'Unknown Company';
+                newExp.startDate = parsedRange.startDate || explicitStart;
+                newExp.endDate = explicitEnd || parsedRange.endDate;
+                newExp.isCurrent = Boolean(exp.is_current) || parsedRange.isCurrent;
                 newExp.description = exp.description || '';
                 return newExp;
             });
+
+            this.applyLatestNextStepAsCurrent(experiences);
             await this.experienceRepository.save(experiences);
+
+            profile.totalExperienceYears = this.calculateTotalExperienceYears(experiences);
+            await this.profileRepository.save(profile);
         }
 
         // 5. Populate Education
@@ -189,9 +215,16 @@ export class CvService {
 
             const educations = data.structured_data.education.map((edu: any) => {
                 const newEdu = new Education();
+                const rawEducationDate = edu.end_date || edu.graduation_date || edu.date || '';
+                const parsedEducationRange = parseFlexibleDateRange(rawEducationDate);
                 newEdu.profile = profile;
                 newEdu.degree = edu.degree || 'Unknown Degree';
                 newEdu.institution = edu.institution || 'Unknown Institution';
+                // For education ranges (e.g. 2011-2014), keep the largest date as graduation date.
+                newEdu.endDate =
+                    parsedEducationRange.endDate ||
+                    normalizeFlexibleDate(rawEducationDate, 'end') ||
+                    parsedEducationRange.startDate;
                 return newEdu;
             });
             await this.educationRepository.save(educations);
@@ -205,6 +238,15 @@ export class CvService {
                 const newCert = new Certification();
                 newCert.profile = profile;
                 newCert.certificationName = cert.name || 'Unknown Certification';
+                newCert.issuingOrganization = cert.issuer || cert.issuing_organization || null;
+                newCert.issueDate = normalizeFlexibleDate(
+                    cert.date_obtained || cert.issue_date || cert.issueDate,
+                    'start',
+                );
+                newCert.expirationDate = normalizeFlexibleDate(
+                    cert.expiration_date || cert.expiry_date || cert.expirationDate,
+                    'end',
+                );
                 return newCert;
             });
             await this.certificationRepository.save(certifications);
@@ -257,6 +299,112 @@ export class CvService {
         // 8. Trigger RAG Sync
         await this.ragService.triggerUserSync(userId);
 
-        return { message: 'CV processed successfully', profileId: profile.profile_id };
+        return {
+            message: 'CV processed successfully',
+            profileId: profile.profile_id,
+            totalExperienceYears: profile.totalExperienceYears ?? null,
+        };
+    }
+
+    private normalizeCompanyName(value: string): string {
+        return (value || '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-zA-Z0-9]+/g, ' ')
+            .trim()
+            .toLowerCase();
+    }
+
+    private isNextStepCompany(value: string): boolean {
+        const normalized = this.normalizeCompanyName(value);
+        const compact = normalized.replace(/\s+/g, '');
+        return CvService.NEXT_STEP_COMPANY_KEYS.has(compact);
+    }
+
+    private applyLatestNextStepAsCurrent(experiences: WorkExperience[]) {
+        if (!experiences?.length) {
+            return;
+        }
+
+        const now = new Date();
+        let latestIndex = -1;
+        let latestTimestamp = Number.NEGATIVE_INFINITY;
+        for (let i = 0; i < experiences.length; i += 1) {
+            const exp = experiences[i];
+            const referenceDate =
+                exp.endDate ||
+                exp.startDate ||
+                (exp.isCurrent ? now : null);
+            if (!referenceDate) {
+                continue;
+            }
+            const ts = referenceDate.getTime();
+            if (ts > latestTimestamp) {
+                latestTimestamp = ts;
+                latestIndex = i;
+            }
+        }
+
+        if (latestIndex < 0) {
+            return;
+        }
+
+        const latestExp = experiences[latestIndex];
+        if (this.isNextStepCompany(latestExp.companyName || '')) {
+            latestExp.isCurrent = true;
+            latestExp.endDate = null;
+        }
+    }
+
+    private calculateTotalExperienceYears(experiences: WorkExperience[]): number | null {
+        if (!experiences?.length) {
+            return null;
+        }
+
+        const now = new Date();
+        const intervals: Array<{ start: number; end: number }> = [];
+
+        for (const exp of experiences) {
+            if (!exp.startDate) {
+                continue;
+            }
+
+            let start = new Date(exp.startDate.getTime());
+            let end = exp.endDate ? new Date(exp.endDate.getTime()) : null;
+            if (exp.isCurrent) {
+                end = now;
+            } else if (!end) {
+                // If parser did not provide an end date and role is not marked current,
+                // avoid inflating totals by treating it as a point-in-time entry.
+                end = new Date(start.getTime());
+            }
+
+            if (end.getTime() < start.getTime()) {
+                const tmp = start;
+                start = end;
+                end = tmp;
+            }
+
+            intervals.push({ start: start.getTime(), end: end.getTime() });
+        }
+
+        if (!intervals.length) {
+            return null;
+        }
+
+        intervals.sort((a, b) => a.start - b.start);
+        const merged: Array<{ start: number; end: number }> = [];
+        for (const interval of intervals) {
+            const last = merged[merged.length - 1];
+            if (!last || interval.start > last.end) {
+                merged.push({ ...interval });
+                continue;
+            }
+            last.end = Math.max(last.end, interval.end);
+        }
+
+        const totalMs = merged.reduce((sum, interval) => sum + (interval.end - interval.start), 0);
+        const years = Math.floor(totalMs / (1000 * 60 * 60 * 24 * 365.25));
+        return Math.max(0, years);
     }
 }

@@ -24,9 +24,14 @@ async def parse_cv(file: UploadFile = File(...), user_id: str = Form(...)):
 
 
 @router.post("/certification")
-async def parse_certification(file: UploadFile = File(...), user_id: str = Form(...)):
+async def parse_certification(
+    file: UploadFile = File(...), 
+    user_id: str = Form(...),
+    first_name: str = Form(None),
+    last_name: str = Form(None)
+):
     """Parse certification using OCR and return structured data"""
-    logger.info(f"Received certification parsing request for user: {user_id}, file: {file.filename}")
+    logger.info(f"Received certification parsing request for user: {user_id}, file: {file.filename}, name: {first_name} {last_name}")
     
     # Validate file type
     allowed_extensions = ['.png', '.jpg', '.jpeg', '.pdf']
@@ -49,7 +54,12 @@ async def parse_certification(file: UploadFile = File(...), user_id: str = Form(
             f.write(content)
         
         # Parse the certification
-        result = cert_ocr_service.parse_certification(temp_path, file.filename)
+        result = cert_ocr_service.parse_certification(
+            temp_path, 
+            file.filename, 
+            user_first_name=first_name, 
+            user_last_name=last_name
+        )
         
         logger.info(f"Certification parsing result: {result}")
         

@@ -16,6 +16,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import { useAuth } from '@/contexts/AuthContext';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
 const CertificationsPage: React.FC = () => {
   const ALLOWED_TYPES = useMemo(
@@ -36,6 +38,10 @@ const CertificationsPage: React.FC = () => {
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
   const [metadata, setMetadata] = useState<ParsedEmployeeMetadata | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const { user } = useAuth();
+
+  // If the user's name equals their email, they haven't uploaded a CV yet
+  const hasConfiguredName = user && user.name !== user.email;
 
   const loadMetadata = useCallback(async () => {
     setIsLoading(true);
@@ -128,9 +134,15 @@ const CertificationsPage: React.FC = () => {
           <h1 className="text-2xl font-bold text-foreground">Certifications</h1>
           <p className="text-muted-foreground">Upload and review extracted certifications</p>
         </div>
-        <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+        <Dialog open={isAddDialogOpen} onOpenChange={(open) => {
+          if (open && !hasConfiguredName) {
+            // Do not open the dialog if they don't have a name configured
+            return;
+          }
+          setIsAddDialogOpen(open);
+        }}>
           <DialogTrigger asChild>
-            <Button>
+            <Button disabled={!hasConfiguredName}>
               <Plus className="h-4 w-4 mr-2" />
               Add Certification
             </Button>
@@ -182,6 +194,15 @@ const CertificationsPage: React.FC = () => {
           </DialogContent>
         </Dialog>
       </div>
+
+      {!hasConfiguredName && (
+        <Alert variant="destructive">
+          <AlertTitle>Action Required</AlertTitle>
+          <AlertDescription>
+            Please upload your CV in the Profile section first. We need your name to verify that the uploaded certifications belong to you.
+          </AlertDescription>
+        </Alert>
+      )}
 
       <Card>
         <CardContent className="py-4">
@@ -238,7 +259,7 @@ const CertificationsPage: React.FC = () => {
             <p className="text-muted-foreground text-sm mb-4">
               Upload a certificate to parse and populate your list.
             </p>
-            <Button onClick={() => setIsAddDialogOpen(true)}>
+            <Button disabled={!hasConfiguredName} onClick={() => setIsAddDialogOpen(true)}>
               <Plus className="h-4 w-4 mr-2" />
               Add Certification
             </Button>
