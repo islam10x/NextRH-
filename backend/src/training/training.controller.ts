@@ -11,6 +11,8 @@ import {
     BadRequestException,
     HttpStatus,
     UseGuards,
+    StreamableFile,
+    Res,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { TrainingService } from './training.service';
@@ -19,6 +21,7 @@ import { UpdateTrainingStatusDto } from './dto/update-training-status.dto';
 import { ParseFilePipeBuilder } from '@nestjs/common';
 import { ALLOWED_UPLOAD_MIME_TYPES, MAX_UPLOAD_BYTES } from '../file-validation/file-validation.constants';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import type { Response } from 'express';
 
 @Controller('training')
 @UseGuards(JwtAuthGuard)
@@ -100,8 +103,25 @@ export class TrainingController {
             trainingId,
             file,
             userId,
-            req.body?.endDate,
+            req.body?.issueDate || req.body?.issue_date,
             req.body?.description,
         );
+    }
+
+    // Manager or employee downloads the uploaded proof file (PDF/Image)
+    @Get(':trainingId/proof')
+    async downloadProof(
+        @Param('trainingId') trainingId: string,
+        @Req() req: any,
+        @Res({ passthrough: true }) res: Response,
+    ) {
+        const userId = req.user?.userId || req.user?.user_id || req.user?.id;
+        const userEmail = req.user?.email;
+        const { stream, mime, filename } = await this.trainingService.getProofFile(trainingId, userId, userEmail);
+        res.set({
+            'Content-Type': mime,
+            'Content-Disposition': `inline; filename="${filename}"`,
+        });
+        return new StreamableFile(stream);
     }
 }

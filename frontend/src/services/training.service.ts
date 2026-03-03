@@ -17,12 +17,15 @@ const mapTraining = (t: any): Training => ({
   id: t.training_id || t.id,
   name: t.trainingTitle || t.training_title || t.name,
   provider: t.provider,
+  certificationName: t.certificationName || t.certification_name,
+  certificationIssueDate: t.certificationIssueDate || t.certification_issue_date,
   status: t.status,
   dueDate: t.dueDate || t.due_date,
   completionDate: t.endDate || t.end_date,
   startDate: t.startDate || t.start_date,
   trainingUrl: t.trainingUrl || t.training_url,
   proofFilePath: t.proofFilePath || t.proof_file_path,
+  proofUrl: `${api.defaults.baseURL?.replace(/\/$/, '') || ''}/training/${t.training_id || t.id}/proof`,
   description: t.description,
   assigneeName:
     t.assigneeName ||
@@ -65,13 +68,20 @@ export const trainingService = {
     await api.patch(`/training/${trainingId}/status`, { status: 'completed', ...payload });
   },
 
-  async uploadProof(trainingId: string, file: File, payload: { endDate?: string; description?: string }) {
+  async uploadProof(trainingId: string, file: File, payload: { issueDate?: string; description?: string }) {
     const form = new FormData();
     form.append('file', file);
-    if (payload.endDate) form.append('endDate', payload.endDate);
+    if (payload.issueDate) form.append('issueDate', payload.issueDate);
     if (payload.description) form.append('description', payload.description);
     await api.post(`/training/${trainingId}/proof`, form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
+  },
+
+  async downloadProof(trainingId: string): Promise<Blob> {
+    const res = await api.get(`/training/${trainingId}/proof`, {
+      responseType: 'blob',
+    });
+    return res.data;
   },
 };

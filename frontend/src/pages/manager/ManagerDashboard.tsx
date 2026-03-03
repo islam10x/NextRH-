@@ -199,8 +199,16 @@ const ManagerDashboard: React.FC = () => {
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="dueDate">Due date</Label>
-                  <Input id="dueDate" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+                  <Label htmlFor="dueDate">Due date (yyyy-mm-dd)</Label>
+                  <Input
+                    id="dueDate"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="\\d{4}-\\d{2}-\\d{2}"
+                    placeholder="yyyy-mm-dd"
+                    value={dueDate}
+                    onChange={(e) => setDueDate(e.target.value)}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="description">Description</Label>
@@ -281,7 +289,7 @@ const ManagerDashboard: React.FC = () => {
                 {t.provider && <p className="text-xs text-muted-foreground">{t.provider}</p>}
                 <div className="flex gap-3 text-xs text-muted-foreground flex-wrap">
                   <span>Assigned: {t.assignedAt ? new Date(t.assignedAt).toLocaleDateString() : 'n/a'}</span>
-                  <span>Due: {t.dueDate ? t.dueDate : 'n/a'}</span>
+                  <span>Due: {t.dueDate ? new Date(t.dueDate).toISOString().slice(0, 10) : 'n/a'}</span>
                   {t.trainingUrl && (
                     <a href={t.trainingUrl} target="_blank" rel="noreferrer" className="text-primary hover:underline">
                       Link

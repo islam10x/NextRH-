@@ -163,7 +163,7 @@ const EmployeeDashboard: React.FC = () => {
                   </div>
                   {t.provider && <p className="text-xs text-muted-foreground">{t.provider}</p>}
                   <div className="flex gap-3 text-xs text-muted-foreground mt-1 flex-wrap">
-                    <span>Due: {t.dueDate || 'n/a'}</span>
+                    <span>Due: {t.dueDate ? new Date(t.dueDate).toISOString().slice(0, 10) : 'n/a'}</span>
                     {t.trainingUrl && (
                       <a href={t.trainingUrl} target="_blank" rel="noreferrer" className="text-primary inline-flex items-center gap-1 hover:underline">
                         <LinkIcon className="h-3 w-3" /> Link

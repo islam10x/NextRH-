@@ -36,16 +36,17 @@ const TrainingProjectsPage: React.FC = () => {
   const [isProjectDialogOpen, setIsProjectDialogOpen] = useState(false);
   const [trainings, setTrainings] = useState<Training[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [completionDialogOpen, setCompletionDialogOpen] = useState(false);
   const [selectedTraining, setSelectedTraining] = useState<Training | null>(null);
-  const [completionEndDate, setCompletionEndDate] = useState<string>('');
   const [completionComment, setCompletionComment] = useState<string>('');
   const [completionFile, setCompletionFile] = useState<File | null>(null);
   const projects: Project[] = [];
 
   const formatDate = (dateString: string) => {
+    if (!dateString) return 'n/a';
     try {
-      return format(new Date(dateString), 'MMM yyyy');
+      return format(new Date(dateString), 'yyyy-MM-dd');
     } catch {
       return dateString;
     }
@@ -53,7 +54,6 @@ const TrainingProjectsPage: React.FC = () => {
 
   const openCompletionDialog = (training: Training) => {
     setSelectedTraining(training);
-    setCompletionEndDate('');
     setCompletionComment('');
     setCompletionFile(null);
     setCompletionDialogOpen(true);
@@ -61,19 +61,15 @@ const TrainingProjectsPage: React.FC = () => {
 
   const handleComplete = async () => {
     if (!selectedTraining) return;
-    if (!completionEndDate) {
-      toast.error('Please select an end date');
-      return;
-    }
     try {
+      setIsSubmitting(true);
           if (completionFile) {
             await trainingService.uploadProof(selectedTraining.id, completionFile, {
-              endDate: completionEndDate || undefined,
           description: completionComment || undefined,
             });
           } else {
             await trainingService.completeWithoutProof(selectedTraining.id, {
-              endDate: completionEndDate || undefined,
+              endDate: undefined,
           description: completionComment || undefined,
             });
           }
@@ -82,6 +78,8 @@ const TrainingProjectsPage: React.FC = () => {
       loadTrainings();
     } catch (error: any) {
       toast.error(error?.response?.data?.message || 'Unable to complete training');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -369,20 +367,7 @@ const TrainingProjectsPage: React.FC = () => {
           <div className="space-y-4 py-2">
             <div className="space-y-1">
               <Label>Training</Label>
-              <p className="text-sm font-medium">{selectedTraining?.name}</p>
-            </div>
-            <div className="space-y-1">
-              <Label>Start date</Label>
-              <Input value={selectedTraining?.startDate || 'Not started'} readOnly />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="endDate">End date</Label>
-              <Input
-                id="endDate"
-                type="date"
-                value={completionEndDate}
-                onChange={(e) => setCompletionEndDate(e.target.value)}
-              />
+              <p className="text-lg font-semibold text-green-700">{selectedTraining?.name}</p>
             </div>
             <div className="space-y-1">
               <Label htmlFor="description">Comment for manager (optional)</Label>
@@ -410,8 +395,8 @@ const TrainingProjectsPage: React.FC = () => {
             <Button variant="outline" onClick={() => setCompletionDialogOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleComplete} disabled={!selectedTraining}>
-              Confirm completion
+            <Button onClick={handleComplete} disabled={!selectedTraining || isSubmitting}>
+              {isSubmitting ? 'Submitting...' : 'Confirm completion'}
             </Button>
           </DialogFooter>
         </DialogContent>

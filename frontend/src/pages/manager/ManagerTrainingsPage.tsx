@@ -62,15 +62,39 @@ const ManagerTrainingsPage: React.FC = () => {
               {t.assigneeName && <p className="text-xs text-muted-foreground">Assignee: {t.assigneeName}</p>}
               {t.provider && <p className="text-xs text-muted-foreground">{t.provider}</p>}
               <div className="flex gap-4 text-xs text-muted-foreground flex-wrap">
-                <span>Assigned: {t.assignedAt ? new Date(t.assignedAt).toLocaleDateString() : 'n/a'}</span>
-                <span>Due: {t.dueDate || 'n/a'}</span>
-                {t.completionDate && <span>Completed: {t.completionDate}</span>}
+                <span>Assigned: {t.assignedAt ? new Date(t.assignedAt).toISOString().slice(0, 10) : 'n/a'}</span>
+                <span>Due: {t.dueDate ? new Date(t.dueDate).toISOString().slice(0, 10) : 'n/a'}</span>
+                {t.completionDate && <span>Completed: {new Date(t.completionDate).toISOString().slice(0, 10)}</span>}
                 {t.trainingUrl && (
                   <a href={t.trainingUrl} target="_blank" rel="noreferrer" className="text-primary inline-flex items-center gap-1 hover:underline">
                     <LinkIcon className="h-3 w-3" /> Link
                   </a>
                 )}
-                {t.proofFilePath && <span>Proof: {t.proofFilePath}</span>}
+                {t.certificationName && (
+                  <span>
+                    Certification: {t.certificationName}
+                    {t.certificationIssueDate ? ` · Issued ${new Date(t.certificationIssueDate).toISOString().slice(0, 10)}` : ''}
+                  </span>
+                )}
+                {!t.certificationName && t.proofFilePath && <span>Certification uploaded</span>}
+                {t.proofUrl && (
+                  <button
+                    className="text-primary hover:underline"
+                    onClick={async (e) => {
+                      e.preventDefault();
+                      try {
+                        const blob = await trainingService.downloadProof(t.id);
+                        const url = URL.createObjectURL(blob);
+                        window.open(url, '_blank');
+                        setTimeout(() => URL.revokeObjectURL(url), 30000);
+                      } catch (err: any) {
+                        toast.error(err?.response?.data?.message || 'Cannot load proof');
+                      }
+                    }}
+                  >
+                    View proof (PDF/Image)
+                  </button>
+                )}
                 {t.description && <span>Comment: {t.description}</span>}
               </div>
             </div>

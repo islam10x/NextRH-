@@ -35,6 +35,8 @@ export interface Training {
   employeeId?: string;
   name: string;
   provider?: string;
+  certificationName?: string;
+  certificationIssueDate?: string;
   completionDate?: string;
   duration?: string;
   description?: string;
@@ -42,6 +44,7 @@ export interface Training {
   dueDate?: string;
   trainingUrl?: string;
   proofFilePath?: string;
+  proofUrl?: string;
   assigneeName?: string;
   assignedAt?: string;
   startDate?: string;

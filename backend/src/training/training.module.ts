@@ -10,10 +10,13 @@ import { FileValidationModule } from '../file-validation/file-validation.module'
 import { NotificationsModule } from '../notifications/notifications.module';
 import { TeamsModule } from '../teams/teams.module';
 import { MailModule } from '../mail/mail.module';
+import { Certification } from '../certifications/entities/certification.entity';
+import { ConfigModule } from '@nestjs/config';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([TrainingSession, EmployeeProfile, User]),
+        TypeOrmModule.forFeature([TrainingSession, EmployeeProfile, User, Certification]),
+        ConfigModule,
         FileStorageModule,
         FileValidationModule,
         NotificationsModule,
