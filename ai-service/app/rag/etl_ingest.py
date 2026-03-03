@@ -53,6 +53,9 @@ class EmployeeRow:
     experience: list[dict[str, Any]]
     projects: list[dict[str, Any]]
     education: list[dict[str, Any]]
+    snapshot_metadata: dict[str, Any] | None
+    snapshot_is_current: bool | None
+    snapshot_created_at: Any | None
 
 
 def normalize_name(value: str) -> str:
@@ -121,6 +124,114 @@ def as_string_list(values: Any) -> list[str]:
     if not isinstance(values, list):
         return []
     return [str(item).strip() for item in values if str(item).strip()]
+
+
+def _norm_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+
+
+def _dedupe_records(records: list[dict[str, Any]], key_fields: list[str]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, ...]] = set()
+    output: list[dict[str, Any]] = []
+    for record in records:
+        key = tuple(_norm_text(record.get(field)) for field in key_fields)
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(record)
+    return output
+
+
+def _merge_experience_rows(db_rows: list[dict[str, Any]], payload: dict[str, Any]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    for exp in db_rows or []:
+        merged.append(
+            {
+                "job_title": str(exp.get("job_title") or "").strip(),
+                "company_name": str(exp.get("company_name") or "").strip(),
+                "start_date": str(exp.get("start_date") or "").strip(),
+                "end_date": str(exp.get("end_date") or "").strip(),
+                "description": str(exp.get("description") or "").strip(),
+            }
+        )
+
+    for exp in (payload.get("structured_data", {}) or {}).get("experience", []) or []:
+        if not isinstance(exp, dict):
+            continue
+        merged.append(
+            {
+                "job_title": str(exp.get("title") or exp.get("job_title") or "").strip(),
+                "company_name": str(exp.get("company") or exp.get("company_name") or "").strip(),
+                "start_date": str(exp.get("start_date") or exp.get("date_range") or exp.get("period") or "").strip(),
+                "end_date": str(exp.get("end_date") or "").strip(),
+                "description": str(exp.get("description") or "").strip(),
+            }
+        )
+
+    return _dedupe_records(
+        merged,
+        key_fields=["company_name", "job_title", "start_date", "end_date", "description"],
+    )
+
+
+def _merge_education_rows(db_rows: list[dict[str, Any]], payload: dict[str, Any]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    for edu in db_rows or []:
+        merged.append(
+            {
+                "degree": str(edu.get("degree") or "").strip(),
+                "field_of_study": str(edu.get("field_of_study") or "").strip(),
+                "institution": str(edu.get("institution") or "").strip(),
+                "end_date": str(edu.get("end_date") or "").strip(),
+            }
+        )
+
+    for edu in (payload.get("structured_data", {}) or {}).get("education", []) or []:
+        if not isinstance(edu, dict):
+            continue
+        merged.append(
+            {
+                "degree": str(edu.get("degree") or "").strip(),
+                "field_of_study": str(edu.get("field_of_study") or "").strip(),
+                "institution": str(edu.get("institution") or "").strip(),
+                "end_date": str(edu.get("end_date") or edu.get("date") or "").strip(),
+            }
+        )
+
+    return _dedupe_records(
+        merged,
+        key_fields=["degree", "field_of_study", "institution", "end_date"],
+    )
+
+
+def _merge_project_rows(db_rows: list[dict[str, Any]], payload: dict[str, Any]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    for proj in db_rows or []:
+        merged.append(
+            {
+                "project_name": str(proj.get("project_name") or "").strip(),
+                "client_name": str(proj.get("client_name") or "").strip(),
+                "project_year": str(proj.get("project_year") or "").strip(),
+                "project_description": str(proj.get("project_description") or "").strip(),
+            }
+        )
+
+    for proj in (payload.get("structured_data", {}) or {}).get("projects", []) or []:
+        if not isinstance(proj, dict):
+            continue
+        merged.append(
+            {
+                "project_name": str(proj.get("name") or proj.get("project_name") or "").strip(),
+                "client_name": str(proj.get("client") or proj.get("client_name") or "").strip(),
+                "project_year": str(proj.get("date") or proj.get("project_year") or "").strip(),
+                "project_description": str(proj.get("description") or proj.get("project_description") or "").strip(),
+            }
+        )
+
+    return _dedupe_records(
+        merged,
+        key_fields=["project_name", "client_name", "project_year", "project_description"],
+    )
 
 def _is_cert_fragment(name: str) -> bool:
     """Return True if this is a dangling word-fragment from a split multi-line cert name.
@@ -212,8 +323,12 @@ def build_chunks(employee: EmployeeRow, payload: dict[str, Any]) -> list[tuple[s
 
     all_certs = list(cert_map.values())
 
-    experience_count = len(employee.experience or [])
-    project_count = len(employee.projects or [])
+    merged_experience = _merge_experience_rows(employee.experience or [], payload or {})
+    merged_education = _merge_education_rows(employee.education or [], payload or {})
+    merged_projects = _merge_project_rows(employee.projects or [], payload or {})
+
+    experience_count = len(merged_experience)
+    project_count = len(merged_projects)
 
     base_meta = {
         "user_id": user_id_str,
@@ -293,9 +408,9 @@ def build_chunks(employee: EmployeeRow, payload: dict[str, Any]) -> list[tuple[s
                 }
             ))
 
-    if employee.experience:
+    if merged_experience:
         summary_lines = [f"{full_name} - Work Experience:"]
-        for idx, exp in enumerate(employee.experience):
+        for idx, exp in enumerate(merged_experience):
             company = str(exp.get("company_name") or "Unknown")
             role = str(exp.get("job_title") or "Unknown")
             start_date = str(exp.get("start_date") or "")
@@ -343,9 +458,9 @@ def build_chunks(employee: EmployeeRow, payload: dict[str, Any]) -> list[tuple[s
             }
         ))
 
-    if employee.education:
+    if merged_education:
         lines = [f"{full_name} - Education:"]
-        for idx, edu in enumerate(employee.education):
+        for idx, edu in enumerate(merged_education):
             degree = str(edu.get("degree") or "")
             field = str(edu.get("field_of_study") or "")
             institution = str(edu.get("institution") or "")
@@ -388,9 +503,9 @@ def build_chunks(employee: EmployeeRow, payload: dict[str, Any]) -> list[tuple[s
             {**base_meta, "chunk_type": "education", "chunk_id": f"{user_id_str}_education"}
         ))
 
-    if employee.projects:
+    if merged_projects:
         summary_lines = [f"{full_name} - Projects:"]
-        for idx, proj in enumerate(employee.projects):
+        for idx, proj in enumerate(merged_projects):
             project_name = str(proj.get("project_name") or "").strip()
             client_name = str(proj.get("client_name") or "").strip() or "Unknown client"
             project_year = str(proj.get("project_year") or "").strip()
@@ -441,9 +556,19 @@ def load_employees() -> list[EmployeeRow]:
         query = text("""
             SELECT u.user_id, u.first_name, u.last_name, u.email, 
                    ep.profile_id, ep.current_position, ep.total_experience_years, 
-                   ep.professional_summary, ep.folder_path
+                   ep.professional_summary, ep.folder_path,
+                   ms.metadata_json AS snapshot_metadata,
+                   ms.is_current AS snapshot_is_current,
+                   ms.created_at AS snapshot_created_at
             FROM users u
             JOIN employee_profiles ep ON ep.user_id = u.user_id
+            LEFT JOIN LATERAL (
+                SELECT metadata_json, is_current, created_at
+                FROM metadata_snapshots
+                WHERE profile_id = ep.profile_id
+                ORDER BY is_current DESC, created_at DESC
+                LIMIT 1
+            ) ms ON TRUE
             WHERE u.role = 'employee'
         """)
         base_rows = session.execute(query).mappings().all()
@@ -482,6 +607,9 @@ def load_employees() -> list[EmployeeRow]:
                 experience=[dict(r) for r in exp],
                 projects=[dict(r) for r in proj],
                 education=[dict(r) for r in edu],
+                snapshot_metadata=(dict(row['snapshot_metadata']) if isinstance(row.get('snapshot_metadata'), dict) else None),
+                snapshot_is_current=row.get('snapshot_is_current'),
+                snapshot_created_at=row.get('snapshot_created_at'),
             ))
         return employees
 
@@ -506,13 +634,20 @@ def ingest_employee(user_id: str | UUID, session: Any = None) -> bool:
         return False
 
     metadata_path = find_metadata_file(employee, roots, metadata_index)
-    payload = {}
-    if metadata_path:
+    payload: dict[str, Any] = {}
+    payload_source = "none"
+
+    if isinstance(employee.snapshot_metadata, dict) and employee.snapshot_metadata:
+        payload = dict(employee.snapshot_metadata)
+        payload_source = "db_current" if bool(employee.snapshot_is_current) else "db_latest"
+
+    if not payload and metadata_path:
         try:
             payload = json.loads(metadata_path.read_text(encoding="utf-8"))
             payload["metadata_path"] = str(metadata_path)
+            payload_source = "file_metadata"
         except Exception:
-            pass
+            payload = {}
 
     chunks = build_chunks(employee, payload)
 
@@ -536,7 +671,10 @@ def ingest_employee(user_id: str | UUID, session: Any = None) -> bool:
 
         s.commit()
 
-    print(f"[OK] Re-indexed {uid} ({employee.first_name} {employee.last_name}) — {len(chunks)} chunks")
+    print(
+        f"[OK] Re-indexed {uid} ({employee.first_name} {employee.last_name}) "
+        f"- {len(chunks)} chunks (payload_source={payload_source})"
+    )
     # Always refresh the directory chunk after any individual employee change
     ingest_directory(embedder)
     return True
@@ -676,7 +814,8 @@ def run_ingestion(limit: int | None, dry_run: bool) -> None:
 
     for employee in employees:
         if dry_run:
-            chunks = build_chunks(employee, {})
+            payload = employee.snapshot_metadata if isinstance(employee.snapshot_metadata, dict) else {}
+            chunks = build_chunks(employee, payload)
             print(f"[DRY-RUN] {employee.first_name} {employee.last_name}: {len(chunks)} chunks")
             for content, meta in chunks:
                 print(f"  [{meta['chunk_type']}] {content[:80]}...")
@@ -708,5 +847,3 @@ def parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     args = parse_args()
     run_ingestion(limit=args.limit, dry_run=args.dry_run)
-
-

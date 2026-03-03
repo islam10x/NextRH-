@@ -66,6 +66,13 @@ services:
     environment:
       - DATABASE_URL=postgresql+psycopg://postgres:${DB_PASSWORD}@postgres:5432/cv_management
       - OLLAMA_URL=http://ollama:11434
+      - RAG_CHAT_PROVIDER=${RAG_CHAT_PROVIDER:-ollama}
+      - RAG_CHAT_MODEL=${RAG_CHAT_MODEL:-qwen2.5:1.5b-instruct}
+      - RAG_CHAT_HF_MODEL=${RAG_CHAT_HF_MODEL:-Qwen/Qwen2.5-7B-Instruct:together}
+      - RAG_CHAT_TIMEOUT_SECONDS=${RAG_CHAT_TIMEOUT_SECONDS:-30}
+      - HF_ROUTER_BASE_URL=${HF_ROUTER_BASE_URL:-https://router.huggingface.co/v1}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HF_API_KEY=${HF_API_KEY:-}
     volumes:
       - ./file-storage:/app/file-storage
       - ./ai-service/app:/app/app

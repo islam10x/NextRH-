@@ -168,6 +168,14 @@ export class CvService {
         }
 
         // 3. Save Metadata Snapshot
+        await this.metadataRepository
+            .createQueryBuilder()
+            .update(MetadataSnapshot)
+            .set({ isCurrent: false })
+            .where('profile_id = :profileId', { profileId: profile.profile_id })
+            .andWhere('is_current = true')
+            .execute();
+
         const snapshot = this.metadataRepository.create({
             profile: profile,
             metadataJson: data,

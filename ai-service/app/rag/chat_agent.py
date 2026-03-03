@@ -1,5 +1,5 @@
 """
-LLM-first Bid Manager chat agent using local Postgres pgvector + Ollama.
+LLM-first Bid Manager chat agent using local Postgres pgvector + configurable chat LLM provider.
 
 Design goals:
 - Avoid hardcoded intent/question routing.
@@ -18,11 +18,12 @@ from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.documents import Document as LCDocument
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_core.runnables import RunnableLambda, RunnableWithMessageHistory
-from langchain_ollama import ChatOllama, OllamaEmbeddings
+from langchain_ollama import OllamaEmbeddings
 
-from app.utils.llm import resolve_llm_model, parse_json_object
+from app.config import settings
+from app.utils.llm import build_rag_chat_llm, parse_json_object
 
-TOP_K = 12
+TOP_K = 18
 TOP_K_PER_MATCHED_EMPLOYEE = 20
 
 
@@ -35,17 +36,63 @@ def _normalize_for_match(value: str) -> str:
     return text
 
 
+def _token_variants(token: str) -> list[str]:
+    base = _normalize_for_match(token)
+    if not base:
+        return []
+
+    variants: list[str] = [base]
+
+    # Basic morphology handling to improve recall (bank <-> banks, category <-> categories, etc.).
+    if len(base) > 4 and base.endswith("ies"):
+        variants.append(base[:-3] + "y")
+    if len(base) > 3 and base.endswith("es"):
+        variants.append(base[:-2])
+    if len(base) > 3 and base.endswith("s"):
+        variants.append(base[:-1])
+    elif len(base) > 3:
+        variants.append(base + "s")
+
+    if len(base) > 5 and base.endswith("ing"):
+        variants.append(base[:-3])
+    if len(base) > 4 and base.endswith("ed"):
+        variants.append(base[:-2])
+
+    output: list[str] = []
+    seen: set[str] = set()
+    for variant in variants:
+        v = variant.strip("-_. ")
+        if len(v) < 3:
+            continue
+        if v in seen:
+            continue
+        seen.add(v)
+        output.append(v)
+    return output
+
+
 def _contains_word(text: str, word: str) -> bool:
-    if re.search(rf"\b{re.escape(word)}\b", text):
-        return True
-    if len(word) >= 4:
-        return re.search(rf"\b{re.escape(word)}[a-z0-9]*\b", text) is not None
+    for candidate in _token_variants(word):
+        if re.search(rf"\b{re.escape(candidate)}\b", text):
+            return True
+        if len(candidate) >= 4 and re.search(rf"\b{re.escape(candidate)}[a-z0-9]*\b", text):
+            return True
     return False
 
 
 def _query_terms(query_norm: str) -> list[str]:
     terms = re.findall(r"[a-z0-9][a-z0-9+._\-]*", query_norm)
-    return [token for token in terms if len(token) > 2]
+    output: list[str] = []
+    seen: set[str] = set()
+    for token in terms:
+        if len(token) <= 2:
+            continue
+        for variant in _token_variants(token):
+            if variant in seen:
+                continue
+            seen.add(variant)
+            output.append(variant)
+    return output
 
 
 def _needs_reference_resolution(query_norm: str) -> bool:
@@ -355,6 +402,125 @@ def _extract_education_from_doc(doc: LCDocument) -> tuple[str, list[str]]:
     return employee_name, _dedupe_keep_order(items)
 
 
+def _build_evidence_rows(docs: list[LCDocument], limit: int = 160) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    next_id = 1
+
+    for doc in docs:
+        employee_name, projects = _extract_project_entries_from_doc(doc)
+        if employee_name and projects:
+            for project in projects:
+                if not isinstance(project, dict):
+                    continue
+                project_name = str(project.get("project_name") or "").strip()
+                client_name = str(project.get("client_name") or "").strip()
+                project_year = str(project.get("project_year") or "").strip()
+                description = str(project.get("description") or "").strip()
+                entity = client_name or project_name
+                evidence_text = " | ".join(
+                    [
+                        f"project={project_name}",
+                        f"client={client_name}",
+                        f"year={project_year}",
+                        f"description={description}",
+                    ]
+                ).strip()
+                if not entity and not description:
+                    continue
+                signature = (
+                    _normalize_for_match(employee_name),
+                    "project",
+                    _normalize_for_match(entity),
+                    _normalize_for_match(description)[:160],
+                )
+                if signature in seen:
+                    continue
+                seen.add(signature)
+                rows.append(
+                    {
+                        "id": f"E{next_id}",
+                        "employee_name": employee_name,
+                        "evidence_type": "project",
+                        "entity": entity,
+                        "evidence_text": evidence_text,
+                    }
+                )
+                next_id += 1
+
+        employee_name, experience_entries = _extract_experience_entries_from_doc(doc)
+        if employee_name and experience_entries:
+            for exp in experience_entries:
+                if not isinstance(exp, dict):
+                    continue
+                company = str(exp.get("company") or "").strip()
+                role = str(exp.get("role") or "").strip()
+                start_date = str(exp.get("start_date") or "").strip()
+                end_date = str(exp.get("end_date") or "").strip()
+                description = str(exp.get("description") or "").strip()
+                if not company and not description:
+                    continue
+                evidence_text = " | ".join(
+                    [
+                        f"company={company}",
+                        f"role={role}",
+                        f"start={start_date}",
+                        f"end={end_date}",
+                        f"description={description}",
+                    ]
+                ).strip()
+                signature = (
+                    _normalize_for_match(employee_name),
+                    "experience",
+                    _normalize_for_match(company),
+                    _normalize_for_match(description)[:160],
+                )
+                if signature in seen:
+                    continue
+                seen.add(signature)
+                rows.append(
+                    {
+                        "id": f"E{next_id}",
+                        "employee_name": employee_name,
+                        "evidence_type": "experience",
+                        "entity": company,
+                        "evidence_text": evidence_text,
+                    }
+                )
+                next_id += 1
+
+        employee_name, certs = _extract_certifications_from_doc(doc)
+        if employee_name and certs:
+            for cert in certs:
+                cert_name = str(cert or "").strip()
+                if not cert_name:
+                    continue
+                signature = (
+                    _normalize_for_match(employee_name),
+                    "certification",
+                    _normalize_for_match(cert_name),
+                    "",
+                )
+                if signature in seen:
+                    continue
+                seen.add(signature)
+                rows.append(
+                    {
+                        "id": f"E{next_id}",
+                        "employee_name": employee_name,
+                        "evidence_type": "certification",
+                        "entity": cert_name,
+                        "evidence_text": f"certification={cert_name}",
+                    }
+                )
+                next_id += 1
+
+        if len(rows) >= limit:
+            break
+
+    return rows[:limit]
+
+
 def _build_structured_facts(
     docs: list[LCDocument],
     focus_names: set[str] | None = None,
@@ -558,119 +724,6 @@ def _build_structured_facts(
             )
     payload["query_token_matches"] = token_matches
     return json.dumps(payload, ensure_ascii=False, indent=2)
-
-
-def _render_grounded_project_answer(grounded_selection: dict[str, object]) -> str | None:
-    raw_projects = grounded_selection.get("focus_projects")
-    if not isinstance(raw_projects, list) or not raw_projects:
-        return None
-
-    mode = str(grounded_selection.get("selection_mode") or "").strip().lower()
-    grouped: dict[str, list[dict[str, str]]] = defaultdict(list)
-    seen: set[tuple[str, str, str, str, str]] = set()
-
-    for item in raw_projects:
-        if not isinstance(item, dict):
-            continue
-        employee_name = str(item.get("employee_name") or "").strip()
-        project_name = str(item.get("project_name") or "").strip()
-        client_name = str(item.get("client_name") or "").strip()
-        project_year = str(item.get("project_year") or "").strip()
-        description = str(item.get("description") or "").strip()
-        if not employee_name:
-            continue
-
-        signature = (
-            _normalize_for_match(employee_name),
-            _normalize_for_match(project_name),
-            _normalize_for_match(client_name),
-            _normalize_for_match(project_year),
-            _normalize_for_match(description),
-        )
-        if signature in seen:
-            continue
-        seen.add(signature)
-
-        grouped[employee_name].append(
-            {
-                "project_name": project_name,
-                "client_name": client_name,
-                "project_year": project_year,
-                "description": description,
-            }
-        )
-
-    if not grouped:
-        return None
-
-    def _format_project_line(project: dict[str, str]) -> str:
-        project_name = project["project_name"] or "Unnamed project"
-        details: list[str] = []
-        if project["client_name"]:
-            details.append(f"Client: {project['client_name']}")
-        if project["project_year"]:
-            details.append(f"Year: {project['project_year']}")
-        if project["description"]:
-            details.append(f"Description: {project['description']}")
-        if details:
-            return f"- {project_name} ({'; '.join(details)})"
-        return f"- {project_name}"
-
-    if len(grouped) == 1:
-        employee_name = next(iter(grouped.keys()))
-        projects = grouped[employee_name]
-        header = (
-            f"{employee_name} has {len(projects)} project(s):"
-            if mode == "all_for_employee"
-            else f"{employee_name} has {len(projects)} matching project(s):"
-        )
-        lines = [header]
-        lines.extend(_format_project_line(project) for project in projects)
-        return "\n".join(lines)
-
-    lines = ["Matching projects were found for these employees:"]
-    for employee_name in sorted(grouped.keys(), key=_normalize_for_match):
-        lines.append(f"{employee_name}:")
-        for project in grouped[employee_name]:
-            lines.append(_format_project_line(project))
-    return "\n".join(lines)
-
-
-def _render_grounded_cert_answer(grounded_selection: dict[str, object]) -> str | None:
-    raw_rows = grounded_selection.get("focus_certifications")
-    if not isinstance(raw_rows, list) or not raw_rows:
-        return None
-
-    grouped: dict[str, list[str]] = defaultdict(list)
-    seen: set[tuple[str, str]] = set()
-    for item in raw_rows:
-        if not isinstance(item, dict):
-            continue
-        employee_name = str(item.get("employee_name") or "").strip()
-        cert_name = str(item.get("certification_name") or "").strip()
-        if not employee_name or not cert_name:
-            continue
-        signature = (_normalize_for_match(employee_name), _normalize_for_match(cert_name))
-        if signature in seen:
-            continue
-        seen.add(signature)
-        grouped[employee_name].append(cert_name)
-
-    if not grouped:
-        return None
-
-    if len(grouped) == 1:
-        employee_name = next(iter(grouped.keys()))
-        certs = grouped[employee_name]
-        lines = [f"{employee_name} has {len(certs)} matching certification(s):"]
-        lines.extend(f"- {cert}" for cert in certs)
-        return "\n".join(lines)
-
-    lines = ["Employees with matching certifications:"]
-    for employee_name in sorted(grouped.keys(), key=_normalize_for_match):
-        certs = grouped[employee_name]
-        lines.append(f"- {employee_name}: " + "; ".join(certs))
-    return "\n".join(lines)
 
 
 def build_chain():
@@ -981,16 +1034,36 @@ def build_chain():
 
     retriever = PostgresRetriever()
 
-    model_name = _resolve_llm_model()
-    print(f"[chat_agent] Using LLM: {model_name}")
+    def _doc_signature(doc: LCDocument) -> tuple[str, str, str, str]:
+        metadata = doc.metadata or {}
+        chunk_id = str(metadata.get("chunk_id") or "").strip()
+        chunk_type = str(metadata.get("chunk_type") or "").strip()
+        employee = str(metadata.get("name") or "").strip()
+        content_fingerprint = _normalize_for_match(doc.page_content[:220])
+        return (chunk_id, chunk_type, employee, content_fingerprint)
 
-    llm = ChatOllama(
-        model=model_name,
-        base_url=settings.OLLAMA_URL,
+    def _retrieve_union(queries: list[str]) -> list[LCDocument]:
+        seen: set[tuple[str, str, str, str]] = set()
+        merged: list[LCDocument] = []
+        for query in queries:
+            q = str(query or "").strip()
+            if not q:
+                continue
+            docs_for_query = retriever.invoke(q)
+            for doc in docs_for_query:
+                sig = _doc_signature(doc)
+                if sig in seen:
+                    continue
+                seen.add(sig)
+                merged.append(doc)
+        return merged
+
+    llm, model_name, provider = build_rag_chat_llm(
         temperature=0.0,
-        disable_streaming=True,
-        num_ctx=8192,
+        timeout=settings.RAG_CHAT_TIMEOUT_SECONDS,
     )
+    print(f"[chat_agent] Using chat provider: {provider}, model: {model_name}")
+    print("[chat_agent] Pipeline mode: llm-first")
 
     query_rewrite_prompt = ChatPromptTemplate.from_messages(
         [
@@ -999,18 +1072,21 @@ def build_chain():
                 """Rewrite the last user message as a standalone question.
 Resolve pronouns from chat history and replace them with exact employee names when clear.
 Preserve constraints (else, besides, counts, comparisons) and obvious typo normalization.
+If a person name looks misspelled, map it to the closest name in EmployeeNames only when clearly unambiguous.
 Return only the rewritten question.""",
             ),
             MessagesPlaceholder("chat_history"),
-            ("human", "{input}"),
+            ("human", "EmployeeNames:\n{employee_names}\n\nUserInput:\n{input}"),
         ]
     )
 
     def _rewrite_query(user_input: str, chat_history: list) -> str:
         try:
+            employee_names_blob = "\n".join(f"- {name}" for name in known_names) if known_names else "(none)"
             messages = query_rewrite_prompt.format_messages(
                 input=user_input,
                 chat_history=chat_history or [],
+                employee_names=employee_names_blob,
             )
             rewritten = llm.invoke(messages)
             candidate = str(getattr(rewritten, "content", "") or "").strip()
@@ -1018,122 +1094,144 @@ Return only the rewritten question.""",
         except Exception:
             return user_input
 
-    intent_prompt = ChatPromptTemplate.from_messages(
+    llm_first_query_planner_prompt = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
-                """Classify intent and return ONLY one token:
-PROJECT_DIRECT = asks who has/did a project for specific client/project.
-PROJECT_ALL = asks for full project list of one employee.
-CERT_DIRECT = asks who has/if someone has specific certification/vendor cert.
-GENERAL = anything else.
-Examples:
-- who did a project for kiabi -> PROJECT_DIRECT
-- give me all projects for anouar -> PROJECT_ALL
-- who has a barracuda cert -> CERT_DIRECT
-- who has most experience in security -> GENERAL""",
-            ),
-            (
-                "human",
-                "StandaloneQuery:\n{standalone_query}",
-            ),
-        ]
-    )
-
-    domain_experience_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """Does this query ask for ranking/comparing experience in a domain
-(most/least/best/worst, e.g., security experience)?
-Return ONLY YES or NO.
-Examples:
-- who has most experience in security -> YES
-- who has the least exprience in security -> YES
-- who has a barracuda cert -> NO""",
-            ),
-            (
-                "human",
-                "StandaloneQuery:\n{standalone_query}",
-            ),
-        ]
-    )
-
-    grounding_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """Pick project ids from ProjectCatalog that semantically match the query.
+                """You plan semantic retrieval queries for a RAG system.
 Return strict JSON only:
-{"resolved_query":"...","selection_mode":"none|direct_match|all_for_employee|mixed","selected_project_ids":["P1","P2"]}
+{"resolved_query":"...","retrieval_queries":["...","...","..."]}
 Rules:
-- Use only ids from catalog.
-- Keep entity matching strict (do not broaden "BH Bank" to other banks).
-- For non-project questions use mode=none and empty ids.
-- For direct match questions ("who had a project for X"), pick only exact X matches.
-Examples:
-Query: who had a project for bh bank?
-Catalog: P1 client=BH Bank, P2 client=NAIB Bank
-Output: {"resolved_query":"who had a project for bh bank?","selection_mode":"direct_match","selected_project_ids":["P1"]}""",
+- Include the resolved_query as the first retrieval query.
+- Add up to 2 additional semantically-equivalent queries to improve recall.
+- Preserve constraints (negations/exclusions, comparisons, "other than", etc.).
+- For category words, include lexical variants (singular/plural and common French/English variants when relevant).
+- If a name seems misspelled, align it to the closest EmployeeNames entry when unambiguous.
+- Keep all queries concise and specific; do not invent entities.""",
             ),
-            (
-                "human",
-                "StandaloneQuery:\n{standalone_query}\n\nProjectCatalog:\n{project_catalog}",
-            ),
+            MessagesPlaceholder("chat_history"),
+            ("human", "EmployeeNames:\n{employee_names}\n\nUserInput:\n{input}"),
         ]
     )
 
-    cert_grounding_prompt = ChatPromptTemplate.from_messages(
+    def _plan_llm_first_queries(user_input: str, chat_history: list) -> tuple[str, list[str]]:
+        fallback_query = _rewrite_query(user_input, chat_history)
+        fallback_queries = _dedupe_keep_order([fallback_query, user_input])
+        try:
+            employee_names_blob = "\n".join(f"- {name}" for name in known_names) if known_names else "(none)"
+            messages = llm_first_query_planner_prompt.format_messages(
+                input=user_input,
+                chat_history=chat_history or [],
+                employee_names=employee_names_blob,
+            )
+            raw = llm.invoke(messages)
+            obj = parse_json_object(str(getattr(raw, "content", "") or "").strip()) or {}
+
+            resolved_query = str(obj.get("resolved_query") or "").strip() or fallback_query
+            retrieval_raw = obj.get("retrieval_queries")
+            retrieval_queries: list[str] = []
+            if isinstance(retrieval_raw, list):
+                for item in retrieval_raw:
+                    q = str(item or "").strip()
+                    if q:
+                        retrieval_queries.append(q)
+
+            retrieval_queries = _dedupe_keep_order([resolved_query, *retrieval_queries, user_input])
+            if not retrieval_queries:
+                retrieval_queries = fallback_queries
+            return resolved_query, retrieval_queries[:3]
+        except Exception:
+            return fallback_query, fallback_queries[:3]
+
+    llm_first_evidence_selector_prompt = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
-                """Pick certification ids from CertCatalog that semantically match the query.
+                """Select explicit evidence rows that directly support answering the query.
 Return strict JSON only:
-{"resolved_query":"...","selection_mode":"none|direct_match|mixed","selected_cert_ids":["C1","C2"]}
+{"query_type":"category_filter|other","selected_evidence_ids":["E1","E2"],"notes":"..."}
 Rules:
-- Use only ids from catalog.
-- Keep entity matching strict (avoid broad vendor/category drift).
-- If not a certification match question, use mode=none and empty ids.""",
+- Use only ids from EvidenceCatalog.
+- Set query_type=category_filter when the user asks membership/filter/category/comparison across people
+  (examples: who has worked for banks, healthcare organizations, telecom, cybersecurity).
+- For category_filter, be conservative: select only rows with direct lexical evidence for the target category.
+- Do not infer category from unrelated organizations; if uncertain, select no rows.
+- For non-category queries, set query_type=other and selected_evidence_ids=[].""",
             ),
-            (
-                "human",
-                "StandaloneQuery:\n{standalone_query}\n\nCertCatalog:\n{cert_catalog}",
-            ),
+            ("human", "StandaloneQuery:\n{standalone_query}\n\nEvidenceCatalog:\n{evidence_catalog}"),
         ]
     )
 
-    direct_match_validation_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """Decide if one project record is a direct match for the query.
-Reply with ONLY YES or NO.
-YES only when query target entity and project/client refer to the same entity (allow minor typos).
-NO for related but different entities (example: BH Bank vs NAIB Bank).""",
-            ),
-            (
-                "human",
-                "Query:\n{query}\n\nProjectRecord:\nemployee={employee_name}\nproject={project_name}\nclient={client_name}\nyear={project_year}\ndescription={description}",
-            ),
-        ]
-    )
+    def _select_llm_first_evidence(standalone_query: str, docs: list[LCDocument]) -> dict[str, object]:
+        fallback = {
+            "query_type": "other",
+            "selected_rows": [],
+            "notes": "",
+        }
+        candidates = _build_evidence_rows(docs)
+        if not candidates:
+            return fallback
 
-    project_list_intent_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """Does the query ask for the full project list of one employee?
-Return exactly one line:
-NONE
-or
-ALL_PROJECTS|<exact employee name from EmployeeNames>""",
-            ),
-            (
-                "human",
-                "StandaloneQuery:\n{standalone_query}\n\nRecentChatHistory:\n{chat_history}\n\nEmployeeNames:\n{employee_names}",
-            ),
-        ]
-    )
+        catalog_lines: list[str] = []
+        for row in candidates:
+            text = str(row.get("evidence_text") or "")
+            if len(text) > 220:
+                text = f"{text[:220]}..."
+            catalog_lines.append(
+                " | ".join(
+                    [
+                        str(row.get("id") or ""),
+                        f"employee={row.get('employee_name') or ''}",
+                        f"type={row.get('evidence_type') or ''}",
+                        f"entity={row.get('entity') or ''}",
+                        f"text={text}",
+                    ]
+                )
+            )
+        evidence_catalog = "\n".join(catalog_lines)
+        id_to_row = {str(row.get("id") or ""): row for row in candidates}
+
+        try:
+            messages = llm_first_evidence_selector_prompt.format_messages(
+                standalone_query=standalone_query,
+                evidence_catalog=evidence_catalog,
+            )
+            raw = llm.invoke(messages)
+            obj = parse_json_object(str(getattr(raw, "content", "") or "").strip()) or {}
+            query_type = str(obj.get("query_type") or "other").strip().lower()
+            if query_type not in {"category_filter", "other"}:
+                query_type = "other"
+
+            selected_ids_raw = obj.get("selected_evidence_ids")
+            selected_ids: list[str] = []
+            if isinstance(selected_ids_raw, list):
+                for item in selected_ids_raw:
+                    row_id = str(item or "").strip().upper()
+                    if row_id in id_to_row:
+                        selected_ids.append(row_id)
+            selected_ids = _dedupe_keep_order(selected_ids)
+
+            selected_rows: list[dict[str, str]] = []
+            for row_id in selected_ids:
+                row = id_to_row.get(row_id)
+                if not row:
+                    continue
+                selected_rows.append(
+                    {
+                        "employee_name": str(row.get("employee_name") or "").strip(),
+                        "evidence_type": str(row.get("evidence_type") or "").strip(),
+                        "entity": str(row.get("entity") or "").strip(),
+                        "evidence_text": str(row.get("evidence_text") or "").strip(),
+                    }
+                )
+
+            return {
+                "query_type": query_type,
+                "selected_rows": selected_rows,
+                "notes": str(obj.get("notes") or "").strip(),
+            }
+        except Exception:
+            return fallback
 
     def _recent_history_blob(chat_history: list) -> str:
         lines: list[str] = []
@@ -1144,327 +1242,36 @@ ALL_PROJECTS|<exact employee name from EmployeeNames>""",
                 lines.append(f"{role}: {content}")
         return "\n".join(lines) if lines else "(none)"
 
-    def _infer_query_intent(standalone_query: str) -> str:
-        try:
-            messages = intent_prompt.format_messages(
-                standalone_query=standalone_query,
-            )
-            raw = llm.invoke(messages)
-            token = str(getattr(raw, "content", "") or "").strip().upper()
-            if "PROJECT_DIRECT" in token:
-                return "PROJECT_DIRECT"
-            if "PROJECT_ALL" in token:
-                return "PROJECT_ALL"
-            if "CERT_DIRECT" in token:
-                return "CERT_DIRECT"
-            return "GENERAL"
-        except Exception:
-            return "GENERAL"
-
-    def _is_domain_experience_ranking_query(standalone_query: str) -> bool:
-        try:
-            messages = domain_experience_prompt.format_messages(
-                standalone_query=standalone_query,
-            )
-            raw = llm.invoke(messages)
-            token = str(getattr(raw, "content", "") or "").strip().upper()
-            return token.startswith("YES")
-        except Exception:
-            return False
-
-    def _is_direct_project_match(query: str, project: dict[str, str]) -> bool:
-        try:
-            messages = direct_match_validation_prompt.format_messages(
-                query=query,
-                employee_name=project.get("employee_name", ""),
-                project_name=project.get("project_name", ""),
-                client_name=project.get("client_name", ""),
-                project_year=project.get("project_year", ""),
-                description=project.get("description", ""),
-            )
-            verdict = llm.invoke(messages)
-            verdict_text = str(getattr(verdict, "content", "") or "").strip().upper()
-            return verdict_text.startswith("YES")
-        except Exception:
-            return False
-
-    def _infer_all_projects_employee(standalone_query: str, structured_facts: str, chat_history: list) -> str:
-        facts_obj = _parse_json_object(structured_facts) or {}
-        employee_rows = facts_obj.get("employees")
-        if not isinstance(employee_rows, list):
-            return ""
-
-        employee_names: list[str] = []
-        for row in employee_rows:
-            if not isinstance(row, dict):
-                continue
-            name = str(row.get("name") or "").strip()
-            if name:
-                employee_names.append(name)
-        employee_names = _dedupe_keep_order(employee_names)
-        if not employee_names:
-            return ""
-
-        history_blob = _recent_history_blob(chat_history)
-
-        try:
-            messages = project_list_intent_prompt.format_messages(
-                standalone_query=standalone_query,
-                chat_history=history_blob,
-                employee_names="\n".join(f"- {name}" for name in employee_names),
-            )
-            decision = llm.invoke(messages)
-            decision_text = str(getattr(decision, "content", "") or "").strip()
-            normalized = decision_text.replace("\r", "").replace("\n", " ").strip()
-            if not normalized.upper().startswith("ALL_PROJECTS|"):
-                return ""
-            employee_name_raw = normalized.split("|", 1)[1].strip()
-            if not employee_name_raw:
-                return ""
-            for name in employee_names:
-                if _normalize_for_match(name) == _normalize_for_match(employee_name_raw):
-                    return name
-            return ""
-        except Exception:
-            return ""
-
-    def _ground_query_to_facts(standalone_query: str, docs: list[LCDocument]) -> dict[str, object]:
-        fallback: dict[str, object] = {
-            "resolved_query": standalone_query,
-            "selection_mode": "none",
-            "focus_employees": [],
-            "focus_projects": [],
-        }
-        candidates: list[dict[str, str]] = []
-        next_id = 1
-        for doc in docs:
-            employee_name, projects = _extract_project_entries_from_doc(doc)
-            if not employee_name or not projects:
-                continue
-            for project in projects:
-                if not isinstance(project, dict):
-                    continue
-                project_name = str(project.get("project_name") or "").strip()
-                client_name = str(project.get("client_name") or "").strip()
-                project_year = str(project.get("project_year") or "").strip()
-                description = str(project.get("description") or "").strip()
-                if not project_name and not client_name and not description:
-                    continue
-                candidates.append(
-                    {
-                        "id": f"P{next_id}",
-                        "employee_name": employee_name,
-                        "project_name": project_name,
-                        "client_name": client_name,
-                        "project_year": project_year,
-                        "description": description,
-                    }
-                )
-                next_id += 1
-        if not candidates:
-            return fallback
-
-        # Keep the selector focused using retrieval-ordered candidates only.
-        top_candidates = candidates[:20] if len(candidates) > 20 else candidates
-
-        catalog_lines: list[str] = []
-        for item in top_candidates:
-            desc = item["description"]
-            if len(desc) > 140:
-                desc = f"{desc[:140]}..."
-            catalog_lines.append(
-                " | ".join(
-                    [
-                        item["id"],
-                        f"employee={item['employee_name']}",
-                        f"project={item['project_name']}",
-                        f"client={item['client_name']}",
-                        f"year={item['project_year']}",
-                        f"description={desc}",
-                    ]
-                )
-            )
-        project_catalog = "\n".join(catalog_lines)
-        id_to_candidate = {item["id"]: item for item in top_candidates}
-
-        try:
-            messages = grounding_prompt.format_messages(
-                standalone_query=standalone_query,
-                project_catalog=project_catalog,
-            )
-            grounded = llm.invoke(messages)
-            grounded_text = str(getattr(grounded, "content", "") or "").strip()
-            grounded_obj = parse_json_object(grounded_text)
-            if not grounded_obj:
-                return fallback
-
-            resolved_query = str(grounded_obj.get("resolved_query") or standalone_query).strip() or standalone_query
-            selection_mode = str(grounded_obj.get("selection_mode") or "none").strip().lower()
-            if selection_mode not in {"none", "direct_match", "all_for_employee", "mixed"}:
-                selection_mode = "none"
-            selected_ids_raw = grounded_obj.get("selected_project_ids")
-            selected_ids: list[str] = []
-            if isinstance(selected_ids_raw, list):
-                for item in selected_ids_raw:
-                    candidate_id = str(item or "").strip().upper()
-                    if candidate_id.startswith("P") and candidate_id in id_to_candidate:
-                        selected_ids.append(candidate_id)
-            selected_ids = _dedupe_keep_order(selected_ids)
-
-            sanitized_projects: list[dict[str, str]] = []
-            for candidate_id in selected_ids:
-                candidate = id_to_candidate.get(candidate_id)
-                if not candidate:
-                    continue
-                sanitized_projects.append(
-                    {
-                        "employee_name": candidate["employee_name"],
-                        "project_name": candidate["project_name"],
-                        "client_name": candidate["client_name"],
-                        "project_year": candidate["project_year"],
-                        "description": candidate["description"],
-                    }
-                )
-            if selection_mode == "direct_match" and sanitized_projects:
-                sanitized_projects = [
-                    project
-                    for project in sanitized_projects
-                    if _is_direct_project_match(resolved_query, project)
-                ]
-            focus_employees = _dedupe_keep_order(
-                [item["employee_name"] for item in sanitized_projects if item.get("employee_name")]
-            )
-            if sanitized_projects and selection_mode == "none":
-                selection_mode = "mixed"
-
-            return {
-                "resolved_query": resolved_query,
-                "selection_mode": selection_mode,
-                "focus_employees": focus_employees,
-                "focus_projects": sanitized_projects,
-            }
-        except Exception:
-            return fallback
-
-    def _ground_cert_query_to_facts(standalone_query: str, docs: list[LCDocument]) -> dict[str, object]:
-        fallback: dict[str, object] = {
-            "resolved_query": standalone_query,
-            "selection_mode": "none",
-            "focus_employees": [],
-            "focus_certifications": [],
-        }
-
-        candidates: list[dict[str, str]] = []
-        next_id = 1
-        seen: set[tuple[str, str]] = set()
-        for doc in docs:
-            employee_name, certs = _extract_certifications_from_doc(doc)
-            if not employee_name or not certs:
-                continue
-            for cert_name in certs:
-                cert_clean = str(cert_name or "").strip()
-                if not cert_clean:
-                    continue
-                signature = (_normalize_for_match(employee_name), _normalize_for_match(cert_clean))
-                if signature in seen:
-                    continue
-                seen.add(signature)
-                candidates.append(
-                    {
-                        "id": f"C{next_id}",
-                        "employee_name": employee_name,
-                        "certification_name": cert_clean,
-                    }
-                )
-                next_id += 1
-        if not candidates:
-            return fallback
-
-        top_candidates = candidates[:24] if len(candidates) > 24 else candidates
-        catalog_lines = [
-            f"{item['id']} | employee={item['employee_name']} | cert={item['certification_name']}"
-            for item in top_candidates
-        ]
-        cert_catalog = "\n".join(catalog_lines)
-        id_to_candidate = {item["id"]: item for item in top_candidates}
-
-        try:
-            messages = cert_grounding_prompt.format_messages(
-                standalone_query=standalone_query,
-                cert_catalog=cert_catalog,
-            )
-            grounded = llm.invoke(messages)
-            grounded_text = str(getattr(grounded, "content", "") or "").strip()
-            grounded_obj = parse_json_object(grounded_text)
-            if not grounded_obj:
-                return fallback
-
-            resolved_query = str(grounded_obj.get("resolved_query") or standalone_query).strip() or standalone_query
-            selection_mode = str(grounded_obj.get("selection_mode") or "none").strip().lower()
-            if selection_mode not in {"none", "direct_match", "mixed"}:
-                selection_mode = "none"
-
-            selected_ids_raw = grounded_obj.get("selected_cert_ids")
-            selected_ids: list[str] = []
-            if isinstance(selected_ids_raw, list):
-                for item in selected_ids_raw:
-                    candidate_id = str(item or "").strip().upper()
-                    if candidate_id.startswith("C") and candidate_id in id_to_candidate:
-                        selected_ids.append(candidate_id)
-            selected_ids = _dedupe_keep_order(selected_ids)
-
-            selected_rows: list[dict[str, str]] = []
-            for candidate_id in selected_ids:
-                candidate = id_to_candidate.get(candidate_id)
-                if not candidate:
-                    continue
-                selected_rows.append(
-                    {
-                        "employee_name": candidate["employee_name"],
-                        "certification_name": candidate["certification_name"],
-                    }
-                )
-
-            focus_employees = _dedupe_keep_order(
-                [item["employee_name"] for item in selected_rows if item.get("employee_name")]
-            )
-            if selected_rows and selection_mode == "none":
-                selection_mode = "mixed"
-
-            return {
-                "resolved_query": resolved_query,
-                "selection_mode": selection_mode,
-                "focus_employees": focus_employees,
-                "focus_certifications": selected_rows,
-            }
-        except Exception:
-            return fallback
-
-    qa_prompt = ChatPromptTemplate.from_messages(
+    qa_prompt_llm_first = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
                 """You are a Bid Manager assistant.
-Use only StructuredFacts, GroundedSelection, and Context.
-Rules:
-1) No invention. If missing, reply exactly: "I don't have that information."
-2) Keep employee-project attribution exact.
-3) Prefer GroundedSelection for noisy/semantic matching.
-4) If GroundedSelection.focus_projects has rows, answer from those rows.
-5) If user asks for one employee's projects, list explicit project rows (not only a count).
-6) If Context has [DISAMBIGUATION REQUIRED], ask for clarification.
-7) Keep answer concise and factual.
-8) For most/least experience in a domain (example: security), if domain-specific experience is not explicit, reply exactly: "I don't have that information."
-9) For degree questions, use StructuredFacts.employees[].education only; do not infer missing education.
+Use StructuredFacts as your primary source of truth and Context as supporting evidence.
+Reasoning guidelines:
+1) Keep answers grounded only in provided facts; never invent details.
+2) For category/list/filter/comparison questions, evaluate all employees in StructuredFacts before answering.
+3) Respect query constraints exactly (for example "other than X", "least", "same", "all", "except").
+4) Resolve minor spelling mistakes in names using StructuredFacts employee names when unambiguous.
+5) Stay consistent with RecentChatHistory unless newly retrieved facts clearly change the answer.
+6) If information is missing or ambiguous, reply exactly: "I don't have that information."
+7) Keep answers concise and factual.
+8) If GroundedEvidence.query_type is "category_filter":
+   - Use only GroundedEvidence.selected_rows to determine membership.
+   - Do not add entities or employees that are not present in selected_rows.
+   - If selected_rows is empty, reply exactly: "I don't have that information."
+
+RecentChatHistory:
+{recent_chat_history}
 
 StandaloneQuery:
 {standalone_query}
 
+GroundedEvidence:
+{grounded_evidence}
+
 StructuredFacts:
 {structured_facts}
-
-GroundedSelection:
-{grounded_selection}
 
 Context:
 {context}""",
@@ -1472,131 +1279,60 @@ Context:
             ("human", "{input}"),
         ]
     )
-    document_prompt = PromptTemplate.from_template(
-        "[chunk_type={chunk_type} | employee={name} | chunk_id={chunk_id}]\n{page_content}"
-    )
-    qa_chain = create_stuff_documents_chain(
+
+    qa_chain_llm_first = create_stuff_documents_chain(
         llm=llm,
-        prompt=qa_prompt,
-        document_prompt=document_prompt,
+        prompt=qa_prompt_llm_first,
+        document_prompt=PromptTemplate.from_template(
+            "[chunk_type={chunk_type} | employee={name} | chunk_id={chunk_id}]\n{page_content}"
+        ),
         document_separator="\n\n---\n\n",
     )
+
+    def _safe_chain_invoke(chain_obj, payload: dict[str, object]) -> str:
+        try:
+            return chain_obj.invoke(payload)
+        except Exception as exc:
+            err = str(exc or "")
+            err_norm = _normalize_for_match(err)
+            if "error code 402" in err_norm or "depleted your monthly included credits" in err_norm:
+                return (
+                    "LLM provider credits are exhausted. "
+                    "Set RAG_CHAT_PROVIDER=ollama for local mode or add Hugging Face credits."
+                )
+            if "timeout" in err_norm:
+                return "The language model request timed out. Please try again."
+            raise
 
     def _invoke(inputs: dict) -> dict:
         user_input = str(inputs.get("input") or "").strip()
         chat_history = inputs.get("chat_history", []) or []
 
-        user_input_norm = _normalize_for_match(user_input)
-        explicit_names = _extract_names_mentioned(user_input_norm, known_names)
-        should_rewrite = _needs_reference_resolution(user_input_norm)
-        if explicit_names or not should_rewrite:
-            standalone_query = user_input
-        else:
-            standalone_query = _rewrite_query(user_input, chat_history)
-        if _is_domain_experience_ranking_query(standalone_query):
+        standalone_query, retrieval_queries = _plan_llm_first_queries(user_input, chat_history)
+        docs = _retrieve_union(retrieval_queries)
+        if not docs:
+            docs = retriever.invoke(standalone_query)
+        structured_facts = _build_structured_facts(docs, query_text=standalone_query)
+        grounded_evidence_obj = _select_llm_first_evidence(standalone_query, docs)
+        if (
+            str(grounded_evidence_obj.get("query_type") or "").strip().lower() == "category_filter"
+            and not grounded_evidence_obj.get("selected_rows")
+        ):
             return {
                 "answer": "I don't have that information.",
-                "context": [],
+                "context": docs,
             }
-        query_intent = _infer_query_intent(standalone_query)
-        docs = retriever.invoke(standalone_query)
-        structured_facts = _build_structured_facts(docs, query_text=standalone_query)
-        grounded_selection_obj: dict[str, object] = {
-            "resolved_query": standalone_query,
-            "selection_mode": "none",
-            "focus_employees": [],
-            "focus_projects": [],
-        }
-
-        if query_intent in {"PROJECT_DIRECT", "PROJECT_ALL"}:
-            grounded_selection_obj = _ground_query_to_facts(standalone_query, docs)
-            resolved_query = str(grounded_selection_obj.get("resolved_query") or "").strip()
-            if resolved_query and _normalize_for_match(resolved_query) != _normalize_for_match(standalone_query):
-                standalone_query = resolved_query
-                docs = retriever.invoke(standalone_query)
-                structured_facts = _build_structured_facts(docs, query_text=standalone_query)
-                grounded_selection_obj = _ground_query_to_facts(standalone_query, docs)
-
-            if (
-                query_intent == "PROJECT_ALL"
-                and not grounded_selection_obj.get("focus_projects")
-                and str(grounded_selection_obj.get("selection_mode") or "").strip().lower() == "none"
-            ):
-                employee_for_all_projects = _infer_all_projects_employee(standalone_query, structured_facts, chat_history)
-                if employee_for_all_projects:
-                    grounded_selection_obj = {
-                        "resolved_query": standalone_query,
-                        "selection_mode": "all_for_employee",
-                        "focus_employees": [employee_for_all_projects],
-                        "focus_projects": [],
-                    }
-            if str(grounded_selection_obj.get("selection_mode") or "").strip().lower() == "all_for_employee":
-                facts_obj = _parse_json_object(structured_facts) or {}
-                employee_rows = facts_obj.get("employees")
-                focus_names_raw = grounded_selection_obj.get("focus_employees") or []
-                focus_names = {
-                    _normalize_for_match(str(name))
-                    for name in focus_names_raw
-                    if str(name or "").strip()
-                }
-                expanded_projects: list[dict[str, str]] = []
-                if isinstance(employee_rows, list) and focus_names:
-                    for row in employee_rows:
-                        if not isinstance(row, dict):
-                            continue
-                        employee_name = str(row.get("name") or "").strip()
-                        if not employee_name or _normalize_for_match(employee_name) not in focus_names:
-                            continue
-                        projects = row.get("projects")
-                        if not isinstance(projects, list):
-                            continue
-                        for project in projects:
-                            if not isinstance(project, dict):
-                                continue
-                            expanded_projects.append(
-                                {
-                                    "employee_name": employee_name,
-                                    "project_name": str(project.get("project_name") or "").strip(),
-                                    "client_name": str(project.get("client_name") or "").strip(),
-                                    "project_year": str(project.get("project_year") or "").strip(),
-                                    "description": str(project.get("description") or "").strip(),
-                                }
-                            )
-                if expanded_projects:
-                    grounded_selection_obj["focus_projects"] = expanded_projects
-
-            grounded_project_answer = _render_grounded_project_answer(grounded_selection_obj)
-            if grounded_project_answer:
-                return {
-                    "answer": grounded_project_answer,
-                    "context": docs,
-                }
-
-        elif query_intent == "CERT_DIRECT":
-            cert_selection_obj = _ground_cert_query_to_facts(standalone_query, docs)
-            resolved_query = str(cert_selection_obj.get("resolved_query") or "").strip()
-            if resolved_query and _normalize_for_match(resolved_query) != _normalize_for_match(standalone_query):
-                standalone_query = resolved_query
-                docs = retriever.invoke(standalone_query)
-                structured_facts = _build_structured_facts(docs, query_text=standalone_query)
-                cert_selection_obj = _ground_cert_query_to_facts(standalone_query, docs)
-            grounded_cert_answer = _render_grounded_cert_answer(cert_selection_obj)
-            if grounded_cert_answer:
-                return {
-                    "answer": grounded_cert_answer,
-                    "context": docs,
-                }
-            grounded_selection_obj = cert_selection_obj
-
-        grounded_selection = json.dumps(grounded_selection_obj, ensure_ascii=False, indent=2)
-        answer = qa_chain.invoke(
+        recent_history_blob = _recent_history_blob(chat_history)
+        answer = _safe_chain_invoke(
+            qa_chain_llm_first,
             {
                 "input": user_input,
                 "standalone_query": standalone_query,
                 "context": docs,
                 "structured_facts": structured_facts,
-                "grounded_selection": grounded_selection,
-            }
+                "recent_chat_history": recent_history_blob,
+                "grounded_evidence": json.dumps(grounded_evidence_obj, ensure_ascii=False, indent=2),
+            },
         )
         return {
             "answer": answer,
@@ -1638,10 +1374,22 @@ def chat_loop():
 
         t0 = time.time()
         print("...retrieving + generating (please wait)", flush=True)
-        result = chain.invoke(
-            {"input": user_input},
-            config={"configurable": {"session_id": session_id}},
-        )
+        try:
+            result = chain.invoke(
+                {"input": user_input},
+                config={"configurable": {"session_id": session_id}},
+            )
+        except Exception as exc:
+            err = str(exc or "")
+            err_norm = _normalize_for_match(err)
+            if "error code 402" in err_norm or "depleted your monthly included credits" in err_norm:
+                print(
+                    "Bid Manager: LLM provider credits are exhausted. "
+                    "Set RAG_CHAT_PROVIDER=ollama for local mode or add Hugging Face credits.\n"
+                )
+                continue
+            print(f"Bid Manager: Request failed ({err}).\n")
+            continue
         dt = time.time() - t0
         answer = result.get("answer", "")
         print(f"Bid Manager: {answer}\n(took {dt:.1f}s)\n")

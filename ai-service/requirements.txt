@@ -22,6 +22,8 @@ psycopg[binary]
 pgvector
 langchain
 langchain-ollama
+langchain-openai
 langchain-core
 langchain-community
 langchain-classic
+openai
