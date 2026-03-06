@@ -200,7 +200,7 @@ At this point, the RAG data layer is ready for retrieval/query implementation.
 ## 6) Chat Agent (Bid Manager) – What Was Added
 - File: `ai-service/app/rag/chat_agent.py`
 - Persona: “The Bid Manager” (staffing expert) with conversational memory.
-- Retrieval: **Qdrant** vector store (local, persisted at `./qdrant_local`). Uses `langchain_qdrant` + `qdrant-client`, retrieving top-3 documents to keep the 1.5B model focused.
+- Retrieval: **PostgreSQL pgvector** (`employee_rag_vectors` table). Uses `langchain-postgres` with cosine-distance similarity search, retrieving top-5 documents.
 - Reasoning chain:
   - `create_history_aware_retriever` to rewrite follow-up questions using chat history.
   - `create_stuff_documents_chain` with a strict system prompt: if context is missing or lacks the answer, respond exactly “I don’t know”; otherwise reply with short bullet points using only context.
@@ -234,15 +234,15 @@ Run from repo root unless stated.
 
 Expected: Startup is instant (no vector rebuild). Answers cite skills/certs/projects from stored golden records; follow-ups resolve pronouns using conversation history.
 
-## 8) ETL changes for Qdrant
+## 8) ETL changes for pgvector
 - File: `ai-service/app/rag/etl_ingest.py`
-- Now writes embeddings to Qdrant (local path `./qdrant_local`, collection `employees`) via `qdrant-client` + `langchain_qdrant`.
-- Recreates the collection with cosine distance and the configured embedding dimension, then bulk-adds documents built from metadata/golden records.
+- Writes embeddings to PostgreSQL `employee_rag_vectors` table via `pgvector` + SQLAlchemy.
+- Deletes existing rows for a user then bulk-inserts new chunk vectors (cosine distance) built from metadata/golden records.
 
 ## 9) Dependency notes
 Install (aligned versions):
 ```powershell
-pip install qdrant-client langchain-qdrant langchain-ollama langchain langchain-core langchain-community langchain-text-splitters
+pip install pgvector psycopg2-binary sqlalchemy langchain-postgres langchain-ollama langchain langchain-core langchain-community langchain-text-splitters
 ```
 Keep all LangChain packages on matching 0.3.x versions to avoid resolver conflicts.
 ## 10) Dockerized Workflow (Recommended)

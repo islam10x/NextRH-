@@ -9,7 +9,11 @@ import {
     Query,
     Param,
     Delete,
+    Res,
+    Req,
+    UnauthorizedException,
 } from '@nestjs/common';
+import { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { InvitationsService } from './invitations.service';
 import { LoginDto } from './dto/login.dto';
@@ -19,6 +23,15 @@ import { RolesGuard } from './guards/roles.guard';
 import { Roles } from './decorators/roles.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { UserRole } from '../users/entities/user.entity';
+
+const REFRESH_COOKIE = 'refresh_token';
+const COOKIE_OPTIONS = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax' as const,
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in ms
+    path: '/',
+};
 
 @Controller('auth')
 export class AuthController {
@@ -55,20 +68,33 @@ export class AuthController {
 
     @Post('login')
     @HttpCode(HttpStatus.OK)
-    async login(@Body() loginDto: LoginDto) {
-        return this.authService.login(loginDto);
+    async login(@Body() loginDto: LoginDto, @Res({ passthrough: true }) res: Response) {
+        const { accessToken, refreshToken, user } = await this.authService.login(loginDto);
+        res.cookie(REFRESH_COOKIE, refreshToken, COOKIE_OPTIONS);
+        return { access_token: accessToken, user };
     }
 
     @Post('refresh')
     @HttpCode(HttpStatus.OK)
-    async refresh(@Body('refresh_token') refreshToken: string) {
-        return this.authService.refreshToken(refreshToken);
+    async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+        const token: string | undefined = req.cookies?.[REFRESH_COOKIE];
+        if (!token) {
+            throw new UnauthorizedException('No refresh token provided');
+        }
+        const result = await this.authService.refreshToken(token);
+        const newRefresh: string | undefined = (result as any)._refreshToken;
+        if (newRefresh) {
+            res.cookie(REFRESH_COOKIE, newRefresh, COOKIE_OPTIONS);
+        }
+        const { _refreshToken: _removed, ...response } = result as any;
+        return response;
     }
 
     @Post('logout')
     @UseGuards(JwtAuthGuard)
     @HttpCode(HttpStatus.OK)
-    async logout(@CurrentUser() user: any) {
+    async logout(@CurrentUser() user: any, @Res({ passthrough: true }) res: Response) {
+        res.clearCookie(REFRESH_COOKIE, { path: '/' });
         return this.authService.logout(user);
     }
 

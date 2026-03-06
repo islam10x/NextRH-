@@ -5,6 +5,8 @@ const api = axios.create({
     headers: {
         'Content-Type': 'application/json',
     },
+    // Required so the browser sends the HTTPOnly refresh_token cookie automatically
+    withCredentials: true,
 });
 
 // Request Interceptor: Attach Token
@@ -64,25 +66,18 @@ api.interceptors.response.use(
             originalRequest._retry = true;
             isRefreshing = true;
 
-            const refreshToken = sessionStorage.getItem('refresh_token');
-
-            if (!refreshToken) {
-                window.dispatchEvent(new Event('auth:logout'));
-                return Promise.reject(error);
-            }
-
             try {
-                // Use a fresh axios instance to avoid interceptor loop
-                const response = await axios.post(`${api.defaults.baseURL}/auth/refresh`, {
-                    refresh_token: refreshToken,
-                });
+                // Use a fresh axios instance to avoid interceptor loop.
+                // The HTTPOnly cookie is sent automatically (withCredentials).
+                const response = await axios.post(
+                    `${api.defaults.baseURL}/auth/refresh`,
+                    {},
+                    { withCredentials: true },
+                );
 
-                const { access_token, refresh_token: newRefreshToken } = response.data;
+                const { access_token } = response.data;
 
                 sessionStorage.setItem('access_token', access_token);
-                if (newRefreshToken) {
-                    sessionStorage.setItem('refresh_token', newRefreshToken);
-                }
 
                 // Update defaults for future requests
                 api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
