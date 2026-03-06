@@ -266,7 +266,10 @@ export class FileStorageService {
         this.logger.log(`Updated metadata experience_years to ${metadata.experience_years} for user ${userId}`);
     }
 
-    async addCertificationToMetadata(userId: string, certData: { name: string; issuer?: string; expiration?: string }) {
+    async addCertificationToMetadata(
+        userId: string,
+        certData: { name: string; issuer?: string; issue_date?: string; date_obtained?: string; expiration?: string }
+    ) {
         const baseDir = await this.findBaseDirByOwner(userId);
         if (!baseDir) {
             this.logger.warn(`No base directory found for user ${userId}, cannot update metadata`);
@@ -297,13 +300,36 @@ export class FileStorageService {
                 metadata.certifications = [];
             }
 
-            // Add new certification (check for duplicates)
-            const isDuplicate = metadata.certifications.some(
-                (cert: any) => cert.name === certData.name || cert === certData.name
-            );
+            // Normalize existing entries to objects { name, issuer?, issue_date?, expiration? }
+            metadata.certifications = metadata.certifications.map((cert: any) => {
+                if (typeof cert === 'string') {
+                    return { name: cert };
+                }
+                return cert;
+            });
 
-            if (!isDuplicate) {
-                metadata.certifications.push(certData.name);
+            const certNameKey = (certData.name || '').trim().toLowerCase();
+            const existingIndex = metadata.certifications.findIndex((cert: any) => {
+                const existingName = typeof cert === 'string' ? cert : cert?.name;
+                return String(existingName || '').trim().toLowerCase() === certNameKey;
+            });
+
+            const certificationPayload = {
+                name: certData.name,
+                issuer: certData.issuer,
+                issue_date: certData.issue_date,
+                date_obtained: certData.date_obtained ?? certData.issue_date,
+                expiration: certData.expiration,
+            };
+
+            if (existingIndex >= 0) {
+                const current = metadata.certifications[existingIndex] || {};
+                metadata.certifications[existingIndex] = {
+                    ...current,
+                    ...certificationPayload,
+                };
+            } else {
+                metadata.certifications.push(certificationPayload);
             }
 
             // Update timestamp
@@ -311,7 +337,7 @@ export class FileStorageService {
 
             // Write back to file
             await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
-            this.logger.log(`Updated metadata with certification: ${certData.name}`);
+            this.logger.log(`Updated metadata with certification payload: ${JSON.stringify(certificationPayload)}`);
 
         } catch (error) {
             this.logger.error(`Error updating metadata with certification: ${error.message}`);

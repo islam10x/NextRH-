@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import api from '@/services/api';
 import { ParsedCertificationMetadata, ParsedEmployeeMetadata } from '@/types';
 import axios from 'axios';
+import { toast } from 'sonner';
 import { Award, Plus, Upload, Search, Calendar, Loader2 } from 'lucide-react';
 import {
   Dialog,
@@ -19,6 +20,17 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
 const CertificationsPage: React.FC = () => {
+  const ALLOWED_TYPES = useMemo(
+    () => [
+      'application/pdf',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'image/png',
+      'image/jpeg',
+    ],
+    []
+  );
+  const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB (align with backend)
+
   const [searchQuery, setSearchQuery] = useState('');
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -47,6 +59,19 @@ const CertificationsPage: React.FC = () => {
     loadMetadata();
   }, [loadMetadata]);
 
+  const validateFile = useCallback(
+    (file: File): string | null => {
+      if (!ALLOWED_TYPES.includes(file.type)) {
+        return 'File type not supported. Please upload PDF, DOCX, PNG or JPG.';
+      }
+      if (file.size > MAX_UPLOAD_BYTES) {
+        return 'File is too large. Maximum allowed size is 10MB.';
+      }
+      return null;
+    },
+    [ALLOWED_TYPES, MAX_UPLOAD_BYTES]
+  );
+
   const uploadCertificate = useCallback(
     async (file: File) => {
       setIsUploading(true);
@@ -67,9 +92,15 @@ const CertificationsPage: React.FC = () => {
         console.error('Certificate upload failed', err);
         if (axios.isAxiosError(err)) {
           const message = (err.response?.data as { message?: string } | undefined)?.message;
-          setUploadError(message || 'Upload failed. Please try again.');
+          const friendly =
+            message?.includes('malware') || message?.includes('virus')
+              ? 'Upload blocked: malware detected in the file.'
+              : message;
+          setUploadError(friendly || 'Upload failed. Please try again.');
+          toast.error(friendly || 'Upload failed. Please try again.');
         } else {
           setUploadError('Upload failed. Please try again.');
+          toast.error('Upload failed. Please try again.');
         }
       } finally {
         setIsUploading(false);
@@ -131,6 +162,12 @@ const CertificationsPage: React.FC = () => {
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (!file) return;
+                    const validationError = validateFile(file);
+                    if (validationError) {
+                      setUploadError(validationError);
+                      toast.error(validationError);
+                      return;
+                    }
                     uploadCertificate(file);
                   }}
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"

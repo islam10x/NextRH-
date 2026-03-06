@@ -10,9 +10,8 @@ export interface JwtPayload {
     role: string;
 }
 
-export interface AuthResponse {
+export interface AccessTokenResponse {
     access_token: string;
-    refresh_token: string;
     user: {
         id: string;
         email: string;
@@ -22,6 +21,9 @@ export interface AuthResponse {
     };
 }
 
+/** @deprecated use AccessTokenResponse — kept for internal use only */
+export type AuthResponse = AccessTokenResponse;
+
 @Injectable()
 export class AuthService {
     constructor(
@@ -29,7 +31,7 @@ export class AuthService {
         private readonly jwtService: JwtService,
     ) { }
 
-    async login(loginDto: LoginDto): Promise<AuthResponse> {
+    async login(loginDto: LoginDto): Promise<{ accessToken: string; refreshToken: string; user: AccessTokenResponse['user'] }> {
         const user = await this.validateUser(loginDto.email, loginDto.password);
 
         if (!user) {
@@ -40,9 +42,21 @@ export class AuthService {
             throw new UnauthorizedException('Account is inactive or pending invitation');
         }
 
-        const tokens = await this.generateTokens(user);
-        await this.usersService.setCurrentRefreshToken(tokens.refresh_token, user.user_id);
-        return tokens;
+        const accessToken = this.generateAccessToken(user);
+        const refreshToken = this.generateRefreshToken(user);
+        await this.usersService.setCurrentRefreshToken(refreshToken, user.user_id);
+
+        return {
+            accessToken,
+            refreshToken,
+            user: {
+                id: user.user_id,
+                email: user.email,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                role: user.role,
+            },
+        };
     }
 
     async validateUser(email: string, password: string): Promise<User | null> {
@@ -64,48 +78,52 @@ export class AuthService {
         return user;
     }
 
-    async generateTokens(user: User): Promise<AuthResponse> {
+    generateAccessToken(user: User): string {
         const payload: JwtPayload = {
             sub: user.user_id,
             email: user.email,
             role: user.role,
         };
-
-        const access_token = this.jwtService.sign(payload, {
-            expiresIn: '15m',
-        });
-
-        const refresh_token = this.jwtService.sign(payload, {
-            expiresIn: '7d',
-        });
-
-        return {
-            access_token,
-            refresh_token,
-            user: {
-                id: user.user_id,
-                email: user.email,
-                firstName: user.firstName,
-                lastName: user.lastName,
-                role: user.role,
-            },
-        };
+        return this.jwtService.sign(payload, { expiresIn: '15m' });
     }
 
-    async refreshToken(token: string): Promise<AuthResponse> {
+    generateRefreshToken(user: User): string {
+        const payload: JwtPayload = {
+            sub: user.user_id,
+            email: user.email,
+            role: user.role,
+        };
+        return this.jwtService.sign(payload, { expiresIn: '7d' });
+    }
+
+    async refreshToken(cookieToken: string): Promise<AccessTokenResponse> {
         try {
-            const payload = this.jwtService.verify(token);
-            const user = await this.usersService.getUserIfRefreshTokenMatches(token, payload.sub);
+            const payload = this.jwtService.verify(cookieToken);
+            const user = await this.usersService.getUserIfRefreshTokenMatches(cookieToken, payload.sub);
 
             if (!user || user.status !== UserStatus.ACTIVE) {
                 throw new UnauthorizedException('Account is inactive or pending invitation');
             }
 
-            const tokens = await this.generateTokens(user);
-            await this.usersService.setCurrentRefreshToken(tokens.refresh_token, user.user_id);
-            return tokens;
+            // Rotate: issue new refresh token and update DB
+            const newRefreshToken = this.generateRefreshToken(user);
+            await this.usersService.setCurrentRefreshToken(newRefreshToken, user.user_id);
+
+            return {
+                access_token: this.generateAccessToken(user),
+                // newRefreshToken is returned so the controller can set the cookie
+                // We store it on the object for the controller to read
+                ...(newRefreshToken && { _refreshToken: newRefreshToken } as any),
+                user: {
+                    id: user.user_id,
+                    email: user.email,
+                    firstName: user.firstName,
+                    lastName: user.lastName,
+                    role: user.role,
+                },
+            };
         } catch (error) {
-            throw new UnauthorizedException('Invalid token');
+            throw new UnauthorizedException('Invalid or expired refresh token');
         }
     }
 

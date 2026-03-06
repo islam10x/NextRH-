@@ -44,6 +44,10 @@ Thumbs.db
 # Logs
 logs/
 *.log
+
+# Diagrams
+Docs/UseCaseDiagrams.puml
+Docs/SequenceDiagrams.puml
 # Local Vector DB
 qdrant_local/
 ai-service/qdrant_local/

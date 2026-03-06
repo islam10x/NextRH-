@@ -87,4 +87,47 @@ export class MailService {
             throw error;
         }
     }
+
+    async sendTrainingAssignedEmail(params: {
+        to: string;
+        trainingTitle: string;
+        trainingUrl?: string | null;
+        dueDate?: string | null;
+        managerName?: string | null;
+        managerEmail?: string | null;
+    }) {
+        const systemFrom =
+            this.configService.get<string>('MAIL_FROM_ADDRESS') ||
+            this.configService.get<string>('SMTP_FROM');
+        const fromDisplayName = params.managerName ? `${params.managerName} via CV Manager` : 'CV Manager';
+
+        const frontend = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173';
+        const ctaUrl = params.trainingUrl || frontend + '/employee/training-projects';
+        const dueLine = params.dueDate ? `<p style="margin: 6px 0;">Due date: <strong>${params.dueDate}</strong></p>` : '';
+
+        const mailOptions = {
+            from: `"${fromDisplayName}" <${systemFrom}>`,
+            to: params.to,
+            replyTo: params.managerEmail ?? undefined,
+            subject: `New training assigned: ${params.trainingTitle}`,
+            html: `
+                <div style="font-family: Arial, sans-serif; max-width: 640px; margin: auto; padding: 20px; border: 1px solid #eaeaea; border-radius: 10px;">
+                    <h2 style="color: #3b82f6; margin-bottom: 12px;">You have a new training</h2>
+                    <p style="margin: 6px 0;">Title: <strong>${params.trainingTitle}</strong></p>
+                    ${dueLine}
+                    <p style="margin: 6px 0;">Assigned by: ${params.managerName || 'Your manager'}</p>
+                    <div style="text-align: center; margin: 22px 0;">
+                        <a href="${ctaUrl}" style="background-color: #3b82f6; color: white; padding: 12px 22px; text-decoration: none; border-radius: 6px; font-weight: 600;">Open training</a>
+                    </div>
+                    <p style="color: #666; font-size: 0.9em;">You can also view all trainings from your dashboard.</p>
+                </div>
+            `,
+        };
+
+        try {
+            await this.transporter.sendMail(mailOptions);
+        } catch (error) {
+            console.error('Error sending training assignment email:', error);
+        }
+    }
 }

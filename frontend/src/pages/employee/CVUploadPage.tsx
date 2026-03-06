@@ -9,12 +9,22 @@ import api from '@/services/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { ParsedEmployeeMetadata } from '@/types';
 import axios from 'axios';
+import { toast } from 'sonner';
 
 interface UploadedFileInfo {
   name: string;
   size: number;
   type: string;
 }
+
+const ALLOWED_TYPES = [
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'image/png',
+  'image/jpeg',
+];
+
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB (keep in sync with backend)
 
 const CVUploadPage: React.FC = () => {
   const [dragActive, setDragActive] = useState(false);
@@ -38,6 +48,16 @@ const CVUploadPage: React.FC = () => {
   }, [loadMetadata]);
 
   const { updateUser } = useAuth();
+
+  const validateFile = useCallback((uploadedFile: File): string | null => {
+    if (!ALLOWED_TYPES.includes(uploadedFile.type)) {
+      return 'File type not supported. Please upload PDF, DOCX, PNG or JPG.';
+    }
+    if (uploadedFile.size > MAX_UPLOAD_BYTES) {
+      return 'File is too large. Maximum allowed size is 10MB.';
+    }
+    return null;
+  }, []);
 
   const uploadFile = useCallback(async (uploadedFile: File) => {
     setFile({
@@ -78,9 +98,15 @@ const CVUploadPage: React.FC = () => {
       setUploadStatus('error');
       if (axios.isAxiosError(err)) {
         const message = (err.response?.data as { message?: string } | undefined)?.message;
-        setError(message || 'Upload failed. Please try again.');
+        const friendly =
+          message?.includes('malware') || message?.includes('virus')
+            ? 'Upload blocked: malware detected in the file.'
+            : message;
+        setError(friendly || 'Upload failed. Please try again.');
+        toast.error(friendly || 'Upload failed. Please try again.');
       } else {
         setError('Upload failed. Please try again.');
+        toast.error('Upload failed. Please try again.');
       }
     }
   }, [loadMetadata]);
@@ -103,34 +129,32 @@ const CVUploadPage: React.FC = () => {
 
       if (e.dataTransfer.files && e.dataTransfer.files[0]) {
         const droppedFile = e.dataTransfer.files[0];
-        if (droppedFile.type === 'application/pdf' ||
-          droppedFile.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-          droppedFile.type === 'image/png' ||
-          droppedFile.type === 'image/jpeg') {
-          uploadFile(droppedFile);
-        } else {
-          setError('Please upload a PDF, DOCX, PNG or JPG file');
+        const validationError = validateFile(droppedFile);
+        if (validationError) {
+          setError(validationError);
+          toast.error(validationError);
+          return;
         }
+        uploadFile(droppedFile);
       }
     },
-    [uploadFile]
+    [uploadFile, validateFile]
   );
 
   const handleFileSelect = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.files && e.target.files[0]) {
         const selectedFile = e.target.files[0];
-        if (selectedFile.type === 'application/pdf' ||
-          selectedFile.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-          selectedFile.type === 'image/png' ||
-          selectedFile.type === 'image/jpeg') {
-          uploadFile(selectedFile);
-        } else {
-          setError('Please upload a PDF, DOCX, PNG or JPG file');
+        const validationError = validateFile(selectedFile);
+        if (validationError) {
+          setError(validationError);
+          toast.error(validationError);
+          return;
         }
+        uploadFile(selectedFile);
       }
     },
-    [uploadFile]
+    [uploadFile, validateFile]
   );
 
   const handleReset = () => {

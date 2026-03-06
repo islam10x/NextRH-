@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     EMBEDDING_DIM: int = 768
     # Ollama embedding model config used by RAG ingestion.
     OLLAMA_URL: str = "http://127.0.0.1:11434"
+    OLLAMA_ENABLED: bool = True
     EMBEDDING_MODEL: str = "nomic-embed-text"
     # RAG chat LLM config. Keep parsing on local Ollama unless you change parsing code explicitly.
     RAG_CHAT_PROVIDER: str = "ollama"  # ollama | huggingface
@@ -44,6 +45,13 @@ class Settings(BaseSettings):
     HF_API_KEY: str | None = None
     # Comma-separated candidate roots for employee metadata.json files.
     RAG_METADATA_ROOTS: str = "backend/local-storage,backend/file-storage/CV_Database"
+
+    @model_validator(mode="before")
+    def coerce_debug(cls, data):
+        val = data.get("DEBUG")
+        if isinstance(val, str):
+            data["DEBUG"] = val.lower() in ("1", "true", "yes", "on")
+        return data
 
     @model_validator(mode="after")
     def build_database_url(self) -> "Settings":

@@ -3,7 +3,7 @@ import { User, UserRole } from '@/types';
 
 export interface AuthResponse {
     access_token: string;
-    refresh_token: string;
+    // refresh_token is now stored in an HTTPOnly cookie — not accessible from JS
     user: {
         id: string;
         email: string;
@@ -24,7 +24,6 @@ export const authService = {
             await api.post('/auth/logout');
         } finally {
             sessionStorage.removeItem('access_token');
-            sessionStorage.removeItem('refresh_token');
             sessionStorage.removeItem('user');
         }
     },
