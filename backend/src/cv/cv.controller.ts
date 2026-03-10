@@ -1,6 +1,7 @@
 import {
     Controller,
     Post,
+    Get,
     Body,
     UseGuards,
     UseInterceptors,
@@ -8,6 +9,7 @@ import {
     BadRequestException,
     ParseFilePipeBuilder,
     HttpStatus,
+    Param,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -23,11 +25,30 @@ export class CvController {
     constructor(private readonly cvService: CvService) { }
 
     /**
+     * Returns the full parsed CV profile for the currently logged-in employee.
+     */
+    @Get('profile/me')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.EMPLOYEE)
+    async getMyProfile(@CurrentUser() user: any) {
+        const userId = user.user_id || user.id;
+        return this.cvService.getMyProfile(userId);
+    }
+
+    /**
      * Your Logic: Endpoint for AI parsing service to send structured data
      */
     @Post('process')
     async processCv(@Body() body: { userId: string, data: any }) {
         return this.cvService.processCvData(body.userId, body.data);
+    }
+
+    /**
+     * One-time backfill: populate project dates from stored metadata.json files
+     */
+    @Post('backfill-project-dates')
+    async backfillProjectDates() {
+        return this.cvService.backfillProjectDates();
     }
 
     /**
@@ -66,5 +87,15 @@ export class CvController {
 
         const userId = user.user_id || user.id;
         return this.cvService.saveEmployeeCv(userId, file);
+    }
+
+    /**
+     * Endpoint for managers to view employee CV profiles by employee ID
+     */
+    @Get('profile/:employeeId')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
+    async getEmployeeProfile(@Param('employeeId') employeeId: string) {
+        return this.cvService.getMyProfile(employeeId);
     }
 }

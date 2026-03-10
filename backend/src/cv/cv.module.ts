@@ -14,6 +14,7 @@ import { Skill } from '../skills/entities/skill.entity';
 import { FileStorageModule } from '../file-storage/file-storage.module';
 import { RagModule } from '../rag/rag.module';
 import { FileValidationModule } from '../file-validation/file-validation.module';
+import { AIGenerationModule } from '../ai-generation/ai-generation.module';
 
 @Module({
     imports: [
@@ -30,7 +31,8 @@ import { FileValidationModule } from '../file-validation/file-validation.module'
         ]),
         FileStorageModule,
         RagModule,
-        FileValidationModule
+        FileValidationModule,
+        AIGenerationModule,
     ],
     controllers: [CvController],
     providers: [CvService],

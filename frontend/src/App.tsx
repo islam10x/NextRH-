@@ -32,7 +32,8 @@ const App = () => (
               <Route path="/employee/cv-upload" element={<CVUploadPage />} />
               <Route path="/employee/certifications" element={<CertificationsPage />} />
               <Route path="/employee/training-projects" element={<TrainingProjectsPage />} />
-              <Route path="/employee/cv-preview" element={<CVPreviewPage />} />
+              <Route path="/employee/cv-preview/" element={<CVPreviewPage />} />
+              <Route path="/employee/cv-preview/:employeeId" element={<CVPreviewPage />} />
             </Route>
 
             {/* Manager Routes */}

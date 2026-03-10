@@ -1,5 +1,9 @@
 {
   "devDependencies": {
     "vite": "^7.3.1"
+  },
+  "dependencies": {
+    "@nestjs/axios": "^4.0.1",
+    "axios": "^1.13.6"
   }
 }

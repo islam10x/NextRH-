@@ -362,6 +362,22 @@ export class FileStorageService {
         await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
     }
 
+    /**
+     * Returns the full raw metadata.json content (including structured_data) for a user.
+     */
+    async getRawMetadata(userId: string): Promise<any | null> {
+        const baseDir = await this.findBaseDirByOwner(userId);
+        if (!baseDir) return null;
+
+        const metadataPath = path.join(baseDir, 'metadata.json');
+        try {
+            const raw = await fs.readFile(metadataPath, 'utf8');
+            return JSON.parse(raw);
+        } catch {
+            return null;
+        }
+    }
+
     private getStorageRoot() {
         return path.resolve(process.cwd(), 'file-storage', 'CV_Database');
     }
