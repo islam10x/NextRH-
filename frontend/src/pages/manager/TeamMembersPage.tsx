@@ -271,9 +271,9 @@ const TeamMembersPage: React.FC = () => {
                             variant="outline"
                             size="sm"
                             className="w-full mt-4 text-xs font-medium gap-1.5"
-                            onClick={() => navigate(`/manager/member/${u.user_id}`)}
+                            onClick={() => navigate(`/employee/cv-preview/${u.user_id}`)}
                           >
-                            <Eye className="h-4 w-4" /> View Profile
+                            <Eye className="h-4 w-4" /> View CV
                           </Button>
                         </CardContent>
                       </Card>

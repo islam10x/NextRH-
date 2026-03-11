@@ -167,3 +167,59 @@ export interface ParsedEmployeeMetadata {
   experience_years: number;
   last_update: string;
 }
+
+export interface CvWorkExperience {
+  id: string;
+  jobTitle: string;
+  companyName: string;
+  startDate: string | null;
+  endDate: string | null;
+  isCurrent: boolean;
+  description: string;
+}
+
+export interface CvEducation {
+  id: string;
+  degree: string;
+  fieldOfStudy: string | null;
+  institution: string | null;
+  endDate: string | null;
+}
+
+export interface CvCertification {
+  id: string;
+  name: string;
+  issuingOrganization: string | null;
+  issueDate: string | null;
+  expirationDate: string | null;
+  status: 'active' | 'expired' | 'expiring_soon';
+}
+
+export interface CvProject {
+  id: string;
+  name: string;
+  generatedTitle: string | null;
+  client: string | null;
+  description: string;
+  role: string | null;
+  skills: string[];
+  startDate: string | null;
+  endDate: string | null;
+}
+
+export interface CvProfile {
+  name: string;
+  email: string;
+  phone: string | null;
+  address: string | null;
+  cvFilename: string | null;
+  currentPosition: string | null;
+  professionalSummary: string | null;
+  totalExperienceYears: number | null;
+  skills: string[];
+  lastUpdate: string | null;
+  workExperiences: CvWorkExperience[];
+  educations: CvEducation[];
+  certifications: CvCertification[];
+  projects: CvProject[];
+}

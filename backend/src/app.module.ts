@@ -18,6 +18,8 @@ import { FileStorageModule } from './file-storage/file-storage.module';
 import { RagModule } from './rag/rag.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { MailModule } from './mail/mail.module';
+import { AIGenerationModule } from './ai-generation/ai-generation.module';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
     imports: [
@@ -25,6 +27,7 @@ import { MailModule } from './mail/mail.module';
             isGlobal: true,
             envFilePath: ['.env'],
         }),
+        ScheduleModule.forRoot(),
         TypeOrmModule.forRootAsync({
             imports: [ConfigModule],
             useFactory: (configService: ConfigService) => ({
@@ -52,6 +55,7 @@ import { MailModule } from './mail/mail.module';
         RagModule,
         NotificationsModule,
         MailModule,
+        AIGenerationModule,
     ],
     controllers: [],
     providers: [],

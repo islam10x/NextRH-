@@ -14,6 +14,7 @@ import { FileStorageService } from '../file-storage/file-storage.service';
 import { RagService } from '../rag/rag.service';
 import { FileValidationService } from '../file-validation/file-validation.service';
 import { normalizeFlexibleDate, parseFlexibleDateRange } from '../utils/date-normalizer';
+import { AIGenerationService } from '../ai-generation/ai-generation.service';
 
 @Injectable()
 export class CvService {
@@ -42,10 +43,120 @@ export class CvService {
         private readonly configService: ConfigService,
         private readonly ragService: RagService,
         private readonly fileValidationService: FileValidationService,
+        private readonly aiGenerationService: AIGenerationService,
     ) {
         this.aiServiceBaseUrl =
             this.configService.get<string>('AI_SERVICE_URL')?.replace(/\/+$/, '') ||
             'http://127.0.0.1:8000';
+    }
+
+    /**
+     * Returns a flat DTO of the employee's full CV profile pulled from the DB
+     * plus skills from the metadata.json file.
+     */
+    async getMyProfile(userId: string) {
+        const user = await this.userRepository.findOne({ where: { user_id: userId } });
+        if (!user) throw new NotFoundException(`User ${userId} not found`);
+
+        const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email;
+
+        const profile = await this.profileRepository.findOne({
+            where: { user: { user_id: userId } },
+            relations: [
+                'workExperiences',
+                'educations',
+                'certifications',
+                'projectParticipations',
+                'projectParticipations.project',
+                'projectParticipations.project.skills',
+            ],
+        });
+
+        // Skills live in the metadata.json file (populated during CV parse)
+        const metaData = await this.fileStorageService.getEmployeeMetadata(userId);
+        const rawMeta = await this.fileStorageService.getRawMetadata(userId);
+        const phone = rawMeta?.structured_data?.phone || null;
+        // Address often has trailing parser artifacts — cut at common section headers
+        const rawAddress: string = rawMeta?.structured_data?.address || '';
+        const address = rawAddress
+            ? rawAddress.split(/\s+(?:Exp[eé]rience|Formation|Certif|Comp[eé]tence|Skills|Education|Project)/i)[0].trim() || null
+            : null;
+        const cvFilename = rawMeta?.filename || null;
+
+        if (!profile) {
+            return {
+                name: fullName,
+                email: user.email,
+                phone,
+                address,
+                cvFilename,
+                currentPosition: null,
+                professionalSummary: null,
+                totalExperienceYears: null,
+                skills: metaData.skills ?? [],
+                lastUpdate: metaData.last_update ?? null,
+                workExperiences: [],
+                educations: [],
+                certifications: [],
+                projects: [],
+            };
+        }
+
+        const workExperiences = (profile.workExperiences ?? []).map((exp) => ({
+            id: exp.experience_id,
+            jobTitle: exp.jobTitle,
+            companyName: exp.companyName,
+            startDate: exp.startDate ? exp.startDate.toISOString().split('T')[0] : null,
+            endDate: exp.endDate ? exp.endDate.toISOString().split('T')[0] : null,
+            isCurrent: exp.isCurrent,
+            description: exp.description,
+        }));
+
+        const educations = (profile.educations ?? []).map((edu) => ({
+            id: edu.education_id,
+            degree: edu.degree,
+            fieldOfStudy: edu.fieldOfStudy,
+            institution: edu.institution,
+            endDate: edu.endDate ? new Date(edu.endDate).toISOString().split('T')[0] : null,
+        }));
+
+        const certifications = (profile.certifications ?? []).map((cert) => ({
+            id: cert.certification_id,
+            name: cert.certificationName,
+            issuingOrganization: cert.issuingOrganization,
+            issueDate: cert.issueDate ? new Date(cert.issueDate).toISOString().split('T')[0] : null,
+            expirationDate: cert.expirationDate ? new Date(cert.expirationDate).toISOString().split('T')[0] : null,
+            status: cert.status,
+        }));
+
+        const projects = (profile.projectParticipations ?? []).map((p) => ({
+            id: p.participant_id,
+            name: p.project?.projectName ?? '',
+            generatedTitle: p.project?.generatedTitle ?? null,
+            client: p.project?.clientName ?? null,
+            description: p.description || p.project?.projectDescription || '',
+            role: p.role,
+            skills: (p.project?.skills ?? []).map((s) => s.skillName),
+            startDate: p.project?.startDate ? new Date(p.project.startDate).toISOString().split('T')[0] : null,
+            endDate: p.project?.endDate ? new Date(p.project.endDate).toISOString().split('T')[0] : null,
+        }));
+
+        return {
+            name: fullName,
+            email: user.email,
+            phone,
+            address,
+            cvFilename,
+            currentPosition: profile.currentPosition ?? null,
+            professionalSummary: profile.professionalSummary ?? null,
+            totalExperienceYears: profile.totalExperienceYears ?? null,
+            skills: metaData.skills ?? [],
+            lastUpdate: metaData.last_update ?? null,
+            workExperiences,
+            educations,
+            certifications,
+            projects,
+        };
     }
 
     /**
@@ -285,12 +396,29 @@ export class CvService {
                         projectDescription: projectDesc,
                         clientName: clientName
                     });
-                    project = await this.projectRepository.save(project);
-                    this.logger.log(`Created new project: ${projectName} for client: ${clientName}`);
                 }
+
+                // Parse and store project dates
+                const rawDate = projectData.date || projectData.dates || null;
+                if (rawDate) {
+                    const dateRange = parseFlexibleDateRange(rawDate);
+                    if (dateRange.startDate) project.startDate = dateRange.startDate;
+                    if (dateRange.endDate) project.endDate = dateRange.endDate;
+                }
+
+                project = await this.projectRepository.save(project);
 
                 if (processedProjectIds.has(project.project_id)) {
                     continue;
+                }
+
+                // Generate AI title for "Unknown Project" entries
+                if (project.projectName?.toLowerCase() === 'unknown project' && !project.generatedTitle && projectDesc) {
+                    try {
+                        await this.aiGenerationService.generateAndStoreTitle(project);
+                    } catch (err) {
+                        this.logger.warn(`Failed to generate title for project ${project.project_id}: ${err?.message ?? err}`);
+                    }
                 }
 
                 const participant = this.participantRepository.create({
@@ -362,6 +490,76 @@ export class CvService {
             latestExp.isCurrent = true;
             latestExp.endDate = null;
         }
+    }
+
+    /**
+     * Backfill project dates from stored metadata.json files.
+     * Matches projects via the user's project_participants, comparing by
+     * normalized client name to handle encoding mismatches between metadata and DB.
+     */
+    async backfillProjectDates(): Promise<{ updated: number; skipped: number }> {
+        const users = await this.userRepository.find();
+        let updated = 0;
+        let skipped = 0;
+
+        for (const user of users) {
+            try {
+                const rawMeta = await this.fileStorageService.getRawMetadata(user.user_id);
+                const metaProjects = rawMeta?.structured_data?.projects;
+                if (!metaProjects?.length) continue;
+
+                // Load this user's profile with project participations
+                const profile = await this.profileRepository.findOne({
+                    where: { user: { user_id: user.user_id } },
+                    relations: ['projectParticipations', 'projectParticipations.project'],
+                });
+                if (!profile?.projectParticipations?.length) continue;
+
+                // For each DB project, try to find a matching metadata entry by client name
+                for (const participation of profile.projectParticipations) {
+                    const project = participation.project;
+                    if (!project || (project.startDate && project.endDate)) {
+                        skipped++;
+                        continue;
+                    }
+
+                    const dbClient = this.normalizeCompanyName(project.clientName || '');
+
+                    // Find matching metadata project by normalized client name
+                    const metaMatch = metaProjects.find((mp: any) => {
+                        const metaClient = this.normalizeCompanyName(mp.client || '');
+                        return metaClient && dbClient && metaClient === dbClient;
+                    });
+
+                    if (!metaMatch) {
+                        skipped++;
+                        continue;
+                    }
+
+                    const rawDate = metaMatch.date || metaMatch.dates || null;
+                    if (!rawDate) {
+                        skipped++;
+                        continue;
+                    }
+
+                    const dateRange = parseFlexibleDateRange(rawDate);
+                    if (dateRange.startDate || dateRange.endDate) {
+                        if (dateRange.startDate) project.startDate = dateRange.startDate;
+                        if (dateRange.endDate) project.endDate = dateRange.endDate;
+                        await this.projectRepository.save(project);
+                        updated++;
+                        this.logger.log(`Backfilled dates for project "${project.projectName}" (client: ${project.clientName}): ${rawDate}`);
+                    } else {
+                        skipped++;
+                    }
+                }
+            } catch (err) {
+                this.logger.warn(`Backfill error for user ${user.user_id}: ${err?.message ?? err}`);
+            }
+        }
+
+        this.logger.log(`Backfill complete: ${updated} updated, ${skipped} skipped`);
+        return { updated, skipped };
     }
 
     private calculateTotalExperienceYears(experiences: WorkExperience[]): number | null {
