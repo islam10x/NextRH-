@@ -123,7 +123,22 @@ def find_metadata_file(employee: EmployeeRow, roots: list[Path], index: dict[str
 def as_string_list(values: Any) -> list[str]:
     if not isinstance(values, list):
         return []
-    return [str(item).strip() for item in values if str(item).strip()]
+    output: list[str] = []
+    for item in values:
+        value = item
+        if isinstance(item, dict):
+            value = (
+                item.get("name")
+                or item.get("certification_name")
+                or item.get("skill_name")
+                or item.get("title")
+            )
+        if value is None:
+            continue
+        text_value = str(value).strip()
+        if text_value:
+            output.append(text_value)
+    return output
 
 
 def _norm_text(value: Any) -> str:

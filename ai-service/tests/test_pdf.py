@@ -8,7 +8,7 @@ def run():
     file_path = r"c:\Users\islam\Projects\NextRH\ai-service\templates\CV + DIP + CERTIF EYA BEN JEMAA-4.pdf"
     print(f"Testing extraction on {file_path}")
     try:
-        text = ocr._extract_text_from_pdf(file_path)
+        text, _ = ocr._extract_text_from_pdf(file_path)
         cleaned = ocr._clean_ocr_noise(text)
         data = ocr._parse_text(cleaned)
         print("EXTRACTION SUCCESS!!!")

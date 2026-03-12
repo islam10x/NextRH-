@@ -1,5 +1,5 @@
 """
-OCR-based Certification Parser using Tesseract (with EasyOCR and llm fallback)
+OCR-based Certification Parser using Tesseract (with EasyOCR and LLM extraction)
 Extracts certification name, issuer, expiration date, and credential ID from images
 """
 import pytesseract
@@ -8,17 +8,16 @@ import numpy as np
 from PIL import Image
 import re
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 import logging
 import fitz  # PyMuPDF for PDF support
-import io
+import time
 
 import os
 import easyocr
 from app.config import settings
 from app.utils.llm import resolve_llm_model, parse_json_object
 from langchain_ollama import ChatOllama
-import json
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +52,13 @@ class CertificationOCR:
             "Shopify","Zendesk","Twilio","Kaggle","DeepLearning.AI",'DELL'
         ]
         
-        # Force EasyOCR first (better on complex backgrounds), fallback to Tesseract
-        self.use_easyocr = True
+        # Choose OCR engine from settings (default is tesseract)
+        engine = (settings.OCR_ENGINE or "tesseract").strip().lower()
+        if engine not in ("tesseract", "easyocr", "both"):
+            logger.warning(f"Unknown OCR_ENGINE '{settings.OCR_ENGINE}', falling back to tesseract.")
+            engine = "tesseract"
+
+        self.use_easyocr = engine in ("easyocr", "both")
         self.reader = None
         
         if self.use_easyocr:
@@ -62,10 +66,19 @@ class CertificationOCR:
             logger.info("Initializing EasyOCR reader...")
             try:
                  # Initialize for English and French (common in CVs)
-                 self.reader = easyocr.Reader(['en', 'fr'], gpu=False)
+                 try:
+                     import torch
+                     gpu_available = torch.cuda.is_available()
+                 except Exception:
+                     gpu_available = False
+
+                 self.reader = easyocr.Reader(['en', 'fr'], gpu=gpu_available)
+                 logger.info(f"EasyOCR engine ready (gpu={gpu_available}).")
             except Exception as e:
                  logger.error(f"Failed to initialize EasyOCR: {e}")
                  self.reader = None
+                 self.use_easyocr = False
+                 self._check_tesseract()
         else:
             # Check Tesseract
             self._check_tesseract()
@@ -88,69 +101,67 @@ class CertificationOCR:
             Dictionary with certification details
         """
         try:
-            # Extract text with robust fallbacks
-            if filename.lower().endswith('.pdf'):
-                text = self._extract_text_from_pdf(file_path)
+            # Extract text with Tesseract first
+            is_pdf = filename.lower().endswith('.pdf')
+            embedded_text_len = 0
+            if is_pdf:
+                text, embedded_text_len = self._extract_text_from_pdf(file_path, use_easyocr=False)
             else:
-                text = self._extract_text_from_image_with_fallbacks(file_path)
+                text = self._extract_text_from_image_with_fallbacks(file_path, use_easyocr=False)
             
-            logger.info(f"Extracted text length: {len(text)} characters")
+            logger.info(f"Extracted text length (tesseract): {len(text)} characters")
             
             # Parse the extracted text using rules
             cleaned_text = self._clean_ocr_noise(text)
             cert_data = self._parse_text(cleaned_text)
             issue_date = self._extract_issue_date_basic(cleaned_text)
-            
-            # 1. Determine if rules failed or if data is incomplete
-            is_unknown = cert_data['name'] == "Unknown Certification"
-            name_lower = cert_data['name'].lower()
-            generic_exact = ["certificate of completion", "certificate of achievement", "certification", "certificate", "diploma", "diplôme", "attestation"]
-            generic_starts = ["id certified through", "valid through", "certificate number", "license number", "credential id", "date ", "issue date", "expiration date"]
-            is_generic = name_lower in generic_exact or any(name_lower.startswith(prefix) for prefix in generic_starts)
-            
-            # If the parser confidently grabbed the issuer's name as the cert name, it's a mistake worth falling back for
-            issuer_in_name = bool(cert_data['issuer']) and (cert_data['issuer'].lower() in cert_data['name'].lower() or cert_data['name'].lower() in cert_data['issuer'].lower())
-            
-            is_suspicious_name = len(cert_data['name']) > 80 or len(cert_data['name']) < 5 or issuer_in_name
-            
-            missing_issuer = not cert_data['issuer']
-            missing_expiry = not cert_data['expiration']
-            
-            needs_fallback = (
-                is_unknown
-                or is_generic
-                or is_suspicious_name
-                or (missing_issuer and len(text) > 50)
-                or missing_expiry
-                or not issue_date  # if date missing, try LLM too
-            )
-            
-            # 2. Gatekeeper: Ensure it is likely a certificate before burning LLM cycles
-            if needs_fallback:
-                if self._is_likely_certificate(cleaned_text):
-                    logger.info("Rule-based parsing incomplete. Falling back to LLM extraction.")
-                    llm_data = self._llm_fallback_extraction(cleaned_text)
-                    
-                    # Merge LLM results (LLM takes precedence if rule engine failed)
-                    if llm_data:
-                        # Trust the LLM for the name if it provided one, as it's better at understanding context than regex
-                        llm_name = llm_data.get('name')
-                        if llm_name and llm_name.lower() not in ["null", "none", "", "unknown"]:
-                            cert_data['name'] = llm_name
-                            
-                        llm_issuer = llm_data.get('issuer')
-                        if llm_issuer and not (cert_data['issuer'] and not missing_issuer):
-                            cert_data['issuer'] = llm_issuer
-                            
-                        llm_expiry = llm_data.get('expiration_date')
-                        if llm_expiry:
-                            cert_data['expiration'] = llm_expiry
-                            
-                        llm_cred_id = llm_data.get('credential_id')
-                        if llm_cred_id:
-                            cert_data['credential_id'] = llm_cred_id
+
+            # Decide if EasyOCR should run (based on file type + missing info)
+            if self._should_run_easyocr(is_pdf, embedded_text_len, cert_data, issue_date, len(text)):
+                if self.use_easyocr and self.reader:
+                    logger.info("Running EasyOCR due to missing info after Tesseract.")
+                    if is_pdf:
+                        text, _ = self._extract_text_from_pdf(file_path, use_easyocr=True)
+                    else:
+                        text = self._extract_text_from_image_with_fallbacks(file_path, use_easyocr=True)
+                    logger.info(f"Extracted text length with EasyOCR: {len(text)} characters")
+                    cleaned_text = self._clean_ocr_noise(text)
+                    cert_data = self._parse_text(cleaned_text)
+                    issue_date = self._extract_issue_date_basic(cleaned_text)
                 else:
-                    logger.info("Document failed certificate gatekeeper check. Skipping LLM fallback.")
+                    logger.info("EasyOCR requested but not available; skipping.")
+            # Always run LLM extraction for accuracy (no fallback gating).
+            llm_data = {}
+            if cleaned_text:
+                if not self._is_likely_certificate(cleaned_text):
+                    logger.info("Document failed certificate gatekeeper check, but LLM is forced on for accuracy.")
+                else:
+                    logger.info("Running LLM extraction (forced for accuracy).")
+                llm_start = time.perf_counter()
+                llm_data = self._llm_fallback_extraction(cleaned_text)
+                llm_elapsed = time.perf_counter() - llm_start
+                logger.info(f"LLM extraction completed in {llm_elapsed:.2f}s")
+            else:
+                logger.info("No OCR text extracted; skipping LLM extraction.")
+
+            # Merge LLM results (LLM takes precedence when it provides a value)
+            if llm_data:
+                # Trust the LLM for the name if it provided one, as it's better at understanding context than regex
+                llm_name = llm_data.get('name')
+                if llm_name and llm_name.lower() not in ["null", "none", "", "unknown"]:
+                    cert_data['name'] = llm_name
+                    
+                llm_issuer = llm_data.get('issuer')
+                if llm_issuer and not cert_data['issuer']:
+                    cert_data['issuer'] = llm_issuer
+                    
+                llm_expiry = llm_data.get('expiration_date')
+                if llm_expiry:
+                    cert_data['expiration'] = llm_expiry
+                    
+                llm_cred_id = llm_data.get('credential_id')
+                if llm_cred_id:
+                    cert_data['credential_id'] = llm_cred_id
             
             if user_first_name and user_last_name:
                 is_verified = self._verify_user_name(cleaned_text, user_first_name, user_last_name)
@@ -178,7 +189,7 @@ class CertificationOCR:
             }
             
     def _is_likely_certificate(self, text: str) -> bool:
-        """Security guard to prevent LLM DDoS on non-certificate text dumps."""
+        """Heuristic to identify certificate-like text (informational only)."""
         if not text or len(text) < 20:
             return False
             
@@ -218,14 +229,18 @@ RAW TEXT:
 """
         try:
             # We configure a timeout so a bad prompt doesn't hang the worker
+            model_name = resolve_llm_model()
             llm = ChatOllama(
-                model=resolve_llm_model(),
+                model=model_name,
                 base_url=settings.OLLAMA_URL,
                 temperature=0.0,
                 timeout=8.0  # tighter timeout to avoid long hangs
             )
-            
+
+            invoke_start = time.perf_counter()
             response = llm.invoke(prompt)
+            invoke_elapsed = time.perf_counter() - invoke_start
+            logger.info(f"LLM invoke completed in {invoke_elapsed:.2f}s (model={model_name})")
             content = str(getattr(response, "content", "") or "").strip()
             
             data = parse_json_object(content)
@@ -262,20 +277,14 @@ RAW TEXT:
                 logger.error("Tesseract not found. Please install Tesseract-OCR or switch to EasyOCR.")
 
     def _extract_text_from_image(self, file_path: str) -> str:
-        """Extract text from image using Tesseract or EasyOCR"""
+        """Extract text from image using Tesseract"""
         try:
             # Use PIL to read image (handles unicode paths correctly on Windows)
             with Image.open(file_path) as pil_img:
                 # Convert to numpy array
                 img = np.array(pil_img)
                 img = self._downscale_image(img)
-            
-            # EasyOCR path
-            if self.use_easyocr and self.reader:
-                logger.info(f"Using EasyOCR for image: {file_path}")
-                result = self.reader.readtext(img, detail=0)
-                return " ".join(result)
-            
+
             # Tesseract path
             # Convert RGB to BGR for OpenCV if needed
             if len(img.shape) == 3:
@@ -321,27 +330,17 @@ RAW TEXT:
             logger.error(f"Error extracting text from image {file_path}: {e}")
             raise
 
-    def _extract_text_from_image_with_fallbacks(self, file_path: str) -> str:
+    def _extract_text_from_image_with_fallbacks(self, file_path: str, use_easyocr: Optional[bool] = None) -> str:
         """
         More resilient image extraction:
-        - Try EasyOCR (if available)
-        - Fallback Tesseract psm6
-        - Fallback Tesseract psm4 (sparse text)
+        - Run Tesseract psm6
+        - Run Tesseract psm4 (sparse text)
+        - Run EasyOCR (if enabled)
         """
         texts = []
 
-        # EasyOCR first
-        if self.use_easyocr and self.reader:
-            try:
-                with Image.open(file_path) as pil_img:
-                    img = np.array(pil_img)
-                    img = self._downscale_image(img)
-                logger.info(f"Using EasyOCR primary for image: {file_path}")
-                result = self.reader.readtext(img, detail=0, paragraph=True)
-                if result:
-                    texts.append(" ".join(result))
-            except Exception as e:
-                logger.warning(f"EasyOCR failed on {file_path}: {e}")
+        if use_easyocr is None:
+            use_easyocr = self.use_easyocr
 
         # Tesseract psm6
         try:
@@ -365,10 +364,26 @@ RAW TEXT:
         except Exception as e:
             logger.debug(f"Tesseract psm4 fallback failed on {file_path}: {e}")
 
-        # Pick the longest text (best effort)
-        best = max(texts, key=len, default="")
-        logger.info(f"OCR candidates: {list(map(len,texts))} -> chosen {len(best)} chars")
-        return best
+        # EasyOCR (optional)
+        if use_easyocr and self.reader:
+            try:
+                with Image.open(file_path) as pil_img:
+                    img = np.array(pil_img)
+                    img = self._downscale_image(img)
+                logger.info(f"Using EasyOCR for image: {file_path}")
+                result = self.reader.readtext(img, detail=0, paragraph=True)
+                if result:
+                    easyocr_text = " ".join(result).strip()
+                    if easyocr_text:
+                        texts.append(easyocr_text)
+            except Exception as e:
+                logger.warning(f"EasyOCR failed on {file_path}: {e}")
+
+        # Combine all candidates (best effort)
+        cleaned_texts = [t for t in texts if t and t.strip()]
+        combined = "\n\n--- OCR CANDIDATE ---\n\n".join(cleaned_texts) if len(cleaned_texts) > 1 else (cleaned_texts[0] if cleaned_texts else "")
+        logger.info(f"OCR candidates lengths: {list(map(len,cleaned_texts))} -> combined {len(combined)} chars")
+        return combined
 
     def _downscale_image(self, img: np.ndarray) -> np.ndarray:
         """Limit max side to reduce OCR time while preserving aspect ratio."""
@@ -383,9 +398,13 @@ RAW TEXT:
         new_h = int(h * scale)
         return cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-    def _extract_text_from_pdf(self, file_path: str) -> str:
+    def _extract_text_from_pdf(self, file_path: str, use_easyocr: Optional[bool] = None) -> Tuple[str, int]:
         """Extract text from PDF using hybrid approach (embedded text + OCR)"""
         text = ""
+        embedded_text_len_total = 0
+
+        if use_easyocr is None:
+            use_easyocr = self.use_easyocr
         
         try:
             doc = fitz.open(file_path)
@@ -393,6 +412,7 @@ RAW TEXT:
             for page_num, page in enumerate(doc):
                 # Always extract embedded text first
                 embedded_text = page.get_text("text", sort=True)
+                embedded_text_len_total += len(embedded_text.strip())
                 
                 # Also perform OCR to catch image-based content
                 logger.info(f"Using hybrid extraction for page {page_num}...")
@@ -423,8 +443,6 @@ RAW TEXT:
                 gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
                 
                 # Try multiple preprocessing approaches and combine results
-                ocr_results = []
-                
                 # Approach 1: Light denoising with adaptive threshold
                 denoised_light = cv2.fastNlMeansDenoising(gray, None, h=5, templateWindowSize=7, searchWindowSize=21)
                 thresh1 = cv2.adaptiveThreshold(denoised_light, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
@@ -433,20 +451,29 @@ RAW TEXT:
                 # Approach 2: Otsu's thresholding (better for high-contrast documents)
                 _, thresh2 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
                 
-                # Perform OCR on both preprocessed versions
-                if self.use_easyocr and self.reader:
-                    result1 = self.reader.readtext(thresh1, detail=0)
-                    result2 = self.reader.readtext(thresh2, detail=0)
-                    ocr_text = "\n".join(result1) + "\n--- Alternative OCR ---\n" + "\n".join(result2)
-                else:
-                    self._check_tesseract()
-                    # Use different PSM modes for better coverage
-                    config1 = '--psm 3 --oem 3'  # Auto page segmentation
-                    config2 = '--psm 6 --oem 3'  # Assume uniform block of text
-                    
-                    text1 = pytesseract.image_to_string(thresh1, config=config1, lang='fra+eng')
-                    text2 = pytesseract.image_to_string(thresh2, config=config2, lang='fra+eng')
-                    ocr_text = text1 + "\n--- Alternative OCR ---\n" + text2
+                # Perform OCR on both preprocessed versions (Tesseract primary)
+                self._check_tesseract()
+                # Use different PSM modes for better coverage
+                config1 = '--psm 3 --oem 3'  # Auto page segmentation
+                config2 = '--psm 6 --oem 3'  # Assume uniform block of text
+                
+                text1 = pytesseract.image_to_string(thresh1, config=config1, lang='fra+eng')
+                text2 = pytesseract.image_to_string(thresh2, config=config2, lang='fra+eng')
+                ocr_text = text1 + "\n--- Alternative OCR ---\n" + text2
+
+                # EasyOCR (always run when enabled)
+                if use_easyocr and self.reader:
+                    try:
+                        result1 = self.reader.readtext(thresh1, detail=0)
+                        result2 = self.reader.readtext(thresh2, detail=0)
+                        easy_text = "\n".join(result1) + "\n--- Alternative OCR ---\n" + "\n".join(result2)
+                        if easy_text.strip():
+                            ocr_text = (
+                                "TESSERACT OCR:\n" + ocr_text +
+                                "\n\nEASYOCR OCR:\n" + easy_text
+                            )
+                    except Exception as e:
+                        logger.warning(f"EasyOCR PDF OCR failed on page {page_num}: {e}")
                 
                 # Combine both sources intelligently
                 if len(embedded_text.strip()) > 500:
@@ -464,7 +491,7 @@ RAW TEXT:
             logger.error(f"Error extracting text from PDF: {str(e)}")
             raise
         
-        return text
+        return text, embedded_text_len_total
     
     def _clean_ocr_noise(self, text: str) -> str:
         """Remove common OCR noise and artifacts"""
@@ -492,6 +519,75 @@ RAW TEXT:
                 clean_lines.append(line)
         
         return '\n'.join(clean_lines)
+
+    def _should_run_easyocr(
+        self,
+        is_pdf: bool,
+        embedded_text_len: int,
+        cert_data: Dict[str, Optional[str]],
+        issue_date: Optional[str],
+        text_len: int
+    ) -> bool:
+        if not self.use_easyocr or not self.reader:
+            return False
+
+        if not self._needs_more_info(cert_data, issue_date, text_len):
+            return False
+
+        if not is_pdf:
+            return True
+
+        # For PDFs, only run EasyOCR when embedded text is sparse (image-based PDF)
+        if embedded_text_len >= 200:
+            logger.info("Skipping EasyOCR for PDF because embedded text looks sufficient.")
+            return False
+        return True
+
+    def _needs_more_info(
+        self,
+        cert_data: Dict[str, Optional[str]],
+        issue_date: Optional[str],
+        text_len: int
+    ) -> bool:
+        """Heuristic to decide if EasyOCR should run after Tesseract."""
+        name = cert_data.get('name') or ""
+        is_unknown = name == "Unknown Certification"
+        name_lower = name.lower()
+        generic_exact = [
+            "certificate of completion",
+            "certificate of achievement",
+            "certification",
+            "certificate",
+            "diploma",
+            "diplôme",
+            "attestation",
+        ]
+        generic_starts = [
+            "id certified through",
+            "valid through",
+            "certificate number",
+            "license number",
+            "credential id",
+            "date ",
+            "issue date",
+            "expiration date",
+        ]
+        is_generic = name_lower in generic_exact or any(name_lower.startswith(prefix) for prefix in generic_starts)
+
+        issuer = cert_data.get('issuer') or ""
+        issuer_in_name = bool(issuer) and (issuer.lower() in name_lower or name_lower in issuer.lower())
+        is_suspicious_name = len(name) > 80 or len(name) < 5 or issuer_in_name
+
+        missing_issuer = not issuer
+        missing_issue_date = not issue_date
+
+        return (
+            is_unknown
+            or is_generic
+            or is_suspicious_name
+            or (missing_issuer and text_len > 50)
+            or missing_issue_date
+        )
     
     def _parse_text(self, cleaned_text: str) -> Dict[str, Optional[str]]:
         """Parse certification details from extracted text"""
@@ -876,3 +972,4 @@ RAW TEXT:
                 if normalized:
                     return normalized
         return None
+

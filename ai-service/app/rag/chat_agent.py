@@ -876,7 +876,11 @@ def build_chain():
                         docs.append(
                             LCDocument(
                                 page_content=notice,
-                                metadata={"chunk_type": "disambiguation_notice"},
+                                metadata={
+                                    "chunk_type": "disambiguation_notice",
+                                    "chunk_id": "disambiguation_notice",
+                                    "name": "",
+                                },
                             )
                         )
 

@@ -31,7 +31,7 @@ def test_hybrid_parser():
     
     # We mock _extract_text_from_image and _extract_text_from_pdf to return our test string
     ocr_service._extract_text_from_image = lambda x: standard_cert_text
-    ocr_service._extract_text_from_pdf = lambda x: standard_cert_text
+    ocr_service._extract_text_from_pdf = lambda x, use_easyocr=False: (standard_cert_text, 0)
     
     result1 = ocr_service.parse_certification("dummy.jpg", "dummy.jpg")
     print(f"Result: {result1}")
@@ -50,7 +50,7 @@ def test_hybrid_parser():
     Credential ID: GC-998877
     """
     ocr_service._extract_text_from_image = lambda x: messy_cert_text
-    ocr_service._extract_text_from_pdf = lambda x: messy_cert_text
+    ocr_service._extract_text_from_pdf = lambda x, use_easyocr=False: (messy_cert_text, 0)
     
     result2 = ocr_service.parse_certification("dummy.pdf", "dummy.pdf")
     print(f"Result: {result2}")
@@ -74,7 +74,7 @@ def test_hybrid_parser():
     Thank you for dining with us!
     """
     ocr_service._extract_text_from_image = lambda x: restaurant_menu_text
-    ocr_service._extract_text_from_pdf = lambda x: restaurant_menu_text
+    ocr_service._extract_text_from_pdf = lambda x, use_easyocr=False: (restaurant_menu_text, 0)
     
     result3 = ocr_service.parse_certification("dummy.jpg", "dummy.jpg")
     print(f"Result: {result3}")
@@ -109,7 +109,7 @@ Team certifies that
     """
     
     ocr_service._extract_text_from_image = lambda x: messy_dell_text
-    ocr_service._extract_text_from_pdf = lambda x: messy_dell_text
+    ocr_service._extract_text_from_pdf = lambda x, use_easyocr=False: (messy_dell_text, 0)
     
     result4 = ocr_service.parse_certification("dummy.pdf", "dummy.pdf")
     print(f"Result: {result4}")
@@ -130,7 +130,7 @@ Cisco
     print("==================================================")
     
     ocr_service._extract_text_from_image = lambda x: messy_cisco_text
-    ocr_service._extract_text_from_pdf = lambda x: messy_cisco_text
+    ocr_service._extract_text_from_pdf = lambda x, use_easyocr=False: (messy_cisco_text, 0)
     
     result5 = ocr_service.parse_certification("dummy.pdf", "dummy.pdf")
     print(f"Result: {result5}")

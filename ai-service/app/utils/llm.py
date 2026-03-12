@@ -1,14 +1,31 @@
 import re
 import json
 import urllib.request
+import time
+import logging
 from typing import Optional, Dict, Any
 from app.config import settings
 
 LLM_MODEL = "qwen2.5:1.5b-instruct"
 LLM_MODEL_FALLBACK = "qwen2.5:0.5b-instruct"
+LLM_MODEL_CACHE_TTL_SECONDS = 300
+
+_LLM_MODEL_CACHE: dict[str, object] = {"model": None, "ts": 0.0}
+
+logger = logging.getLogger(__name__)
 
 def resolve_llm_model() -> str:
     """Return the strongest available local instruct model."""
+    now = time.time()
+    cached_model = _LLM_MODEL_CACHE.get("model")
+    cached_ts = float(_LLM_MODEL_CACHE.get("ts") or 0.0)
+    if isinstance(cached_model, str) and cached_model and (now - cached_ts) < LLM_MODEL_CACHE_TTL_SECONDS:
+        logger.debug(
+            f"resolve_llm_model cache hit (model={cached_model}, age={now - cached_ts:.1f}s)"
+        )
+        return cached_model
+
+    start = time.perf_counter()
     def _size_in_billions(model_name: str) -> float:
         match = re.search(r":(\d+(?:\.\d+)?)b", model_name.lower())
         if not match:
@@ -37,17 +54,28 @@ def resolve_llm_model() -> str:
             available = [name for name in available if name]
             
             if not available:
+                _LLM_MODEL_CACHE.update({"model": LLM_MODEL, "ts": time.time()})
+                logger.info(f"resolve_llm_model completed in {time.perf_counter() - start:.2f}s (model={LLM_MODEL})")
                 return LLM_MODEL
 
             instruct_candidates = [name for name in available if "instruct" in name.lower()]
             if not instruct_candidates:
                 if LLM_MODEL in available:
-                    return LLM_MODEL
-                return available[0]
-                
-            return max(instruct_candidates, key=_model_score)
+                    selected = LLM_MODEL
+                else:
+                    selected = available[0]
+                _LLM_MODEL_CACHE.update({"model": selected, "ts": time.time()})
+                logger.info(f"resolve_llm_model completed in {time.perf_counter() - start:.2f}s (model={selected})")
+                return selected
+            
+            selected = max(instruct_candidates, key=_model_score)
+            _LLM_MODEL_CACHE.update({"model": selected, "ts": time.time()})
+            logger.info(f"resolve_llm_model completed in {time.perf_counter() - start:.2f}s (model={selected})")
+            return selected
     except Exception:
         pass
+    _LLM_MODEL_CACHE.update({"model": LLM_MODEL, "ts": time.time()})
+    logger.info(f"resolve_llm_model completed in {time.perf_counter() - start:.2f}s (model={LLM_MODEL})")
     return LLM_MODEL
 
 def _normalize_provider(provider: str | None) -> str:

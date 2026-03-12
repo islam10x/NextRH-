@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     TEMPLATE_FOLDER: str = "templates"
     
     # OCR Settings
-    OCR_ENGINE: str = "tesseract" # or easyocr
+    OCR_ENGINE: str = "tesseract" # set to "easyocr" or "both" to enable dual OCR (Tesseract + EasyOCR)
     
     # Backend Integration
     BACKEND_URL: str = "http://localhost:3000"
