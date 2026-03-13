@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import api from '@/services/api';
-import { ParsedCertificationMetadata, ParsedEmployeeMetadata } from '@/types';
+import { CvCertification, CvProfile } from '@/types';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { Award, Plus, Upload, Search, Calendar, Loader2 } from 'lucide-react';
@@ -36,28 +36,29 @@ const CertificationsPage: React.FC = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
-  const [metadata, setMetadata] = useState<ParsedEmployeeMetadata | null>(null);
+  const [profile, setProfile] = useState<CvProfile | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const { user } = useAuth();
 
   // If the user's name equals their email, they haven't uploaded a CV yet
   const hasConfiguredName = user && user.name !== user.email;
 
-  const loadMetadata = useCallback(async () => {
+  const loadData = useCallback(async () => {
     setIsLoading(true);
+
     try {
-      const response = await api.get<ParsedEmployeeMetadata>('/file-storage/metadata/me');
-      setMetadata(response.data);
+      const response = await api.get<CvProfile>('/cv/profile/me');
+      setProfile(response.data);
     } catch {
-      setMetadata(null);
-    } finally {
-      setIsLoading(false);
+      setProfile(null);
     }
+
+    setIsLoading(false);
   }, []);
 
   useEffect(() => {
-    loadMetadata();
-  }, [loadMetadata]);
+    loadData();
+  }, [loadData]);
 
   const validateFile = useCallback(
     (file: File): string | null => {
@@ -87,7 +88,7 @@ const CertificationsPage: React.FC = () => {
         });
 
         setUploadedFileName(file.name);
-        await loadMetadata();
+        await loadData();
       } catch (err) {
         console.error('Certificate upload failed', err);
         if (axios.isAxiosError(err)) {
@@ -106,26 +107,48 @@ const CertificationsPage: React.FC = () => {
         setIsUploading(false);
       }
     },
-    [loadMetadata]
+    [loadData]
   );
 
-  const certifications = useMemo(() => metadata?.certifications || [], [metadata]);
-  const filteredCertifications = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return certifications;
-    return certifications.filter((cert) => cert.name.toLowerCase().includes(q));
-  }, [certifications, searchQuery]);
+  const certifications = useMemo(() => profile?.certifications || [], [profile]);
+  const normalizeText = useCallback(
+    (value: string) => value.toLowerCase().replace(/_/g, ' ').replace(/\s+/g, ' ').trim(),
+    []
+  );
 
-  const formatDate = (dateString: string | null) => {
+  const filteredCertifications = useMemo(() => {
+    const q = normalizeText(searchQuery.trim());
+    if (!q) return certifications;
+    return certifications.filter((cert) => {
+      const nameMatch = normalizeText(cert.name).includes(q);
+      const issuerMatch = normalizeText(cert.issuingOrganization || '').includes(q);
+      return nameMatch || issuerMatch;
+    });
+  }, [certifications, searchQuery, normalizeText]);
+
+  const formatDate = (dateString?: string | null) => {
     if (!dateString) return 'Not specified';
     return dateString;
   };
 
-  const statusClass = (status: ParsedCertificationMetadata['status']) => {
+  const statusClass = (status?: CvCertification['status']) => {
     if (status === 'active') return 'bg-success/10 text-success';
+    if (status === 'expiring_soon') return 'bg-warning/10 text-warning';
     if (status === 'expired') return 'bg-destructive/10 text-destructive';
     return 'bg-muted text-muted-foreground';
   };
+
+  const uploadClass = (isUploaded?: boolean) => {
+    if (isUploaded) return 'bg-success/10 text-success';
+    return 'bg-muted text-muted-foreground';
+  };
+
+  const formatStatus = (status?: CvCertification['status']) => {
+    if (!status) return 'unknown';
+    return status.replace('_', ' ');
+  };
+
+  const formatCertName = (name: string) => name.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
 
   return (
     <div className="space-y-6">
@@ -236,15 +259,32 @@ const CertificationsPage: React.FC = () => {
                   <div className="p-2 rounded-lg bg-primary/10">
                     <Award className="h-5 w-5 text-primary" />
                   </div>
-                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusClass(cert.status)}`}>
-                    {cert.status}
-                  </span>
+                  <div className="flex flex-col items-end gap-1">
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusClass(cert.status)}`}>
+                      {formatStatus(cert.status)}
+                    </span>
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${uploadClass(cert.isUploaded)}`}>
+                      {cert.isUploaded ? 'Uploaded' : 'From CV'}
+                    </span>
+                  </div>
                 </div>
                 <div className="space-y-2">
-                  <h3 className="font-semibold text-foreground leading-tight">{cert.name}</h3>
+                  <h3
+                    className="font-semibold text-foreground leading-tight break-words whitespace-normal"
+                    title={formatCertName(cert.name)}
+                  >
+                    {formatCertName(cert.name)}
+                  </h3>
+                  {cert.issuingOrganization && (
+                    <p className="text-sm text-muted-foreground">{cert.issuingOrganization}</p>
+                  )}
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Calendar className="h-3.5 w-3.5" />
-                    <span>Expires: {formatDate(cert.expiration)}</span>
+                    <span>Issued: {formatDate(cert.issueDate)}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Calendar className="h-3.5 w-3.5" />
+                    <span>Expires: {formatDate(cert.expirationDate)}</span>
                   </div>
                 </div>
               </CardContent>
@@ -267,20 +307,6 @@ const CertificationsPage: React.FC = () => {
         </Card>
       )}
 
-      {metadata && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Metadata Snapshot</CardTitle>
-            <CardDescription>Parsed from your uploaded documents</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-1 text-sm">
-            <p><span className="font-medium">Name:</span> {metadata.name}</p>
-            <p><span className="font-medium">Skills:</span> {metadata.skills.length ? metadata.skills.join(', ') : 'None detected yet'}</p>
-            <p><span className="font-medium">Experience:</span> {metadata.experience_years} years</p>
-            <p><span className="font-medium">Last Update:</span> {metadata.last_update}</p>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 };

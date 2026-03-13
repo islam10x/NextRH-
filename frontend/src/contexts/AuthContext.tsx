@@ -62,6 +62,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const response = await authService.login(email, password);
 
       sessionStorage.setItem('access_token', response.access_token);
+      sessionStorage.setItem('refresh_token', response.refresh_token);
+      sessionStorage.setItem('session_id', response.session_id);
       // refresh_token is stored as an HTTPOnly cookie by the server — no JS access needed
 
       const mappedUser = mapBackendUserToFrontend(response.user);

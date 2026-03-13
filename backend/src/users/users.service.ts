@@ -38,11 +38,17 @@ export class UsersService {
     }
 
     async findAll(managerId?: string): Promise<User[]> {
-        const whereClause = managerId ? { invitedBy: managerId } : {};
-        return this.usersRepository.find({
-            where: whereClause,
-            select: ['user_id', 'email', 'firstName', 'lastName', 'role', 'status', 'createdAt', 'updatedAt', 'invitedBy'],
-        });
+        const query = this.usersRepository.createQueryBuilder('u')
+            .select(['u.user_id', 'u.email', 'u.firstName', 'u.lastName', 'u.role', 'u.status', 'u.createdAt', 'u.updatedAt', 'u.invitedBy'])
+            .leftJoin('team_members', 'tm', 'tm.employee_id = u.user_id')
+            .leftJoin('teams', 't', 't.team_id = tm.team_id');
+            
+        if (managerId) {
+            query.where('u.invitedBy = :managerId', { managerId })
+                 .orWhere('t.manager_id = :managerId::uuid', { managerId });
+        }
+
+        return query.getMany();
     }
 
     async setCurrentRefreshToken(refreshToken: string, userId: string): Promise<void> {

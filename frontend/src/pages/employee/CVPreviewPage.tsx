@@ -611,15 +611,6 @@ const CVPreviewPage: React.FC = () => {
                         <div className="cert-dates flex flex-wrap gap-4 text-sm text-muted-foreground">
                           {cert.issueDate && <span>Issued: {fmtDate(cert.issueDate)}</span>}
                           {cert.expirationDate && <span>Expires: {fmtDate(cert.expirationDate)}</span>}
-                          <span className={`px-2 py-1 rounded text-xs font-medium ${
-                            cert.status === 'active' 
-                              ? 'bg-green-100 text-green-800' 
-                              : cert.status === 'expiring_soon' 
-                                ? 'bg-yellow-100 text-yellow-800' 
-                                : 'bg-red-100 text-red-800'
-                          }`}>
-                            {cert.status.replace('_', ' ').toUpperCase()}
-                          </span>
                         </div>
                       </div>
                     </div>

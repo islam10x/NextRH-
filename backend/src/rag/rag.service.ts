@@ -1,12 +1,20 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { AiSearchQuery } from './entities/ai-search-query.entity';
+import { User } from '../users/entities/user.entity';
 
 @Injectable()
 export class RagService {
     private readonly logger = new Logger(RagService.name);
     private readonly aiServiceBaseUrl: string;
 
-    constructor(private readonly configService: ConfigService) {
+    constructor(
+        private readonly configService: ConfigService,
+        @InjectRepository(AiSearchQuery)
+        private readonly searchQueryRepo: Repository<AiSearchQuery>,
+    ) {
         this.aiServiceBaseUrl =
             this.configService.get<string>('AI_SERVICE_URL')?.replace(/\/+$/, '') ||
             'http://127.0.0.1:8000';
@@ -60,7 +68,8 @@ export class RagService {
     /**
      * Send a query to the AI RAG system.
      */
-    async chat(message: string, sessionId: string) {
+    async chat(message: string, sessionId: string, userId?: string) {
+        const startedAt = Date.now();
         try {
             const url = `${this.aiServiceBaseUrl}/api/v1/rag/chat`;
             const response = await fetch(url, {
@@ -70,14 +79,459 @@ export class RagService {
             });
 
             if (!response.ok) {
-                this.logger.error(`AI Chat failed: ${response.statusText}`);
+                let body = '';
+                try {
+                    body = await response.text();
+                } catch {
+                    body = '';
+                }
+                const snippet = body ? body.slice(0, 500) : 'no body';
+                this.logger.error(`AI Chat failed: ${response.status} ${response.statusText} | ${snippet}`);
                 throw new Error('AI Service connection error');
             }
 
-            return await response.json();
+            const payload = await response.json();
+            const elapsedMs = Date.now() - startedAt;
+            const context = Array.isArray(payload?.context) ? payload.context : [];
+            const results = this.buildResults(context, message);
+            const extractedEntities = this.extractEntities(context);
+            const resultCount = this.resolveResultCount(context, extractedEntities, results);
+            await this.safeLogQuery(userId, message, extractedEntities, resultCount, elapsedMs);
+            return { ...payload, results };
         } catch (error) {
             this.logger.error(`Error in RAG chat: ${error.message}`);
+            const elapsedMs = Date.now() - startedAt;
+            await this.safeLogQuery(userId, message, null, 0, elapsedMs);
             throw error;
+        }
+    }
+
+    private resolveResultCount(
+        context: any[],
+        entities?: Record<string, any> | null,
+        results?: Array<{ name: string }>,
+    ): number {
+        if (Array.isArray(results) && results.length) return results.length;
+        if (entities?.employees?.length) return entities.employees.length;
+        return Array.isArray(context) ? context.length : 0;
+    }
+
+    private extractEntities(context: any[]): Record<string, any> | null {
+        if (!Array.isArray(context)) return null;
+
+        const employees = new Set<string>();
+        const certifications = new Set<string>();
+        const projects = new Set<string>();
+        const companies = new Set<string>();
+
+        for (const item of context) {
+            const metadata = item?.metadata || {};
+            const name = typeof metadata.name === 'string' ? metadata.name.trim() : '';
+            if (name) employees.add(name);
+
+            const directoryEmployees = Array.isArray(metadata.employees) ? metadata.employees : [];
+            for (const emp of directoryEmployees) {
+                const empName = typeof emp?.name === 'string' ? emp.name.trim() : '';
+                if (empName) employees.add(empName);
+                if (Array.isArray(emp?.companies)) {
+                    emp.companies.forEach((company: any) => {
+                        const value = typeof company === 'string' ? company.trim() : '';
+                        if (value) companies.add(value);
+                    });
+                }
+            }
+
+            const certificationName = typeof metadata.certification_name === 'string'
+                ? metadata.certification_name.trim()
+                : '';
+            if (certificationName) certifications.add(certificationName);
+
+            const certList = Array.isArray(metadata.certifications) ? metadata.certifications : [];
+            certList.forEach((cert: any) => {
+                const value = typeof cert === 'string' ? cert.trim() : '';
+                if (value) certifications.add(value);
+            });
+
+            const projectName = typeof metadata.project_name === 'string'
+                ? metadata.project_name.trim()
+                : '';
+            if (projectName) projects.add(projectName);
+
+            const companyName = typeof metadata.company_name === 'string'
+                ? metadata.company_name.trim()
+                : typeof metadata.client_name === 'string'
+                    ? metadata.client_name.trim()
+                    : '';
+            if (companyName) companies.add(companyName);
+        }
+
+        const entities: Record<string, any> = {};
+        if (employees.size) entities.employees = Array.from(employees);
+        if (certifications.size) entities.certifications = Array.from(certifications);
+        if (projects.size) entities.projects = Array.from(projects);
+        if (companies.size) entities.companies = Array.from(companies);
+
+        return Object.keys(entities).length ? entities : null;
+    }
+
+    private buildResults(context: any[], query?: string): Array<{
+        name: string;
+        role?: string;
+        experienceYears?: number;
+        companies?: string[];
+        certifications?: string[];
+        projects?: string[];
+        skills?: string[];
+    }> {
+        if (!Array.isArray(context)) return [];
+
+        const allowDirectoryFallback = this.isDirectoryQuery(query);
+        const queryTokens = this.extractQueryTokens(query);
+        const minYears = this.extractMinExperienceYears(query);
+        const directoryIndex = new Map<string, { role?: string; experienceYears?: number; companies: Set<string> }>();
+
+        type Draft = {
+            name: string;
+            role?: string;
+            experienceYears?: number;
+            companies: Set<string>;
+            certifications: Set<string>;
+            projects: Set<string>;
+            skills: Set<string>;
+            sourceTypes: Set<string>;
+            tokenMatch: boolean;
+        };
+
+        const results = new Map<string, Draft>();
+        const directoryFallback: Draft[] = [];
+
+        const ensure = (name: string) => {
+            const key = name.trim();
+            if (!key) return null;
+            let draft = results.get(key);
+            if (!draft) {
+                draft = {
+                    name: key,
+                    companies: new Set<string>(),
+                    certifications: new Set<string>(),
+                    projects: new Set<string>(),
+                    skills: new Set<string>(),
+                    sourceTypes: new Set<string>(),
+                    tokenMatch: false,
+                };
+                results.set(key, draft);
+            }
+            return draft;
+        };
+
+        const addSetValues = (set: Set<string>, values: any) => {
+            if (!values) return;
+            if (Array.isArray(values)) {
+                values.forEach((value) => {
+                    const cleaned = typeof value === 'string' ? value.trim() : '';
+                    if (cleaned) set.add(cleaned);
+                });
+                return;
+            }
+            const cleaned = typeof values === 'string' ? values.trim() : '';
+            if (cleaned) set.add(cleaned);
+        };
+
+        for (const item of context) {
+            const meta = item?.metadata || {};
+            const chunkType = String(meta.chunk_type || '').toLowerCase();
+            const rawContent = typeof item?.content === 'string' ? item.content : '';
+
+            if (chunkType === 'directory' && Array.isArray(meta.employees)) {
+                for (const emp of meta.employees) {
+                    const name = typeof emp?.name === 'string' ? emp.name.trim() : '';
+                    if (!name) continue;
+                    const existing = directoryIndex.get(name) ?? {
+                        role: undefined,
+                        experienceYears: undefined,
+                        companies: new Set<string>(),
+                    };
+                    if (!existing.role && typeof emp?.role === 'string' && emp.role.trim()) {
+                        existing.role = emp.role.trim();
+                    }
+                    if (typeof emp?.experience_years === 'number') {
+                        existing.experienceYears = emp.experience_years;
+                    }
+                    addSetValues(existing.companies, emp?.companies);
+                    directoryIndex.set(name, existing);
+                }
+
+                if (!allowDirectoryFallback) {
+                    continue;
+                }
+                for (const emp of meta.employees) {
+                    const name = typeof emp?.name === 'string' ? emp.name.trim() : '';
+                    if (!name) continue;
+                    const draft = ensure(name);
+                    if (!draft) continue;
+                    if (!draft.role && typeof emp?.role === 'string' && emp.role.trim()) {
+                        draft.role = emp.role.trim();
+                    }
+                    if (typeof emp?.experience_years === 'number') {
+                        draft.experienceYears = emp.experience_years;
+                    }
+                    addSetValues(draft.companies, emp?.companies);
+                    draft.sourceTypes.add('directory');
+                }
+
+                if (allowDirectoryFallback) {
+                    for (const emp of meta.employees) {
+                        const name = typeof emp?.name === 'string' ? emp.name.trim() : '';
+                        if (!name) continue;
+                        const draft: Draft = {
+                            name,
+                            role: typeof emp?.role === 'string' ? emp.role.trim() : undefined,
+                            experienceYears: typeof emp?.experience_years === 'number' ? emp.experience_years : undefined,
+                            companies: new Set<string>(),
+                            certifications: new Set<string>(),
+                            projects: new Set<string>(),
+                            skills: new Set<string>(),
+                            sourceTypes: new Set<string>(['directory']),
+                            tokenMatch: false,
+                        };
+                        addSetValues(draft.companies, emp?.companies);
+                        directoryFallback.push(draft);
+                    }
+                }
+                continue;
+            }
+
+            const name = typeof meta.name === 'string' ? meta.name.trim() : '';
+            const draft = ensure(name);
+            if (!draft) continue;
+
+            if (chunkType) {
+                draft.sourceTypes.add(chunkType);
+            }
+
+            if (!draft.role && typeof meta.job_title === 'string' && meta.job_title.trim()) {
+                draft.role = meta.job_title.trim();
+            }
+            if (!draft.role && chunkType === 'profile') {
+                const parsedRole = this.parseRoleFromProfile(rawContent, name);
+                if (parsedRole) draft.role = parsedRole;
+                if (draft.experienceYears == null) {
+                    const yearsMatch = rawContent.match(/(\d+)\s+years?\s+of\s+experience/i);
+                    if (yearsMatch && yearsMatch[1]) {
+                        const years = Number.parseInt(yearsMatch[1], 10);
+                        if (Number.isFinite(years)) {
+                            draft.experienceYears = years;
+                        }
+                    }
+                }
+            }
+
+            if (chunkType === 'skills' && rawContent) {
+                rawContent.split('\n').forEach((line) => {
+                    const trimmed = line.trim();
+                    if (trimmed.startsWith('- ')) {
+                        const skill = trimmed.slice(2).trim();
+                        if (skill) draft.skills.add(skill);
+                    }
+                });
+            }
+
+            if (typeof meta.company_name === 'string') {
+                addSetValues(draft.companies, meta.company_name);
+            }
+            if (typeof meta.client_name === 'string') {
+                addSetValues(draft.companies, meta.client_name);
+            }
+
+            if (typeof meta.certification_name === 'string') {
+                addSetValues(draft.certifications, meta.certification_name);
+            }
+            if (Array.isArray(meta.certifications)) {
+                addSetValues(draft.certifications, meta.certifications);
+            }
+
+            if (typeof meta.project_name === 'string') {
+                addSetValues(draft.projects, meta.project_name);
+            }
+
+            if (!draft.tokenMatch && queryTokens.length > 0) {
+                const evidence = this.buildEvidenceText(rawContent, meta, draft);
+                if (this.hasTokenMatch(evidence, queryTokens)) {
+                    draft.tokenMatch = true;
+                }
+            }
+        }
+
+        for (const draft of results.values()) {
+            const directoryData = directoryIndex.get(draft.name);
+            if (!directoryData) continue;
+            if (!draft.role && directoryData.role) {
+                draft.role = directoryData.role;
+            }
+            if (draft.experienceYears == null && typeof directoryData.experienceYears === 'number') {
+                draft.experienceYears = directoryData.experienceYears;
+            }
+            addSetValues(draft.companies, Array.from(directoryData.companies));
+        }
+
+        let scored = Array.from(results.values()).filter((draft) => {
+            return Array.from(draft.sourceTypes).some((type) => type !== 'directory');
+        });
+
+        if (queryTokens.length > 0) {
+            scored = scored.filter((draft) => draft.tokenMatch);
+        }
+
+        if (minYears != null) {
+            const withYears = scored.filter((draft) => typeof draft.experienceYears === 'number');
+            const matches = withYears.filter((draft) => (draft.experienceYears ?? 0) >= minYears);
+            if (matches.length > 0) {
+                scored = matches;
+            }
+        }
+
+        const scoredWithRank = scored.map((draft) => {
+            const score =
+                (draft.role ? 1 : 0) +
+                (typeof draft.experienceYears === 'number' ? 1 : 0) +
+                (draft.companies.size ? 1 : 0) +
+                (draft.certifications.size ? 1 : 0) +
+                (draft.projects.size ? 1 : 0) +
+                (draft.skills.size ? 1 : 0);
+            return { draft, score };
+        });
+
+        if (scoredWithRank.length === 0 && allowDirectoryFallback && directoryFallback.length > 0) {
+            return directoryFallback.slice(0, 6).map((draft) => ({
+                name: draft.name,
+                role: draft.role,
+                experienceYears: draft.experienceYears,
+                companies: draft.companies.size ? Array.from(draft.companies).slice(0, 3) : undefined,
+                certifications: undefined,
+                projects: undefined,
+                skills: undefined,
+            }));
+        }
+
+        scoredWithRank.sort((a, b) => b.score - a.score);
+
+        return scoredWithRank.slice(0, 6).map(({ draft }) => ({
+            name: draft.name,
+            role: draft.role,
+            experienceYears: draft.experienceYears,
+            companies: draft.companies.size ? Array.from(draft.companies).slice(0, 3) : undefined,
+            certifications: draft.certifications.size ? Array.from(draft.certifications).slice(0, 3) : undefined,
+            projects: draft.projects.size ? Array.from(draft.projects).slice(0, 3) : undefined,
+            skills: draft.skills.size ? Array.from(draft.skills).slice(0, 6) : undefined,
+        }));
+    }
+
+    private parseRoleFromProfile(content: string, name: string): string | null {
+        if (!content) return null;
+        const escaped = name.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+        const regex = new RegExp(`${escaped}\\s+is\\s+(?:an|a)\\s+([^\\.\\n]+)`, 'i');
+        const match = content.match(regex);
+        if (match && match[1]) {
+            return match[1].trim();
+        }
+        return null;
+    }
+
+    private isDirectoryQuery(query?: string): boolean {
+        if (!query) return false;
+        const normalized = query.toLowerCase();
+        return (
+            normalized.includes('list employees') ||
+            normalized.includes('all employees') ||
+            normalized.includes('show employees') ||
+            normalized.includes('employee directory') ||
+            normalized.includes('team directory') ||
+            normalized.includes('list team') ||
+            normalized.includes('team members') ||
+            normalized.includes('everyone')
+        );
+    }
+
+    private extractQueryTokens(query?: string): string[] {
+        if (!query) return [];
+        const stopwords = new Set([
+            'who', 'has', 'have', 'with', 'the', 'and', 'for', 'a', 'an', 'of', 'to', 'in', 'on', 'at',
+            'is', 'are', 'list', 'show', 'find', 'employees', 'employee', 'team', 'members', 'me',
+            'please', 'need', 'want', 'looking', 'that', 'those', 'these', 'which', 'whose', 'from',
+            'certification', 'certifications', 'skill', 'skills', 'project', 'projects',
+            'experience', 'years', 'year', 'yrs', 'yr', 'exp',
+        ]);
+        return query
+            .toLowerCase()
+            .replace(/[^a-z0-9\s]/g, ' ')
+            .split(/\s+/)
+            .map((token) => token.trim())
+            .filter((token) => {
+                if (!token) return false;
+                if (stopwords.has(token)) return false;
+                const hasLetter = /[a-z]/.test(token);
+                if (!hasLetter) return false;
+                return token.length >= 2;
+            });
+    }
+
+    private hasTokenMatch(haystack: string, tokens: string[]): boolean {
+        if (!haystack || tokens.length === 0) return false;
+        const normalized = haystack.toLowerCase();
+        return tokens.some((token) => normalized.includes(token));
+    }
+
+    private extractMinExperienceYears(query?: string): number | null {
+        if (!query) return null;
+        const normalized = query.toLowerCase();
+        if (!normalized.includes('experience') && !normalized.includes('exp')) return null;
+        const match = normalized.match(/(\d+)\s*\+?\s*(?:years?|yrs?|yr|y)\b/);
+        if (!match) return null;
+        const value = Number.parseInt(match[1], 10);
+        return Number.isFinite(value) ? value : null;
+    }
+
+    private buildEvidenceText(rawContent: string, meta: any, draft: { certifications: Set<string>; projects: Set<string>; skills: Set<string> }): string {
+        const parts: string[] = [];
+        if (rawContent) parts.push(rawContent);
+        const add = (value: any) => {
+            if (typeof value === 'string' && value.trim()) {
+                parts.push(value.trim());
+            }
+        };
+        add(meta?.certification_name);
+        add(meta?.project_name);
+        add(meta?.job_title);
+        add(meta?.company_name);
+        add(meta?.client_name);
+        if (Array.isArray(meta?.certifications)) {
+            parts.push(meta.certifications.join(' '));
+        }
+        if (draft.certifications.size) parts.push(Array.from(draft.certifications).join(' '));
+        if (draft.projects.size) parts.push(Array.from(draft.projects).join(' '));
+        if (draft.skills.size) parts.push(Array.from(draft.skills).join(' '));
+        return parts.join(' ').toLowerCase();
+    }
+
+    private async safeLogQuery(
+        userId: string | undefined,
+        queryText: string,
+        extractedEntities: Record<string, any> | null,
+        resultCount: number,
+        executionTimeMs: number,
+    ) {
+        try {
+            const record = this.searchQueryRepo.create({
+                user: userId ? ({ user_id: userId } as User) : null,
+                queryText,
+                queryIntent: null,
+                extractedEntities,
+                resultCount,
+                executionTimeMs,
+            });
+            await this.searchQueryRepo.save(record);
+        } catch (err) {
+            this.logger.warn(`Failed to log AI search query: ${err?.message ?? err}`);
         }
     }
 }

@@ -13,8 +13,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
       - ./database/init-scripts:/docker-entrypoint-initdb.d
     ports:
-      # Expose on 5435 to avoid clashing with any local Postgres already on 5432
-      - "5435:5432"
+      - "5432:5432"
     networks:
       - cv-network
   pgadmin:
@@ -96,6 +95,13 @@ services:
       - ollama-data:/root/.ollama
     networks:
       - cv-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   # Helper to pull models automatically
   ollama-pull-models:

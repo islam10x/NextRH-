@@ -20,10 +20,13 @@ import {
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
+import { Calendar as CalendarPicker } from '@/components/ui/calendar';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { teamService } from '@/services/team.service';
 import { trainingService } from '@/services/training.service';
 import { toast } from 'sonner';
 import { Training } from '@/types';
+import { format } from 'date-fns';
 
 const ManagerDashboard: React.FC = () => {
   const { user } = useAuth();
@@ -175,7 +178,7 @@ const ManagerDashboard: React.FC = () => {
                 Assign Training
               </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-lg">
+            <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Assign Training</DialogTitle>
                 <DialogDescription>
@@ -199,16 +202,39 @@ const ManagerDashboard: React.FC = () => {
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="dueDate">Due date (yyyy-mm-dd)</Label>
-                  <Input
-                    id="dueDate"
-                    type="text"
-                    inputMode="numeric"
-                    pattern="\\d{4}-\\d{2}-\\d{2}"
-                    placeholder="yyyy-mm-dd"
-                    value={dueDate}
-                    onChange={(e) => setDueDate(e.target.value)}
-                  />
+                  <Label htmlFor="dueDate">Due date</Label>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        id="dueDate"
+                        type="button"
+                        variant="outline"
+                        className="w-full justify-start text-left font-normal"
+                      >
+                        <Calendar className="mr-2 h-4 w-4" />
+                        {dueDate ? format(new Date(dueDate), 'yyyy-MM-dd') : 'Pick a date'}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <CalendarPicker
+                        mode="single"
+                        selected={dueDate ? new Date(dueDate) : undefined}
+                        onSelect={(date) => {
+                          if (!date) {
+                            setDueDate('');
+                            return;
+                          }
+                          setDueDate(format(date, 'yyyy-MM-dd'));
+                        }}
+                        disabled={(date) => {
+                          const today = new Date();
+                          today.setHours(0, 0, 0, 0);
+                          return date < today;
+                        }}
+                        initialFocus
+                      />
+                    </PopoverContent>
+                  </Popover>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="description">Description</Label>
@@ -278,25 +304,25 @@ const ManagerDashboard: React.FC = () => {
             <div className="space-y-3">
               {assignedTrainings.map((t) => (
                 <div key={t.id} className="border rounded-lg p-3 flex flex-col gap-1">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <GraduationCap className="h-4 w-4 text-primary" />
-                    <span className="font-medium">{t.name}</span>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <GraduationCap className="h-4 w-4 text-primary" />
+                      <span className="font-medium">{t.name}</span>
+                    </div>
+                    <Badge variant="secondary">{t.status || 'assigned'}</Badge>
                   </div>
-                  <Badge variant="secondary">{t.status || 'assigned'}</Badge>
-                </div>
-                {t.assigneeName && <p className="text-xs text-muted-foreground">Assignee: {t.assigneeName}</p>}
-                {t.provider && <p className="text-xs text-muted-foreground">{t.provider}</p>}
-                <div className="flex gap-3 text-xs text-muted-foreground flex-wrap">
-                  <span>Assigned: {t.assignedAt ? new Date(t.assignedAt).toLocaleDateString() : 'n/a'}</span>
-                  <span>Due: {t.dueDate ? new Date(t.dueDate).toISOString().slice(0, 10) : 'n/a'}</span>
-                  {t.trainingUrl && (
-                    <a href={t.trainingUrl} target="_blank" rel="noreferrer" className="text-primary hover:underline">
-                      Link
-                    </a>
-                  )}
-                  {t.description && <span>Comment: {t.description}</span>}
-                </div>
+                  {t.assigneeName && <p className="text-xs text-muted-foreground">Assignee: {t.assigneeName}</p>}
+                  {t.provider && <p className="text-xs text-muted-foreground">{t.provider}</p>}
+                  <div className="flex gap-3 text-xs text-muted-foreground flex-wrap">
+                    <span>Assigned: {t.assignedAt ? new Date(t.assignedAt).toLocaleDateString() : 'n/a'}</span>
+                    <span>Due: {t.dueDate ? new Date(t.dueDate).toISOString().slice(0, 10) : 'n/a'}</span>
+                    {t.trainingUrl && (
+                      <a href={t.trainingUrl} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                        Link
+                      </a>
+                    )}
+                    {t.description && <span>Comment: {t.description}</span>}
+                  </div>
                 </div>
               ))}
             </div>

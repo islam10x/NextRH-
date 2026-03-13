@@ -116,12 +116,22 @@ export interface Notification {
 }
 
 // AI Chat
+export interface ChatSearchResult {
+  name: string;
+  role?: string;
+  experienceYears?: number;
+  companies?: string[];
+  certifications?: string[];
+  projects?: string[];
+  skills?: string[];
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
-  results?: Employee[];
+  results?: ChatSearchResult[];
 }
 
 // Dashboard Stats
@@ -193,6 +203,7 @@ export interface CvCertification {
   issueDate: string | null;
   expirationDate: string | null;
   status: 'active' | 'expired' | 'expiring_soon';
+  isUploaded?: boolean;
 }
 
 export interface CvProject {

@@ -14,7 +14,8 @@ export type NotificationType =
     | 'cv_update_needed'
     | 'training_assigned'
     | 'training_started'
-    | 'training_completed';
+    | 'training_completed'
+    | 'team_added';
 
 @Entity('notifications')
 export class Notification {
@@ -25,7 +26,7 @@ export class Notification {
     @JoinColumn({ name: 'user_id' })
     user: User;
 
-    @Column({ name: 'notification_type', type: 'enum', enum: ['certification_expiring', 'certification_expired', 'cv_update_needed', 'training_assigned', 'training_started', 'training_completed'] })
+    @Column({ name: 'notification_type', type: 'enum', enum: ['certification_expiring', 'certification_expired', 'cv_update_needed', 'training_assigned', 'training_started', 'training_completed', 'team_added'] })
     notificationType: NotificationType;
 
     @Column({ length: 255 })

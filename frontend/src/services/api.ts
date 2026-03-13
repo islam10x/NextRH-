@@ -5,8 +5,8 @@ const api = axios.create({
     headers: {
         'Content-Type': 'application/json',
     },
-    // Required so the browser sends the HTTPOnly refresh_token cookie automatically
-    withCredentials: true,
+    // Keep credentials disabled by default; refresh now uses per-tab session storage.
+    withCredentials: false,
 });
 
 // Request Interceptor: Attach Token
@@ -67,17 +67,59 @@ api.interceptors.response.use(
             isRefreshing = true;
 
             try {
+                const sessionId = sessionStorage.getItem('session_id');
+                const refreshToken = sessionStorage.getItem('refresh_token');
+                if (!sessionId || !refreshToken) {
+                    processQueue(new Error('MISSING_SESSION'), null);
+                    window.dispatchEvent(new Event('auth:logout'));
+                    return Promise.reject(error);
+                }
+
                 // Use a fresh axios instance to avoid interceptor loop.
-                // The HTTPOnly cookie is sent automatically (withCredentials).
                 const response = await axios.post(
                     `${api.defaults.baseURL}/auth/refresh`,
-                    {},
-                    { withCredentials: true },
+                    { session_id: sessionId, refresh_token: refreshToken },
                 );
 
-                const { access_token } = response.data;
+                const { access_token, user, refresh_token, session_id } = response.data as {
+                    access_token: string;
+                    refresh_token?: string;
+                    session_id?: string;
+                    user?: any;
+                };
+                const storedUserRaw = sessionStorage.getItem('user');
+                const storedUser = storedUserRaw ? (JSON.parse(storedUserRaw) as { id?: string; role?: string }) : null;
+                const refreshedUserId = user?.id || user?.user_id;
+                const refreshedUserRole = user?.role;
+
+                if (storedUser?.id && refreshedUserId && storedUser.id !== refreshedUserId) {
+                    // Prevent cross-tab session swap due to shared refresh cookie.
+                    sessionStorage.removeItem('access_token');
+                    sessionStorage.removeItem('user');
+                    sessionStorage.removeItem('refresh_token');
+                    sessionStorage.removeItem('session_id');
+                    processQueue(new Error('SESSION_MISMATCH'), null);
+                    window.dispatchEvent(new Event('auth:logout'));
+                    return Promise.reject(error);
+                }
+
+                if (storedUser?.role && refreshedUserRole && storedUser.role !== refreshedUserRole) {
+                    sessionStorage.removeItem('access_token');
+                    sessionStorage.removeItem('user');
+                    sessionStorage.removeItem('refresh_token');
+                    sessionStorage.removeItem('session_id');
+                    processQueue(new Error('SESSION_ROLE_MISMATCH'), null);
+                    window.dispatchEvent(new Event('auth:logout'));
+                    return Promise.reject(error);
+                }
 
                 sessionStorage.setItem('access_token', access_token);
+                if (refresh_token) {
+                    sessionStorage.setItem('refresh_token', refresh_token);
+                }
+                if (session_id) {
+                    sessionStorage.setItem('session_id', session_id);
+                }
 
                 // Update defaults for future requests
                 api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;

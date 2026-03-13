@@ -7,6 +7,8 @@ import { v4 as uuidv4 } from 'uuid';
 import * as bcrypt from 'bcryptjs';
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
+import { TeamsService } from '../teams/teams.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class InvitationsService {
@@ -17,13 +19,38 @@ export class InvitationsService {
         private invitationTokenRepository: Repository<InvitationToken>,
         private usersService: UsersService,
         private mailService: MailService,
+        private teamsService: TeamsService,
+        private notificationsService: NotificationsService,
     ) { }
 
     async inviteEmployee(email: string, role: string, invitedByUserId: string) {
         // 1. Check if user exists
         const existingUser = await this.usersService.findByEmail(email);
+        const manager = await this.usersRepository.findOne({ where: { user_id: invitedByUserId } });
+
         if (existingUser) {
-            throw new BadRequestException('User with this email already exists');
+            if (existingUser.status === UserStatus.ACTIVE || existingUser.status === UserStatus.PENDING_INVITATION) {
+                await this.teamsService.ensureMembership(invitedByUserId, existingUser.user_id);
+                
+                // Notifications and Emails
+                const managerName = manager ? `${manager.firstName || ''} ${manager.lastName || ''}`.trim() : 'a manager';
+                
+                await this.notificationsService.create({
+                    userId: existingUser.user_id,
+                    type: 'team_added',
+                    title: `Added to ${managerName}'s Team`,
+                    message: `You have been added to ${managerName}'s team.`,
+                });
+
+                if (existingUser.status === UserStatus.ACTIVE) {
+                    await this.mailService.sendTeamAddedEmail(existingUser.email, managerName, manager?.email);
+                }
+
+                return { message: existingUser.status === UserStatus.ACTIVE 
+                    ? 'User is already registered and has been added to your team' 
+                    : 'User is already pending registration and has been added to your team' };
+            }
+            throw new BadRequestException('User account is disabled or in an invalid state');
         }
 
         // 2. Create User (Pending)
@@ -37,6 +64,9 @@ export class InvitationsService {
         });
 
         const savedUser = await this.usersRepository.save(newUser);
+
+        // Add to manager's team
+        await this.teamsService.ensureMembership(invitedByUserId, savedUser.user_id);
 
         // 3. Generate Secret and Hash
         const secret = uuidv4(); // This is the plain secret
@@ -57,7 +87,6 @@ export class InvitationsService {
         const fullToken = `${savedToken.token_id}.${secret}`;
 
         // 4. Send Email (using BID Manager details)
-        const manager = await this.usersRepository.findOne({ where: { user_id: invitedByUserId } });
         const senderName = manager ? `${manager.firstName} ${manager.lastName}` : undefined;
         const senderEmail = manager ? manager.email : undefined;
 

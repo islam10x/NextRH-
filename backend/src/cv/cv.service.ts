@@ -7,7 +7,7 @@ import { User } from '../users/entities/user.entity';
 import { EmployeeProfile } from '../employees/entities/employee-profile.entity';
 import { WorkExperience } from '../employees/entities/work-experience.entity';
 import { Education } from '../employees/entities/education.entity';
-import { Certification } from '../certifications/entities/certification.entity';
+import { Certification, CertificationStatus } from '../certifications/entities/certification.entity';
 import { Project } from '../projects/entities/project.entity';
 import { ProjectParticipant } from '../projects/entities/participant.entity';
 import { FileStorageService } from '../file-storage/file-storage.service';
@@ -82,6 +82,23 @@ export class CvService {
             ? rawAddress.split(/\s+(?:Exp[eé]rience|Formation|Certif|Comp[eé]tence|Skills|Education|Project)/i)[0].trim() || null
             : null;
         const cvFilename = rawMeta?.filename || null;
+        const fallbackCertifications = this.extractCertificationsFromMetadata(rawMeta);
+        const toDateString = (value: Date | string | null | undefined) => {
+            if (!value) return null;
+            if (value instanceof Date) {
+                return isNaN(value.getTime()) ? null : value.toISOString().split('T')[0];
+            }
+            if (typeof value === 'string') {
+                const trimmed = value.trim();
+                if (!trimmed) return null;
+                const parsed = new Date(trimmed);
+                if (!isNaN(parsed.getTime())) {
+                    return parsed.toISOString().split('T')[0];
+                }
+                return trimmed;
+            }
+            return null;
+        };
 
         if (!profile) {
             return {
@@ -97,7 +114,7 @@ export class CvService {
                 lastUpdate: metaData.last_update ?? null,
                 workExperiences: [],
                 educations: [],
-                certifications: [],
+                certifications: fallbackCertifications,
                 projects: [],
             };
         }
@@ -106,8 +123,8 @@ export class CvService {
             id: exp.experience_id,
             jobTitle: exp.jobTitle,
             companyName: exp.companyName,
-            startDate: exp.startDate ? exp.startDate.toISOString().split('T')[0] : null,
-            endDate: exp.endDate ? exp.endDate.toISOString().split('T')[0] : null,
+            startDate: toDateString(exp.startDate),
+            endDate: toDateString(exp.endDate),
             isCurrent: exp.isCurrent,
             description: exp.description,
         }));
@@ -117,17 +134,21 @@ export class CvService {
             degree: edu.degree,
             fieldOfStudy: edu.fieldOfStudy,
             institution: edu.institution,
-            endDate: edu.endDate ? new Date(edu.endDate).toISOString().split('T')[0] : null,
+            endDate: toDateString(edu.endDate),
         }));
 
-        const certifications = (profile.certifications ?? []).map((cert) => ({
+        let certifications = (profile.certifications ?? []).map((cert) => ({
             id: cert.certification_id,
             name: cert.certificationName,
             issuingOrganization: cert.issuingOrganization,
-            issueDate: cert.issueDate ? new Date(cert.issueDate).toISOString().split('T')[0] : null,
-            expirationDate: cert.expirationDate ? new Date(cert.expirationDate).toISOString().split('T')[0] : null,
+            issueDate: toDateString(cert.issueDate),
+            expirationDate: toDateString(cert.expirationDate),
             status: cert.status,
+            isUploaded: cert.isUploaded ?? false,
         }));
+        if (certifications.length === 0 && fallbackCertifications.length > 0) {
+            certifications = fallbackCertifications;
+        }
 
         const projects = (profile.projectParticipations ?? []).map((p) => ({
             id: p.participant_id,
@@ -137,8 +158,8 @@ export class CvService {
             description: p.description || p.project?.projectDescription || '',
             role: p.role,
             skills: (p.project?.skills ?? []).map((s) => s.skillName),
-            startDate: p.project?.startDate ? new Date(p.project.startDate).toISOString().split('T')[0] : null,
-            endDate: p.project?.endDate ? new Date(p.project.endDate).toISOString().split('T')[0] : null,
+            startDate: toDateString(p.project?.startDate),
+            endDate: toDateString(p.project?.endDate),
         }));
 
         return {
@@ -157,6 +178,86 @@ export class CvService {
             certifications,
             projects,
         };
+    }
+
+    private extractCertificationsFromMetadata(rawMeta: any) {
+        const structuredCerts = rawMeta?.structured_data?.certifications;
+        const topLevelCerts = rawMeta?.certifications;
+        const rawCerts = [
+            ...(Array.isArray(structuredCerts) ? structuredCerts : []),
+            ...(Array.isArray(topLevelCerts) ? topLevelCerts : []),
+        ];
+        if (rawCerts.length === 0) {
+            return [];
+        }
+
+        const formatDate = (value: Date | null) => (value ? value.toISOString().split('T')[0] : null);
+        const deduped = new Map<
+            string,
+            { name: string; issuer: string | null; issue: Date | null; expiration: Date | null; isUploaded: boolean }
+        >();
+
+        rawCerts.forEach((cert: any) => {
+            if (cert == null) return;
+            if (typeof cert === 'string') {
+                const name = cert.trim();
+                if (!name) return;
+                if (!deduped.has(name)) {
+                    deduped.set(name, { name, issuer: null, issue: null, expiration: null, isUploaded: false });
+                }
+                return;
+            }
+            if (typeof cert !== 'object') return;
+
+            const name = String(cert.name || cert.certification_name || '').trim();
+            if (!name) return;
+
+            const issuer =
+                String(cert.issuer || cert.issuing_organization || cert.issuingOrganization || '').trim() ||
+                null;
+            const issueDate = normalizeFlexibleDate(
+                cert.date_obtained || cert.issue_date || cert.issueDate,
+                'start',
+            );
+            const expirationDate = normalizeFlexibleDate(
+                cert.expiration_date || cert.expiry_date || cert.expirationDate || cert.expiration,
+                'end',
+            );
+            const isUploaded = Boolean(cert.is_uploaded ?? cert.isUploaded);
+
+            const existing = deduped.get(name);
+            if (!existing) {
+                deduped.set(name, { name, issuer, issue: issueDate, expiration: expirationDate, isUploaded });
+                return;
+            }
+            if (!existing.issuer && issuer) existing.issuer = issuer;
+            if (!existing.issue && issueDate) existing.issue = issueDate;
+            if (!existing.expiration && expirationDate) existing.expiration = expirationDate;
+            if (!existing.isUploaded && isUploaded) existing.isUploaded = true;
+        });
+
+        const now = new Date();
+        const expiringSoonCutoff = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+        return Array.from(deduped.values()).map((cert, index) => {
+            let status: CertificationStatus = CertificationStatus.ACTIVE;
+            if (cert.expiration) {
+                if (cert.expiration < now) {
+                    status = CertificationStatus.EXPIRED;
+                } else if (cert.expiration <= expiringSoonCutoff) {
+                    status = CertificationStatus.EXPIRING_SOON;
+                }
+            }
+            return {
+                id: `meta-${index}`,
+                name: cert.name,
+                issuingOrganization: cert.issuer,
+                issueDate: formatDate(cert.issue),
+                expirationDate: formatDate(cert.expiration),
+                status,
+                isUploaded: cert.isUploaded,
+            };
+        });
     }
 
     /**
@@ -350,25 +451,56 @@ export class CvService {
         }
 
         // 6. Populate Certifications
-        if (data.structured_data?.certifications) {
-            await this.certificationRepository.delete({ profile: { profile_id: profile.profile_id } });
+        await this.certificationRepository
+            .createQueryBuilder()
+            .delete()
+            .from(Certification)
+            .where('profile_id = :profileId', { profileId: profile.profile_id })
+            .andWhere('is_uploaded = false')
+            .execute();
 
-            const certifications = data.structured_data.certifications.map((cert: any) => {
-                const newCert = new Certification();
-                newCert.profile = profile;
-                newCert.certificationName = cert.name || 'Unknown Certification';
-                newCert.issuingOrganization = cert.issuer || cert.issuing_organization || null;
-                newCert.issueDate = normalizeFlexibleDate(
-                    cert.date_obtained || cert.issue_date || cert.issueDate,
-                    'start',
-                );
-                newCert.expirationDate = normalizeFlexibleDate(
-                    cert.expiration_date || cert.expiry_date || cert.expirationDate,
-                    'end',
-                );
-                return newCert;
-            });
-            await this.certificationRepository.save(certifications);
+        const normalizeCertName = (value: string) =>
+            (value || '')
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .replace(/[^a-zA-Z0-9]+/g, ' ')
+                .trim()
+                .toLowerCase();
+
+        const uploadedCerts = await this.certificationRepository.find({
+            where: { profile: { profile_id: profile.profile_id }, isUploaded: true },
+        });
+        const uploadedNames = new Set(
+            uploadedCerts.map((cert) => normalizeCertName(cert.certificationName || ''))
+        );
+
+        if (Array.isArray(data.structured_data?.certifications)) {
+            const certifications = data.structured_data.certifications
+                .map((cert: any) => {
+                    const name = cert?.name || 'Unknown Certification';
+                    if (uploadedNames.has(normalizeCertName(name))) {
+                        return null;
+                    }
+                    const newCert = new Certification();
+                    newCert.profile = profile;
+                    newCert.certificationName = name;
+                    newCert.issuingOrganization = cert.issuer || cert.issuing_organization || null;
+                    newCert.issueDate = normalizeFlexibleDate(
+                        cert.date_obtained || cert.issue_date || cert.issueDate,
+                        'start',
+                    );
+                    newCert.expirationDate = normalizeFlexibleDate(
+                        cert.expiration_date || cert.expiry_date || cert.expirationDate,
+                        'end',
+                    );
+                    newCert.isUploaded = false;
+                    return newCert;
+                })
+                .filter(Boolean) as Certification[];
+
+            if (certifications.length > 0) {
+                await this.certificationRepository.save(certifications);
+            }
         }
 
         // 7. Populate Projects

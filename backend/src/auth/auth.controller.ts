@@ -25,13 +25,6 @@ import { CurrentUser } from './decorators/current-user.decorator';
 import { UserRole } from '../users/entities/user.entity';
 
 const REFRESH_COOKIE = 'refresh_token';
-const COOKIE_OPTIONS = {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax' as const,
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in ms
-    path: '/',
-};
 
 @Controller('auth')
 export class AuthController {
@@ -68,34 +61,52 @@ export class AuthController {
 
     @Post('login')
     @HttpCode(HttpStatus.OK)
-    async login(@Body() loginDto: LoginDto, @Res({ passthrough: true }) res: Response) {
-        const { accessToken, refreshToken, user } = await this.authService.login(loginDto);
-        res.cookie(REFRESH_COOKIE, refreshToken, COOKIE_OPTIONS);
-        return { access_token: accessToken, user };
+    async login(
+        @Body() loginDto: LoginDto,
+        @Req() req: Request,
+        @Res({ passthrough: true }) res: Response,
+    ) {
+        const { accessToken, refreshToken, sessionId, user } = await this.authService.login(loginDto, {
+            userAgent: req.headers['user-agent'],
+            ipAddress: req.ip,
+        });
+        // Clear legacy cookie to avoid cross-tab collisions.
+        res.clearCookie(REFRESH_COOKIE, { path: '/' });
+        return {
+            access_token: accessToken,
+            refresh_token: refreshToken,
+            session_id: sessionId,
+            user,
+        };
     }
 
     @Post('refresh')
     @HttpCode(HttpStatus.OK)
-    async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
-        const token: string | undefined = req.cookies?.[REFRESH_COOKIE];
-        if (!token) {
+    async refresh(
+        @Body() body: { session_id?: string; refresh_token?: string },
+        @Req() req: Request,
+    ) {
+        const sessionId = body?.session_id;
+        const refreshToken = body?.refresh_token;
+        if (!sessionId || !refreshToken) {
             throw new UnauthorizedException('No refresh token provided');
         }
-        const result = await this.authService.refreshToken(token);
-        const newRefresh: string | undefined = (result as any)._refreshToken;
-        if (newRefresh) {
-            res.cookie(REFRESH_COOKIE, newRefresh, COOKIE_OPTIONS);
-        }
-        const { _refreshToken: _removed, ...response } = result as any;
-        return response;
+        return this.authService.refreshToken(sessionId, refreshToken, {
+            userAgent: req.headers['user-agent'],
+            ipAddress: req.ip,
+        });
     }
 
     @Post('logout')
     @UseGuards(JwtAuthGuard)
     @HttpCode(HttpStatus.OK)
-    async logout(@CurrentUser() user: any, @Res({ passthrough: true }) res: Response) {
+    async logout(
+        @CurrentUser() user: any,
+        @Body() body: { session_id?: string },
+        @Res({ passthrough: true }) res: Response,
+    ) {
         res.clearCookie(REFRESH_COOKIE, { path: '/' });
-        return this.authService.logout(user);
+        return this.authService.logout(user, body?.session_id);
     }
 
     @Get('profile')

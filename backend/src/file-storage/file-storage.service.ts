@@ -14,6 +14,16 @@ export interface EmployeeMetadata {
     last_update: string;
 }
 
+type CertificationMetadataEntry = {
+    name: string;
+    issuer?: string;
+    issue_date?: string;
+    date_obtained?: string;
+    expiration?: string;
+    is_uploaded?: boolean;
+    credential_id?: string;
+};
+
 @Injectable()
 export class FileStorageService {
     private readonly logger = new Logger(FileStorageService.name);
@@ -98,10 +108,21 @@ export class FileStorageService {
         try {
             const raw = await fs.readFile(metadataPath, 'utf8');
             const parsed = JSON.parse(raw);
+            const rawCertifications = Array.isArray(parsed.certifications)
+                ? parsed.certifications
+                : [];
+            const certificationNames = rawCertifications
+                .map((cert: any) => {
+                    if (typeof cert === 'string') return cert;
+                    if (cert && typeof cert === 'object') return cert.name || cert.certification_name || '';
+                    return '';
+                })
+                .map((value: string) => value.trim())
+                .filter((value: string) => value.length > 0);
             return {
                 name: parsed.name || fallbackName,
                 skills: parsed.skills || [],
-                certifications: parsed.certifications || [],
+                certifications: certificationNames,
                 experience_years: parsed.experience_years || 0,
                 last_update: parsed.last_update || this.currentDate(),
             };
@@ -203,34 +224,124 @@ export class FileStorageService {
             return output;
         };
 
+        const normalizeKey = (value: string) =>
+            value
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .toLowerCase()
+                .trim();
+
+        const toCertificationEntry = (
+            cert: any,
+            forceUploaded?: boolean
+        ): CertificationMetadataEntry | null => {
+            if (cert == null) return null;
+            if (typeof cert === 'string') {
+                const name = cert.trim();
+                if (!name) return null;
+                return { name, is_uploaded: Boolean(forceUploaded) };
+            }
+            if (typeof cert !== 'object') return null;
+
+            const name = String(cert.name || cert.certification_name || '').trim();
+            if (!name) return null;
+
+            const isUploaded = forceUploaded ?? Boolean(cert.is_uploaded ?? cert.isUploaded);
+            const issuer = String(
+                cert.issuer || cert.issuing_organization || cert.issuingOrganization || ''
+            ).trim();
+            const issueDate = String(
+                cert.issue_date || cert.date_obtained || cert.issueDate || ''
+            ).trim();
+            const dateObtained = String(
+                cert.date_obtained || cert.dateObtained || ''
+            ).trim();
+            const expiration = String(
+                cert.expiration || cert.expiration_date || cert.expiry_date || cert.expirationDate || ''
+            ).trim();
+            const credentialId = String(
+                cert.credential_id || cert.credentialId || ''
+            ).trim();
+
+            const entry: CertificationMetadataEntry = {
+                name,
+                is_uploaded: Boolean(isUploaded),
+            };
+
+            if (issuer) entry.issuer = issuer;
+            if (issueDate) entry.issue_date = issueDate;
+            if (dateObtained && dateObtained !== issueDate) entry.date_obtained = dateObtained;
+            if (expiration) entry.expiration = expiration;
+            if (credentialId) entry.credential_id = credentialId;
+            return entry;
+        };
+
+        const mergeCertifications = (
+            base: CertificationMetadataEntry[],
+            incoming: CertificationMetadataEntry[]
+        ) => {
+            const merged = new Map<string, CertificationMetadataEntry>();
+
+            const upsert = (entry: CertificationMetadataEntry) => {
+                const key = normalizeKey(entry.name);
+                if (!key) return;
+                const existing = merged.get(key);
+                if (!existing) {
+                    merged.set(key, { ...entry });
+                    return;
+                }
+                merged.set(key, {
+                    ...existing,
+                    name: existing.name || entry.name,
+                    issuer: existing.issuer || entry.issuer,
+                    issue_date: existing.issue_date || entry.issue_date,
+                    date_obtained: existing.date_obtained || entry.date_obtained,
+                    expiration: existing.expiration || entry.expiration,
+                    credential_id: existing.credential_id || entry.credential_id,
+                    is_uploaded: Boolean(existing.is_uploaded || entry.is_uploaded),
+                });
+            };
+
+            base.forEach(upsert);
+            incoming.forEach(upsert);
+            return Array.from(merged.values());
+        };
+
         // Keep top-level skills aligned with structured_data.skills for UI/API consumers.
         const rawSkills = Array.isArray(parsedData?.structured_data?.skills)
             ? parsedData.structured_data.skills
             : [];
         const dedupedSkills = dedupeTextList(rawSkills);
 
-        const existingCertifications = Array.isArray(existingMetadata?.certifications)
-            ? existingMetadata.certifications.map((cert: any) => {
-                if (typeof cert === 'string') return cert;
-                if (cert && typeof cert === 'object') return cert.name || '';
-                return '';
-            })
+        const existingCertificationsRaw = Array.isArray(existingMetadata?.certifications)
+            ? existingMetadata.certifications
             : [];
-        const parsedCertifications = Array.isArray(parsedData?.structured_data?.certifications)
-            ? parsedData.structured_data.certifications.map((cert: any) => {
-                if (typeof cert === 'string') return cert;
-                if (cert && typeof cert === 'object') return cert.name || '';
-                return '';
-            })
-            : [];
-        const dedupedCertifications = dedupeTextList([...existingCertifications, ...parsedCertifications]);
+        const existingCertifications = existingCertificationsRaw
+            .map((cert: any) => toCertificationEntry(cert))
+            .filter(Boolean) as CertificationMetadataEntry[];
+
+        const verifiedCertifications = existingCertifications.filter((cert) => cert.is_uploaded);
+
+        const parsedCertificationsRaw = [
+            ...(Array.isArray(parsedData?.structured_data?.certifications)
+                ? parsedData.structured_data.certifications
+                : []),
+            ...(Array.isArray(parsedData?.certifications) ? parsedData.certifications : []),
+        ];
+        const parsedCertifications = parsedCertificationsRaw
+            .map((cert: any) => toCertificationEntry(cert, false))
+            .filter(Boolean) as CertificationMetadataEntry[];
+
+        // Keep only verified (uploaded) certifications from prior metadata,
+        // then add the newly parsed CV certifications.
+        const mergedCertifications = mergeCertifications(verifiedCertifications, parsedCertifications);
 
         const enhancedMetadata = {
             ...existingMetadata,
             ...cleanedData,
             name: fullName,
             skills: dedupedSkills,
-            certifications: dedupedCertifications,
+            certifications: mergedCertifications,
             experience_years: typeof existingMetadata.experience_years === 'number' ? existingMetadata.experience_years : 0,
             last_update: new Date().toISOString(),
         };
@@ -268,7 +379,14 @@ export class FileStorageService {
 
     async addCertificationToMetadata(
         userId: string,
-        certData: { name: string; issuer?: string; issue_date?: string; date_obtained?: string; expiration?: string }
+        certData: {
+            name: string;
+            issuer?: string;
+            issue_date?: string;
+            date_obtained?: string;
+            expiration?: string;
+            credential_id?: string;
+        }
     ) {
         const baseDir = await this.findBaseDirByOwner(userId);
         if (!baseDir) {
@@ -303,7 +421,14 @@ export class FileStorageService {
             // Normalize existing entries to objects { name, issuer?, issue_date?, expiration? }
             metadata.certifications = metadata.certifications.map((cert: any) => {
                 if (typeof cert === 'string') {
-                    return { name: cert };
+                    return { name: cert, is_uploaded: false };
+                }
+                if (cert && typeof cert === 'object') {
+                    return {
+                        ...cert,
+                        name: cert.name || cert.certification_name || '',
+                        is_uploaded: Boolean(cert.is_uploaded ?? cert.isUploaded),
+                    };
                 }
                 return cert;
             });
@@ -320,6 +445,8 @@ export class FileStorageService {
                 issue_date: certData.issue_date,
                 date_obtained: certData.date_obtained ?? certData.issue_date,
                 expiration: certData.expiration,
+                credential_id: certData.credential_id,
+                is_uploaded: true,
             };
 
             if (existingIndex >= 0) {
@@ -327,6 +454,7 @@ export class FileStorageService {
                 metadata.certifications[existingIndex] = {
                     ...current,
                     ...certificationPayload,
+                    is_uploaded: Boolean(current.is_uploaded || certificationPayload.is_uploaded),
                 };
             } else {
                 metadata.certifications.push(certificationPayload);
