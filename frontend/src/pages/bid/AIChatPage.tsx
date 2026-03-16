@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
-import { searchEmployees } from '@/data/mockData';
-import { ChatMessage, Employee } from '@/types';
+import api from '@/services/api';
+import { ChatMessage, ChatSearchResult } from '@/types';
 import { Send, Bot, User, Sparkles, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -15,29 +15,83 @@ const suggestedQueries = [
   "List employees with Kubernetes skills",
 ];
 
+const MAX_MESSAGES = 50;
+
+type RagChatResponse = {
+  answer?: string | null;
+  results?: ChatSearchResult[];
+};
+
 const AIChatPage: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
+  const sessionId = useMemo(() => {
+    const key = 'rag_session_id';
+    const existing = sessionStorage.getItem(key);
+    if (existing) return existing;
+    const generated =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    sessionStorage.setItem(key, generated);
+    return generated;
+  }, []);
+
+  const chatStorageKey = useMemo(() => `rag_chat_history_${sessionId}`, [sessionId]);
+
+  useEffect(() => {
+    const raw = sessionStorage.getItem(chatStorageKey);
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        setMessages(parsed as ChatMessage[]);
+      }
+    } catch {
+      // Ignore corrupted storage entries
+    }
+  }, [chatStorageKey]);
+
+  useEffect(() => {
+    sessionStorage.setItem(chatStorageKey, JSON.stringify(messages));
+  }, [chatStorageKey, messages]);
+
   const handleSend = async (query: string) => {
     if (!query.trim()) return;
     const userMsg: ChatMessage = { id: Date.now().toString(), role: 'user', content: query, timestamp: new Date().toISOString() };
-    setMessages(prev => [...prev, userMsg]);
+    setMessages(prev => [...prev, userMsg].slice(-MAX_MESSAGES));
     setInput('');
     setIsLoading(true);
 
-    await new Promise(r => setTimeout(r, 1500));
-    const results = searchEmployees(query);
-    const aiMsg: ChatMessage = {
-      id: (Date.now() + 1).toString(),
-      role: 'assistant',
-      content: `I found ${results.length} employee(s) matching your criteria.`,
-      timestamp: new Date().toISOString(),
-      results: results.slice(0, 5),
-    };
-    setMessages(prev => [...prev, aiMsg]);
-    setIsLoading(false);
+    try {
+      const response = await api.post<RagChatResponse>('/rag/chat', {
+        message: query,
+        session_id: sessionId,
+      });
+      const answer = response.data?.answer || 'I could not find results for that query.';
+      const results = response.data?.results || [];
+      const aiMsg: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: answer,
+        timestamp: new Date().toISOString(),
+        results,
+      };
+      setMessages(prev => [...prev, aiMsg].slice(-MAX_MESSAGES));
+    } catch (err) {
+      console.error('RAG chat failed', err);
+      const aiMsg: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: 'Sorry, I could not reach the AI service. Please try again.',
+        timestamp: new Date().toISOString(),
+      };
+      setMessages(prev => [...prev, aiMsg].slice(-MAX_MESSAGES));
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -73,12 +127,61 @@ const AIChatPage: React.FC = () => {
               <div className={cn("max-w-[80%] rounded-lg p-3", msg.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted')}>
                 <p className="text-sm">{msg.content}</p>
                 {msg.results && msg.results.length > 0 && (
-                  <div className="mt-3 space-y-2">
-                    {msg.results.map((emp) => (
-                      <div key={emp.id} className="p-2 rounded bg-background/50 text-foreground">
-                        <p className="font-medium text-sm">{emp.name}</p>
-                        <p className="text-xs text-muted-foreground">{emp.title} • {emp.yearsOfExperience}y</p>
-                        <div className="flex gap-1 mt-1">{emp.skills.slice(0, 3).map(s => <Badge key={s} variant="secondary" className="text-xs">{s}</Badge>)}</div>
+                  <div className="mt-3 space-y-3">
+                    {msg.results.map((result, idx) => (
+                      <div key={`${result.name}-${idx}`} className="rounded-lg border border-border/60 bg-background/60 p-3 text-foreground">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="font-medium text-sm break-words">{result.name}</p>
+                            {result.role && (
+                              <p className="text-xs text-muted-foreground">{result.role}</p>
+                            )}
+                          </div>
+                          {typeof result.experienceYears === 'number' && (
+                            <span className="text-xs text-muted-foreground">{result.experienceYears}y exp</span>
+                          )}
+                        </div>
+                        {result.companies && result.companies.length > 0 && (
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            Companies: {result.companies.join(', ')}
+                          </p>
+                        )}
+                        {result.skills && result.skills.length > 0 && (
+                          <div className="mt-2">
+                            <p className="text-xs text-muted-foreground">Skills</p>
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {result.skills.map((skill) => (
+                                <Badge key={skill} variant="secondary" className="text-xs">
+                                  {skill}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {result.certifications && result.certifications.length > 0 && (
+                          <div className="mt-2">
+                            <p className="text-xs text-muted-foreground">Certifications</p>
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {result.certifications.map((cert) => (
+                                <Badge key={cert} variant="outline" className="text-xs">
+                                  {cert}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {result.projects && result.projects.length > 0 && (
+                          <div className="mt-2">
+                            <p className="text-xs text-muted-foreground">Projects</p>
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {result.projects.map((project) => (
+                                <Badge key={project} variant="outline" className="text-xs">
+                                  {project}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>

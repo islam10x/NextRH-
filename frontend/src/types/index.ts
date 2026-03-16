@@ -1,5 +1,5 @@
 // User Roles
-export type UserRole = 'employee' | 'manager' | 'bid_manager';
+export type UserRole = 'employee' | 'team_manager' | 'bid_manager';
 
 export interface User {
   id: string;
@@ -27,15 +27,27 @@ export interface Certification {
   documentUrl?: string;
 }
 
+export type TrainingStatus = 'assigned' | 'in_progress' | 'completed';
+
 // Training
 export interface Training {
   id: string;
-  employeeId: string;
+  employeeId?: string;
   name: string;
-  provider: string;
-  completionDate: string;
-  duration: string;
+  provider?: string;
+  certificationName?: string;
+  certificationIssueDate?: string;
+  completionDate?: string;
+  duration?: string;
   description?: string;
+  status?: TrainingStatus;
+  dueDate?: string;
+  trainingUrl?: string;
+  proofFilePath?: string;
+  proofUrl?: string;
+  assigneeName?: string;
+  assignedAt?: string;
+  startDate?: string;
 }
 
 // Project
@@ -98,15 +110,29 @@ export interface Notification {
   type: 'info' | 'warning' | 'error' | 'success';
   read: boolean;
   createdAt: string;
+  notificationType?: string;
+  relatedEntityType?: string;
+  relatedEntityId?: string;
+  priority?: number;
 }
 
 // AI Chat
+export interface ChatSearchResult {
+  name: string;
+  role?: string;
+  experienceYears?: number;
+  companies?: string[];
+  certifications?: string[];
+  projects?: string[];
+  skills?: string[];
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
-  results?: Employee[];
+  results?: ChatSearchResult[];
 }
 
 // Dashboard Stats
@@ -151,4 +177,61 @@ export interface ParsedEmployeeMetadata {
   certifications: ParsedCertificationMetadata[];
   experience_years: number;
   last_update: string;
+}
+
+export interface CvWorkExperience {
+  id: string;
+  jobTitle: string;
+  companyName: string;
+  startDate: string | null;
+  endDate: string | null;
+  isCurrent: boolean;
+  description: string;
+}
+
+export interface CvEducation {
+  id: string;
+  degree: string;
+  fieldOfStudy: string | null;
+  institution: string | null;
+  endDate: string | null;
+}
+
+export interface CvCertification {
+  id: string;
+  name: string;
+  issuingOrganization: string | null;
+  issueDate: string | null;
+  expirationDate: string | null;
+  status: 'active' | 'expired' | 'expiring_soon';
+  isUploaded?: boolean;
+}
+
+export interface CvProject {
+  id: string;
+  name: string;
+  generatedTitle: string | null;
+  client: string | null;
+  description: string;
+  role: string | null;
+  skills: string[];
+  startDate: string | null;
+  endDate: string | null;
+}
+
+export interface CvProfile {
+  name: string;
+  email: string;
+  phone: string | null;
+  address: string | null;
+  cvFilename: string | null;
+  currentPosition: string | null;
+  professionalSummary: string | null;
+  totalExperienceYears: number | null;
+  skills: string[];
+  lastUpdate: string | null;
+  workExperiences: CvWorkExperience[];
+  educations: CvEducation[];
+  certifications: CvCertification[];
+  projects: CvProject[];
 }

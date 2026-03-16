@@ -12,6 +12,7 @@ CREATE TYPE parsing_status AS ENUM ('pending', 'processing', 'completed', 'faile
 CREATE TYPE template_type AS ENUM ('standard', 'canadian', 'eu', 'client_specific');
 CREATE TYPE notification_type AS ENUM ('certification_expiring', 'certification_expired', 'cv_update_needed');
 CREATE TYPE alert_type AS ENUM ('expiring_soon', 'expired', 'renewal_reminder');
+CREATE TYPE training_status AS ENUM ('assigned', 'in_progress', 'completed');
 
 -- =============================================
 -- TABLES
@@ -111,6 +112,7 @@ CREATE TABLE IF NOT EXISTS certifications (
     status certification_status DEFAULT 'active',
     file_path VARCHAR(512),
     credential_id VARCHAR(255),
+    is_uploaded BOOLEAN DEFAULT FALSE,
     uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -120,10 +122,17 @@ CREATE TABLE IF NOT EXISTS training_sessions (
     profile_id UUID REFERENCES employee_profiles(profile_id) ON DELETE CASCADE,
     training_title VARCHAR(255) NOT NULL,
     provider VARCHAR(255),
+    training_url TEXT,
+    due_date DATE,
     start_date DATE,
     end_date DATE,
     duration_hours INT,
-    description TEXT NOT NULL
+    description TEXT,
+    status training_status DEFAULT 'assigned',
+    proof_file_path VARCHAR(512),
+    assigned_by VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 11. projects
@@ -236,7 +245,22 @@ CREATE TABLE IF NOT EXISTS ai_search_queries (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 21. metadata_snapshots
+-- 21. auth_sessions
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    session_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(user_id) ON DELETE CASCADE,
+    refresh_token_hash VARCHAR(255) NOT NULL,
+    user_agent TEXT,
+    ip_address VARCHAR(45),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TIMESTAMP,
+    expires_at TIMESTAMP,
+    revoked_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions(user_id);
+
+-- 22. metadata_snapshots
 CREATE TABLE IF NOT EXISTS metadata_snapshots (
     snapshot_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     profile_id UUID REFERENCES employee_profiles(profile_id) ON DELETE CASCADE,
@@ -278,7 +302,7 @@ EXECUTE FUNCTION update_certification_status_func();
 CREATE OR REPLACE FUNCTION update_timestamp_func() 
 RETURNS TRIGGER AS $$
 BEGIN
-    NEW.updated_at = CURRENT_TIMESTAMP;
+    NEW.updated_at := CURRENT_TIMESTAMP;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;

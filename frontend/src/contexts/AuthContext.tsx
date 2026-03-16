@@ -18,7 +18,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const savedUser = sessionStorage.getItem('user');
     return savedUser ? JSON.parse(savedUser) : null;
   });
-  const [isLoading, setIsLoading] = useState(!sessionStorage.getItem('access_token'));
+  const [isLoading, setIsLoading] = useState(true);
 
   const mapBackendUserToFrontend = (backendUser: any): User => {
     const firstName = backendUser.firstName || '';
@@ -31,7 +31,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       id: backendUser.id || backendUser.user_id,
       email: backendUser.email,
       name,
-      role: backendUser.role === 'team_manager' ? 'manager' : backendUser.role as UserRole,
+      role: backendUser.role as UserRole,
       title: 'Employee', // Default, backend doesn't send yet
       yearsOfExperience: 0 // Default
     };
@@ -63,6 +63,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
       sessionStorage.setItem('access_token', response.access_token);
       sessionStorage.setItem('refresh_token', response.refresh_token);
+      sessionStorage.setItem('session_id', response.session_id);
+      // refresh_token is stored as an HTTPOnly cookie by the server — no JS access needed
 
       const mappedUser = mapBackendUserToFrontend(response.user);
       sessionStorage.setItem('user', JSON.stringify(mappedUser));

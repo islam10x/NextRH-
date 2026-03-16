@@ -86,6 +86,13 @@ const TeamMembersPage: React.FC = () => {
       return;
     }
 
+    // Basic email regex validation to ensure it has a TLD
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    if (!emailRegex.test(inviteEmail)) {
+      toast.error('Please enter a valid business email address (e.g., name@company.com)');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       await api.post('/auth/invite', { email: inviteEmail, role: 'employee' });
@@ -264,9 +271,9 @@ const TeamMembersPage: React.FC = () => {
                             variant="outline"
                             size="sm"
                             className="w-full mt-4 text-xs font-medium gap-1.5"
-                            onClick={() => navigate(`/manager/member/${u.user_id}`)}
+                            onClick={() => navigate(`/employee/cv-preview/${u.user_id}`)}
                           >
-                            <Eye className="h-4 w-4" /> View Profile
+                            <Eye className="h-4 w-4" /> View CV
                           </Button>
                         </CardContent>
                       </Card>

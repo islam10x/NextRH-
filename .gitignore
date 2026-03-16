@@ -17,6 +17,8 @@ env/
 uploads/
 templates/
 backend/file-storage/
+qdrant_local/
+ai-service/qdrant_local/
 # Environment variables
 .env
 .env.*
@@ -30,6 +32,10 @@ backend/file-storage/
 .idea/
 *.swp
 *.swo
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
 
 # OS
 .DS_Store
@@ -38,3 +44,10 @@ Thumbs.db
 # Logs
 logs/
 *.log
+
+# Diagrams
+Docs/UseCaseDiagrams.puml
+Docs/SequenceDiagrams.puml
+# Local Vector DB
+qdrant_local/
+ai-service/qdrant_local/

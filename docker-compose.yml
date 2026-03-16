@@ -44,6 +44,12 @@ services:
       DB_NAME: cv_management
       DATABASE_URL: postgresql://postgres:${DB_PASSWORD}@postgres:5432/cv_management
       JWT_SECRET: ${JWT_SECRET}
+      CLAMAV_ENABLED: 'true'
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: 3310
+      CLAMAV_TIMEOUT: 60000
+      N8N_WEBHOOK_URL: http://cv-n8n:5678/webhook/nextrh-notification
+      N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:-nextrh-n8n-secret}
     volumes:
       - ./file-storage:/app/file-storage
       - ./backend/src:/app/src    # Hot reload in dev
@@ -55,17 +61,85 @@ services:
       - cv-network
     command: npm run start:dev
 
-  # Python AI Service (Optional - add when needed)
+  # Python AI Service
   ai-service:
     build: ./ai-service
     container_name: cv-ai-service
+    environment:
+      - DATABASE_URL=postgresql+psycopg://postgres:${DB_PASSWORD}@postgres:5432/cv_management
+      - OLLAMA_URL=http://ollama:11434
+      - RAG_CHAT_MODEL=${RAG_CHAT_MODEL:-qwen2.5:1.5b-instruct}
+      - RAG_CHAT_TIMEOUT_SECONDS=${RAG_CHAT_TIMEOUT_SECONDS:-30}
     volumes:
       - ./file-storage:/app/file-storage
+      - ./ai-service/app:/app/app
     ports:
       - "8000:8000"
     networks:
       - cv-network
+    depends_on:
+      - postgres
+      - ollama
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Ollama for LLM and Embeddings
+  ollama:
+    image: ollama/ollama:latest
+    container_name: cv-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - cv-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Helper to pull models automatically
+  ollama-pull-models:
+    image: curlimages/curl:latest
+    container_name: cv-ollama-puller
+    networks:
+      - cv-network
+    depends_on:
+      - ollama
+    entrypoint: /bin/sh
+    command:
+      - "-c"
+      - |
+        echo "Waiting for Ollama to start..."
+        until curl -s http://ollama:11434/api/tags > /dev/null; do sleep 2; done
+        echo "Pulling Qwen 2.5 1.5B instruct..."
+        curl -X POST http://ollama:11434/api/pull -d '{"name": "qwen2.5:1.5b-instruct"}'
+        echo "Pulling Nomic Embed Text..."
+        curl -X POST http://ollama:11434/api/pull -d '{"name": "nomic-embed-text"}'
+        echo "Models pulled successfully."
+
+  # ClamAV daemon for antivirus scanning
+  clamav:
+    image: clamav/clamav:stable
+    container_name: cv-clamav
+    volumes:
+      - clamav-db:/var/lib/clamav
+    networks:
+      - cv-network
+    ports:
+      - "3310:3310"
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan --version || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
 
   # React Frontend
   frontend:
@@ -81,9 +155,30 @@ services:
       - cv-network
     command: npm run dev
 
+  # n8n Workflow Automation
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: cv-n8n
+    restart: unless-stopped
+    environment:
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=Europe/Paris
+    volumes:
+      - n8n-data:/home/node/.n8n
+    ports:
+      - "5678:5678"
+    networks:
+      - cv-network
+
 networks:
   cv-network:
     driver: bridge
 
 volumes:
   postgres-data:
+  ollama-data:
+  clamav-db:
+  n8n-data:

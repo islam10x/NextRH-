@@ -24,6 +24,7 @@ import {
   GraduationCap,
   Eye,
   Users,
+  Clock3,
   Search,
   MessageSquare,
   FileOutput,
@@ -61,6 +62,7 @@ const managerNavItems: NavItem[] = [
   { title: 'Team Dashboard', url: '/manager/dashboard', icon: LayoutDashboard },
   { title: 'Team Members', url: '/manager/team', icon: Users },
   { title: 'Certification Tracking', url: '/manager/certifications', icon: Award },
+  { title: 'Trainings', url: '/manager/trainings', icon: Clock3 },
 ];
 
 const bidManagerNavItems: NavItem[] = [
@@ -79,7 +81,7 @@ export const AppSidebar: React.FC = () => {
     switch (user?.role) {
       case 'employee':
         return employeeNavItems;
-      case 'manager':
+      case 'team_manager':
         return managerNavItems;
       case 'bid_manager':
         return bidManagerNavItems;
@@ -92,7 +94,7 @@ export const AppSidebar: React.FC = () => {
     switch (user?.role) {
       case 'employee':
         return 'Employee Portal';
-      case 'manager':
+      case 'team_manager':
         return 'Team Manager';
       case 'bid_manager':
         return 'BID Manager';

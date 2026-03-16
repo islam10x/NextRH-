@@ -20,6 +20,8 @@ setup(
         "pydantic",
         "httpx",
         "opencv-python-headless",
-        "Pillow"
+        "Pillow",
+        "openai",
+        "langchain-openai",
     ],
 )

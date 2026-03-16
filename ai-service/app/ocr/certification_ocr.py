@@ -1,6 +1,6 @@
 """
-OCR-based Certification Parser using Tesseract (with EasyOCR fallback)
-Extracts certification name, issuer, and expiration date from images
+OCR-based Certification Parser using Tesseract (with EasyOCR and LLM extraction)
+Extracts certification name, issuer, expiration date, and credential ID from images
 """
 import pytesseract
 import cv2
@@ -8,17 +8,20 @@ import numpy as np
 from PIL import Image
 import re
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 import logging
 import fitz  # PyMuPDF for PDF support
-import io
+import time
 
 import os
 import easyocr
 from app.config import settings
+from app.utils.llm import resolve_llm_model, parse_json_object
+from langchain_ollama import ChatOllama
 
 logger = logging.getLogger(__name__)
 
+MAX_IMG_SIDE = 1600  # px
 
 class CertificationOCR:
     """OCR service for parsing certification documents"""
@@ -46,10 +49,16 @@ class CertificationOCR:
             "The Open Group","TOGAF","Object Management Group","OMG","ISTQB","EXIN",
             "Blockchain Council","Kryterion","Pearson VUE","Global Knowledge","Learning Tree",
             "edX","Coursera","Udacity","Google Developers","Android","Meta Blueprint","HubSpot",
-            "Shopify","Zendesk","Twilio","Kaggle","DeepLearning.AI"
+            "Shopify","Zendesk","Twilio","Kaggle","DeepLearning.AI",'DELL'
         ]
         
-        self.use_easyocr = settings.OCR_ENGINE == "easyocr"
+        # Choose OCR engine from settings (default is tesseract)
+        engine = (settings.OCR_ENGINE or "tesseract").strip().lower()
+        if engine not in ("tesseract", "easyocr", "both"):
+            logger.warning(f"Unknown OCR_ENGINE '{settings.OCR_ENGINE}', falling back to tesseract.")
+            engine = "tesseract"
+
+        self.use_easyocr = engine in ("easyocr", "both")
         self.reader = None
         
         if self.use_easyocr:
@@ -57,15 +66,30 @@ class CertificationOCR:
             logger.info("Initializing EasyOCR reader...")
             try:
                  # Initialize for English and French (common in CVs)
-                 self.reader = easyocr.Reader(['en', 'fr'], gpu=False)
+                 try:
+                     import torch
+                     gpu_available = torch.cuda.is_available()
+                 except Exception:
+                     gpu_available = False
+
+                 self.reader = easyocr.Reader(['en', 'fr'], gpu=gpu_available)
+                 logger.info(f"EasyOCR engine ready (gpu={gpu_available}).")
             except Exception as e:
                  logger.error(f"Failed to initialize EasyOCR: {e}")
                  self.reader = None
+                 self.use_easyocr = False
+                 self._check_tesseract()
         else:
             # Check Tesseract
             self._check_tesseract()
 
-    def parse_certification(self, file_path: str, filename: str) -> Dict[str, Any]:
+    def parse_certification(
+        self, 
+        file_path: str, 
+        filename: str, 
+        user_first_name: Optional[str] = None, 
+        user_last_name: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Parse certification document and extract structured data
         
@@ -77,23 +101,81 @@ class CertificationOCR:
             Dictionary with certification details
         """
         try:
-            # Extract text based on file type
-            if filename.lower().endswith('.pdf'):
-                text = self._extract_text_from_pdf(file_path)
+            # Extract text with Tesseract first
+            is_pdf = filename.lower().endswith('.pdf')
+            embedded_text_len = 0
+            if is_pdf:
+                text, embedded_text_len = self._extract_text_from_pdf(file_path, use_easyocr=False)
             else:
-                text = self._extract_text_from_image(file_path)
+                text = self._extract_text_from_image_with_fallbacks(file_path, use_easyocr=False)
             
-            logger.info(f"Extracted text length: {len(text)} characters")
+            logger.info(f"Extracted text length (tesseract): {len(text)} characters")
             
-            # Parse the extracted text
-            cert_data = self._parse_text(text)
+            # Parse the extracted text using rules
+            cleaned_text = self._clean_ocr_noise(text)
+            cert_data = self._parse_text(cleaned_text)
+            issue_date = self._extract_issue_date_basic(cleaned_text)
+
+            # Decide if EasyOCR should run (based on file type + missing info)
+            if self._should_run_easyocr(is_pdf, embedded_text_len, cert_data, issue_date, len(text)):
+                if self.use_easyocr and self.reader:
+                    logger.info("Running EasyOCR due to missing info after Tesseract.")
+                    if is_pdf:
+                        text, _ = self._extract_text_from_pdf(file_path, use_easyocr=True)
+                    else:
+                        text = self._extract_text_from_image_with_fallbacks(file_path, use_easyocr=True)
+                    logger.info(f"Extracted text length with EasyOCR: {len(text)} characters")
+                    cleaned_text = self._clean_ocr_noise(text)
+                    cert_data = self._parse_text(cleaned_text)
+                    issue_date = self._extract_issue_date_basic(cleaned_text)
+                else:
+                    logger.info("EasyOCR requested but not available; skipping.")
+            # Always run LLM extraction for accuracy (no fallback gating).
+            llm_data = {}
+            if cleaned_text:
+                if not self._is_likely_certificate(cleaned_text):
+                    logger.info("Document failed certificate gatekeeper check, but LLM is forced on for accuracy.")
+                else:
+                    logger.info("Running LLM extraction (forced for accuracy).")
+                llm_start = time.perf_counter()
+                llm_data = self._llm_fallback_extraction(cleaned_text)
+                llm_elapsed = time.perf_counter() - llm_start
+                logger.info(f"LLM extraction completed in {llm_elapsed:.2f}s")
+            else:
+                logger.info("No OCR text extracted; skipping LLM extraction.")
+
+            # Merge LLM results (LLM takes precedence when it provides a value)
+            if llm_data:
+                # Trust the LLM for the name if it provided one, as it's better at understanding context than regex
+                llm_name = llm_data.get('name')
+                if llm_name and llm_name.lower() not in ["null", "none", "", "unknown"]:
+                    cert_data['name'] = llm_name
+                    
+                llm_issuer = llm_data.get('issuer')
+                if llm_issuer and not cert_data['issuer']:
+                    cert_data['issuer'] = llm_issuer
+                    
+                llm_expiry = llm_data.get('expiration_date')
+                if llm_expiry:
+                    cert_data['expiration'] = llm_expiry
+                    
+                llm_cred_id = llm_data.get('credential_id')
+                if llm_cred_id:
+                    cert_data['credential_id'] = llm_cred_id
             
+            if user_first_name and user_last_name:
+                is_verified = self._verify_user_name(cleaned_text, user_first_name, user_last_name)
+                if not is_verified:
+                    logger.warning(f"Name verification failed for {user_first_name} {user_last_name} (soft warning, not blocking)")
+
             return {
                 'success': True,
                 'certification_name': cert_data['name'],
                 'issuer': cert_data['issuer'],
                 'expiration_date': cert_data['expiration'],
-                'raw_text': text[:500]  # First 500 chars for debugging
+                'issue_date': issue_date,
+                'credential_id': cert_data.get('credential_id'),
+                'raw_text': cleaned_text[:1000]  # First 1000 chars for debugging
             }
             
         except Exception as e:
@@ -105,6 +187,71 @@ class CertificationOCR:
                 'issuer': None,
                 'expiration_date': None
             }
+            
+    def _is_likely_certificate(self, text: str) -> bool:
+        """Heuristic to identify certificate-like text (informational only)."""
+        if not text or len(text) < 20:
+            return False
+            
+        text_lower = text.lower()
+        
+        # Must contain at least one strong keyword
+        strong_keywords = [
+            "certif", "diplôm", "diplom", "attestation", "achievement", 
+            "completion", "issued", "license", "credential"
+        ]
+        
+        has_strong_keyword = any(kw in text_lower for kw in strong_keywords)
+        
+        # Or must contain a known tech issuer
+        has_known_issuer = any(issuer.lower() in text_lower for issuer in self.known_issuers)
+        
+        return has_strong_keyword or has_known_issuer
+
+    def _llm_fallback_extraction(self, text: str) -> Dict[str, Any]:
+        """Use local LLM to extract fields from messy certificate text."""
+        # Security: Truncate text to prevent massive context window processing
+        truncated_text = text[:3000]
+        
+        prompt = f"""
+You are an expert OCR document parser. Extract the certification details from the following raw text.
+Focus on identifying the actual name of the credential or course, skipping generic preambles like "certifies that...".
+Return ONLY a valid JSON object with EXACTLY these three keys:
+- "name": The exact name of the certification, course, or diploma. (e.g. "Compellent Storage Architect Technical")
+- "issuer": The organization that issued it. (e.g. "DELL", "Amazon Web Services"). If unknown, use null.
+- "expiration_date": The expiration date in YYYY-MM-DD format. If an issue date is present anywhere in the document (e.g. Jun 30, 2011) and the text mentions a separate validity period (e.g. "Valid for one year"), you MUST mathematically add the duration to the issue date and output the calculated expiration date (e.g. 2012-06-30). If it does not expire or is unknown, use null.
+- "credential_id": The credential ID, validation number, or certificate ID. If unknown, use null.
+
+Do NOT include markdown formatting, backticks, or any other text. Just the JSON object.
+
+RAW TEXT:
+{truncated_text}
+"""
+        try:
+            # We configure a timeout so a bad prompt doesn't hang the worker
+            model_name = resolve_llm_model()
+            llm = ChatOllama(
+                model=model_name,
+                base_url=settings.OLLAMA_URL,
+                temperature=0.0,
+                timeout=8.0  # tighter timeout to avoid long hangs
+            )
+
+            invoke_start = time.perf_counter()
+            response = llm.invoke(prompt)
+            invoke_elapsed = time.perf_counter() - invoke_start
+            logger.info(f"LLM invoke completed in {invoke_elapsed:.2f}s (model={model_name})")
+            content = str(getattr(response, "content", "") or "").strip()
+            
+            data = parse_json_object(content)
+            if data and isinstance(data, dict):
+                return data
+                
+            return {}
+            
+        except Exception as e:
+            logger.error(f"LLM Fallback extraction failed: {str(e)}")
+            return {}
     
     def _check_tesseract(self):
         """Check if Tesseract is installed and reachable"""
@@ -130,42 +277,134 @@ class CertificationOCR:
                 logger.error("Tesseract not found. Please install Tesseract-OCR or switch to EasyOCR.")
 
     def _extract_text_from_image(self, file_path: str) -> str:
-        """Extract text from image using Tesseract or EasyOCR"""
+        """Extract text from image using Tesseract"""
         try:
             # Use PIL to read image (handles unicode paths correctly on Windows)
             with Image.open(file_path) as pil_img:
                 # Convert to numpy array
                 img = np.array(pil_img)
-            
-            # EasyOCR path
-            if self.use_easyocr and self.reader:
-                logger.info(f"Using EasyOCR for image: {file_path}")
-                result = self.reader.readtext(img, detail=0)
-                return " ".join(result)
-            
+                img = self._downscale_image(img)
+
             # Tesseract path
             # Convert RGB to BGR for OpenCV if needed
             if len(img.shape) == 3:
                 img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                
+            # Check orientation and fix rotation
+            try:
+                self._check_tesseract()
+                osd = pytesseract.image_to_osd(img)
+                match = re.search(r'Rotate: (\d+)', osd)
+                if match:
+                    angle = int(match.group(1))
+                    if angle == 90:
+                        img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+                    elif angle == 180:
+                        img = cv2.rotate(img, cv2.ROTATE_180)
+                    elif angle == 270:
+                        img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                    if angle != 0:
+                        logger.info(f"Rotated image by {angle} degrees.")
+            except Exception as e:
+                logger.debug(f"OSD rotation detection skipped or failed: {str(e)}")
                 
             # Convert to grayscale
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             
             # Apply thresholding
             gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-            
+
+            # Upscale to improve OCR on small text
+            gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+
+            # Invert if background is darker than text (common with white text on dark banner)
+            if np.mean(gray) < 128:
+                gray = cv2.bitwise_not(gray)
+
             # Perform OCR
             self._check_tesseract()
-            text = pytesseract.image_to_string(gray)
+            text = pytesseract.image_to_string(gray, config="--oem 3 --psm 6")
             return text
 
         except Exception as e:
             logger.error(f"Error extracting text from image {file_path}: {e}")
             raise
 
-    def _extract_text_from_pdf(self, file_path: str) -> str:
+    def _extract_text_from_image_with_fallbacks(self, file_path: str, use_easyocr: Optional[bool] = None) -> str:
+        """
+        More resilient image extraction:
+        - Run Tesseract psm6
+        - Run Tesseract psm4 (sparse text)
+        - Run EasyOCR (if enabled)
+        """
+        texts = []
+
+        if use_easyocr is None:
+            use_easyocr = self.use_easyocr
+
+        # Tesseract psm6
+        try:
+            t6 = self._extract_text_from_image(file_path)
+            texts.append(t6)
+        except Exception as e:
+            logger.warning(f"Tesseract psm6 failed on {file_path}: {e}")
+
+        # Tesseract psm4 (sparse text)
+        try:
+            with Image.open(file_path) as pil_img:
+                img = np.array(pil_img)
+            if len(img.shape) == 3:
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+            gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+            self._check_tesseract()
+            t4 = pytesseract.image_to_string(gray, config="--oem 3 --psm 4")
+            texts.append(t4)
+        except Exception as e:
+            logger.debug(f"Tesseract psm4 fallback failed on {file_path}: {e}")
+
+        # EasyOCR (optional)
+        if use_easyocr and self.reader:
+            try:
+                with Image.open(file_path) as pil_img:
+                    img = np.array(pil_img)
+                    img = self._downscale_image(img)
+                logger.info(f"Using EasyOCR for image: {file_path}")
+                result = self.reader.readtext(img, detail=0, paragraph=True)
+                if result:
+                    easyocr_text = " ".join(result).strip()
+                    if easyocr_text:
+                        texts.append(easyocr_text)
+            except Exception as e:
+                logger.warning(f"EasyOCR failed on {file_path}: {e}")
+
+        # Combine all candidates (best effort)
+        cleaned_texts = [t for t in texts if t and t.strip()]
+        combined = "\n\n--- OCR CANDIDATE ---\n\n".join(cleaned_texts) if len(cleaned_texts) > 1 else (cleaned_texts[0] if cleaned_texts else "")
+        logger.info(f"OCR candidates lengths: {list(map(len,cleaned_texts))} -> combined {len(combined)} chars")
+        return combined
+
+    def _downscale_image(self, img: np.ndarray) -> np.ndarray:
+        """Limit max side to reduce OCR time while preserving aspect ratio."""
+        if img is None:
+            return img
+        h, w = img.shape[:2]
+        max_side = max(h, w)
+        if max_side <= MAX_IMG_SIDE:
+            return img
+        scale = MAX_IMG_SIDE / max_side
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        return cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    def _extract_text_from_pdf(self, file_path: str, use_easyocr: Optional[bool] = None) -> Tuple[str, int]:
         """Extract text from PDF using hybrid approach (embedded text + OCR)"""
         text = ""
+        embedded_text_len_total = 0
+
+        if use_easyocr is None:
+            use_easyocr = self.use_easyocr
         
         try:
             doc = fitz.open(file_path)
@@ -173,20 +412,37 @@ class CertificationOCR:
             for page_num, page in enumerate(doc):
                 # Always extract embedded text first
                 embedded_text = page.get_text("text", sort=True)
+                embedded_text_len_total += len(embedded_text.strip())
                 
                 # Also perform OCR to catch image-based content
                 logger.info(f"Using hybrid extraction for page {page_num}...")
                 # Increase DPI for better OCR quality
-                pix = page.get_pixmap(dpi=400)  # Increased from 300 to 400
+                pix = page.get_pixmap(dpi=320)  # balance quality vs speed
                 img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                 img_array = np.array(img)
+                
+                # Check orientation and fix rotation
+                try:
+                    self._check_tesseract()
+                    osd = pytesseract.image_to_osd(img_array)
+                    match = re.search(r'Rotate: (\d+)', osd)
+                    if match:
+                        angle = int(match.group(1))
+                        if angle == 90:
+                            img_array = cv2.rotate(img_array, cv2.ROTATE_90_CLOCKWISE)
+                        elif angle == 180:
+                            img_array = cv2.rotate(img_array, cv2.ROTATE_180)
+                        elif angle == 270:
+                            img_array = cv2.rotate(img_array, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                        if angle != 0:
+                            logger.info(f"Rotated image by {angle} degrees.")
+                except Exception as e:
+                    logger.debug(f"OSD rotation detection skipped or failed: {str(e)}")
                 
                 # Improved preprocessing for better OCR
                 gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
                 
                 # Try multiple preprocessing approaches and combine results
-                ocr_results = []
-                
                 # Approach 1: Light denoising with adaptive threshold
                 denoised_light = cv2.fastNlMeansDenoising(gray, None, h=5, templateWindowSize=7, searchWindowSize=21)
                 thresh1 = cv2.adaptiveThreshold(denoised_light, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
@@ -195,20 +451,29 @@ class CertificationOCR:
                 # Approach 2: Otsu's thresholding (better for high-contrast documents)
                 _, thresh2 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
                 
-                # Perform OCR on both preprocessed versions
-                if self.use_easyocr and self.reader:
-                    result1 = self.reader.readtext(thresh1, detail=0)
-                    result2 = self.reader.readtext(thresh2, detail=0)
-                    ocr_text = "\n".join(result1) + "\n--- Alternative OCR ---\n" + "\n".join(result2)
-                else:
-                    self._check_tesseract()
-                    # Use different PSM modes for better coverage
-                    config1 = '--psm 3 --oem 3'  # Auto page segmentation
-                    config2 = '--psm 6 --oem 3'  # Assume uniform block of text
-                    
-                    text1 = pytesseract.image_to_string(thresh1, config=config1, lang='fra+eng')
-                    text2 = pytesseract.image_to_string(thresh2, config=config2, lang='fra+eng')
-                    ocr_text = text1 + "\n--- Alternative OCR ---\n" + text2
+                # Perform OCR on both preprocessed versions (Tesseract primary)
+                self._check_tesseract()
+                # Use different PSM modes for better coverage
+                config1 = '--psm 3 --oem 3'  # Auto page segmentation
+                config2 = '--psm 6 --oem 3'  # Assume uniform block of text
+                
+                text1 = pytesseract.image_to_string(thresh1, config=config1, lang='fra+eng')
+                text2 = pytesseract.image_to_string(thresh2, config=config2, lang='fra+eng')
+                ocr_text = text1 + "\n--- Alternative OCR ---\n" + text2
+
+                # EasyOCR (always run when enabled)
+                if use_easyocr and self.reader:
+                    try:
+                        result1 = self.reader.readtext(thresh1, detail=0)
+                        result2 = self.reader.readtext(thresh2, detail=0)
+                        easy_text = "\n".join(result1) + "\n--- Alternative OCR ---\n" + "\n".join(result2)
+                        if easy_text.strip():
+                            ocr_text = (
+                                "TESSERACT OCR:\n" + ocr_text +
+                                "\n\nEASYOCR OCR:\n" + easy_text
+                            )
+                    except Exception as e:
+                        logger.warning(f"EasyOCR PDF OCR failed on page {page_num}: {e}")
                 
                 # Combine both sources intelligently
                 if len(embedded_text.strip()) > 500:
@@ -226,7 +491,7 @@ class CertificationOCR:
             logger.error(f"Error extracting text from PDF: {str(e)}")
             raise
         
-        return text
+        return text, embedded_text_len_total
     
     def _clean_ocr_noise(self, text: str) -> str:
         """Remove common OCR noise and artifacts"""
@@ -254,12 +519,78 @@ class CertificationOCR:
                 clean_lines.append(line)
         
         return '\n'.join(clean_lines)
+
+    def _should_run_easyocr(
+        self,
+        is_pdf: bool,
+        embedded_text_len: int,
+        cert_data: Dict[str, Optional[str]],
+        issue_date: Optional[str],
+        text_len: int
+    ) -> bool:
+        if not self.use_easyocr or not self.reader:
+            return False
+
+        if not self._needs_more_info(cert_data, issue_date, text_len):
+            return False
+
+        if not is_pdf:
+            return True
+
+        # For PDFs, only run EasyOCR when embedded text is sparse (image-based PDF)
+        if embedded_text_len >= 200:
+            logger.info("Skipping EasyOCR for PDF because embedded text looks sufficient.")
+            return False
+        return True
+
+    def _needs_more_info(
+        self,
+        cert_data: Dict[str, Optional[str]],
+        issue_date: Optional[str],
+        text_len: int
+    ) -> bool:
+        """Heuristic to decide if EasyOCR should run after Tesseract."""
+        name = cert_data.get('name') or ""
+        is_unknown = name == "Unknown Certification"
+        name_lower = name.lower()
+        generic_exact = [
+            "certificate of completion",
+            "certificate of achievement",
+            "certification",
+            "certificate",
+            "diploma",
+            "diplôme",
+            "attestation",
+        ]
+        generic_starts = [
+            "id certified through",
+            "valid through",
+            "certificate number",
+            "license number",
+            "credential id",
+            "date ",
+            "issue date",
+            "expiration date",
+        ]
+        is_generic = name_lower in generic_exact or any(name_lower.startswith(prefix) for prefix in generic_starts)
+
+        issuer = cert_data.get('issuer') or ""
+        issuer_in_name = bool(issuer) and (issuer.lower() in name_lower or name_lower in issuer.lower())
+        is_suspicious_name = len(name) > 80 or len(name) < 5 or issuer_in_name
+
+        missing_issuer = not issuer
+        missing_issue_date = not issue_date
+
+        return (
+            is_unknown
+            or is_generic
+            or is_suspicious_name
+            or (missing_issuer and text_len > 50)
+            or missing_issue_date
+        )
     
-    def _parse_text(self, text: str) -> Dict[str, Optional[str]]:
+    def _parse_text(self, cleaned_text: str) -> Dict[str, Optional[str]]:
         """Parse certification details from extracted text"""
-        
-        # Clean OCR noise first
-        cleaned_text = self._clean_ocr_noise(text)
         
         # Extract certification name
         cert_name = self._extract_certification_name(cleaned_text)
@@ -269,17 +600,38 @@ class CertificationOCR:
         
         # Extract expiration date
         expiration = self._extract_expiration_date(cleaned_text)
+
+        # Extract credential ID
+        credential_id = self._extract_credential_id(cleaned_text)
         
         return {
             'name': cert_name,
             'issuer': issuer,
-            'expiration': expiration
+            'expiration': expiration,
+            'credential_id': credential_id
         }
     
     def _extract_certification_name(self, text: str) -> str:
         """Extract certification name from text"""
+        # 0. Priority: <CODE> - <CERTIFICATION TITLE>
+        #   Example: DBSSTT0409WBTT - Dell Blade Server Solutions - Technical
+        dash_match = re.search(r'\b[A-Z0-9]{4,}?\s*-\s*([^-\\n]{3,})', text)
+        if dash_match:
+            candidate = dash_match.group(1).strip()
+            candidate = re.sub(r'\s+', ' ', candidate)
+            candidate = re.sub(r'[.,]$', '', candidate).strip()
+            # Filter generics
+            generic = {
+                'certification course', 'completion certificate', 'training certificate',
+                'certificate of completion', 'has successfully completed', 'certification'
+            }
+            if candidate and candidate.lower() not in generic and len(candidate) > 5:
+                return candidate
+
         # Look for common patterns
         patterns = [
+            # Recognized as a pattern (Highest Priority)
+            r'recognized\s+as\s+(?:a|an)?\s*[:\-]*\s*\n*(?:[|\-]+\s*)*([A-Z][^\n]{10,80}?)(?:\s*\||\n|$)',
             # French Diploma patterns - try to keep the prefix (DIPLOME NATIONAL, etc.)
             r'((?:DIPLOME\s+NATIONAL|DIPLOME|ATTESTATION)\s+(?:D\')?.+?)(?:\s+est|,|$|\n\n)',
             # NSE certifications (Fortinet)
@@ -290,8 +642,8 @@ class CertificationOCR:
             r'(?:Is\s+now\s+a|has\s+achieved)[:\s]*\n*\s*([A-Z][A-Za-z\s]{10,60}?)(?:\n|held\s+on)',
             # Vendor + Certified patterns (e.g., "Sophos Certified Architect")
             r'([A-Z][a-z]+\s+Certified\s+[A-Za-z\s]{5,50}?)(?:\n|held\s+on|$)',
-            # "completion of X" pattern (NVIDIA, Coursera, etc.)
-            r'(?:completion\s+of|completing)[:\s]*\n*\s*([A-Z][^\n]{10,80}?)(?:\n\n|\n[A-Z]|$)',
+            # "completion of X" or "completed the course X" pattern (NVIDIA, Coursera, Dell, etc.)
+            r'(?:completion\s+of|completing|completed\s+(?:the\s+course)?)[:\s]*\n*\s*([A-Z0-9][^\n]{10,80}?)(?:\n\n|\n[A-Z]|$)',
             # Credential patterns - handle multi-line names
             r'credential\s+of[:\s]*\n*\s*([A-Z][^\n]{0,100}(?:\([A-Z]{2,6}\))?)',
             # Look for abbreviations in parentheses (e.g., "Nexpose Certified Administrator (NCA)")
@@ -325,6 +677,10 @@ class CertificationOCR:
                 
                 # Filter out generic phrases that aren't real certification names
                 if name.lower() in ['of achievement', 'of completion', 'of attainment', 'of excellence', 'of competency']:
+                    continue
+                    
+                # Filter out preamble mis-matches
+                if name.lower().endswith("acknowledges that"):
                     continue
                 
                 # Filter out very short matches that are likely just keywords
@@ -440,6 +796,46 @@ class CertificationOCR:
                     logger.info(f"Found explicit expiration date: {normalized}")
                     return normalized
 
+        # 2.5. Look for "Valid for X years" patterns and calculate the date from ANY issue date found
+        validity_match = re.search(r'Valid\s+for\s+(one|two|three|four|five|1|2|3|4|5)\s+year[s]?', text, re.IGNORECASE)
+        if validity_match:
+            years_str = validity_match.group(1).lower()
+            word_to_num = {'one': 1, '1': 1, 'two': 2, '2': 2, 'three': 3, '3': 3, 'four': 4, '4': 4, 'five': 5, '5': 5}
+            years = word_to_num.get(years_str, 1)
+            
+            # Find the first valid date in the text to act as the issue date
+            date_patterns = [
+                r'\w+\s+\d{1,2},?\s+\d{4}',
+                r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}',
+                r'\d{4}[/-]\d{1,2}[/-]\d{1,2}'
+            ]
+            
+            issue_date_str = None
+            for pattern in date_patterns:
+                dates = re.findall(pattern, text)
+                if dates:
+                    issue_date_str = dates[0].strip()
+                    break
+            issue_date_norm = self._normalize_date(issue_date_str)
+            
+            if issue_date_norm:
+                try:
+                    from datetime import datetime
+                    dt = datetime.strptime(issue_date_norm, '%Y-%m-%d')
+                    
+                    # Add the years
+                    try:
+                        exp_dt = dt.replace(year=dt.year + years)
+                    except ValueError:
+                        # Handle leap year Feb 29
+                        exp_dt = dt.replace(year=dt.year + years, day=28)
+                        
+                    calc_date = exp_dt.strftime('%Y-%m-%d')
+                    logger.info(f"Calculated expiration date {calc_date} from issue date {issue_date_norm} + {years} years")
+                    return calc_date
+                except Exception as e:
+                    logger.error(f"Error calculating date: {e}")
+
         # 3. If it's a diploma, don't try to guess an expiration date
         if is_diploma:
             logger.info("Document identified as a diploma. Skipping general date extraction for expiry.")
@@ -500,3 +896,80 @@ class CertificationOCR:
                 continue
         
         return None
+
+    def _extract_credential_id(self, text: str) -> Optional[str]:
+        """Extract credential ID / validation number from text"""
+        patterns = [
+            r'(?:Credential\s+ID|Validation\s+Number|Certificate\s+Number|ID\s+No\.?|ID)[:\s]+([A-Za-z0-9\-]+)(?:\n|$)',
+            r'(?:ID\s+Certifié|Numéro|N°|Ref)[:\s]+([A-Za-z0-9\-]+)(?:\n|$)',
+            # Course codes at the start of lines (like GSTB5362WBTS)
+            r'completed\s+(?:the\s+course)?[:\s]*\n*\s*([A-Z0-9]{8,15})\s+-'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                cred_id = match.group(1).strip()
+                if 5 <= len(cred_id) <= 40:
+                    return cred_id
+                    
+        return None
+
+    def _verify_user_name(self, text: str, first_name: str, last_name: str) -> bool:
+        """Verify if the uploaded certificate belongs to the user via fuzzy matching"""
+        import difflib
+        
+        # Clean up names
+        first = first_name.strip().lower()
+        last = last_name.strip().lower()
+        
+        if not first or not last:
+            return True # Cannot verify
+            
+        full_name = f"{first} {last}"
+        full_name_rev = f"{last} {first}"
+        
+        # Clean text
+        text_lower = text.lower()
+        
+        # Exact match
+        if first in text_lower and last in text_lower:
+            return True
+            
+        # Fuzzy match sliding window
+        words = text_lower.split()
+        name_word_count = len(full_name.split())
+        
+        # Try windows of sizes similar to the person's name length
+        for window_size in [max(1, name_word_count - 1), name_word_count, name_word_count + 1]:
+            for i in range(len(words) - window_size + 1):
+                window = " ".join(words[i:i + window_size])
+                ratio = max(
+                    difflib.SequenceMatcher(None, window, full_name).ratio(),
+                    difflib.SequenceMatcher(None, window, full_name_rev).ratio()
+                )
+                if ratio > 0.75:
+                    return True
+                
+        return False
+
+    def _extract_issue_date_basic(self, text: str) -> Optional[str]:
+        """
+        Quick issue-date extractor: grab the first date-like token and normalize.
+        This is a best-effort helper to ensure we return issue_date for downstream use.
+        """
+        if not text:
+            return None
+        date_patterns = [
+            r'\d{4}[/-]\d{1,2}[/-]\d{1,2}',
+            r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}',
+            r'\w+\s+\d{1,2},?\s+\d{4}',
+        ]
+        for pattern in date_patterns:
+            m = re.search(pattern, text)
+            if m:
+                normalized = self._normalize_date(m.group(0))
+                if normalized:
+                    return normalized
+        return None
+

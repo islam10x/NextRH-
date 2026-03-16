@@ -8,7 +8,7 @@ import { MainLayout } from "@/components/layout";
 import LoginPage from "@/pages/auth/LoginPage";
 import SetupPasswordPage from "@/pages/auth/SetupPasswordPage";
 import { EmployeeDashboard, CVUploadPage, CertificationsPage, TrainingProjectsPage, CVPreviewPage } from "@/pages/employee";
-import { ManagerDashboard, TeamMembersPage, MemberProfilePage, CertificationTrackingPage } from "@/pages/manager";
+import { ManagerDashboard, TeamMembersPage, MemberProfilePage, CertificationTrackingPage, ManagerTrainingsPage } from "@/pages/manager";
 import { BIDDashboard, EmployeeDirectoryPage, AIChatPage, CVGenerationPage } from "@/pages/bid";
 import NotFound from "./pages/NotFound";
 
@@ -32,15 +32,17 @@ const App = () => (
               <Route path="/employee/cv-upload" element={<CVUploadPage />} />
               <Route path="/employee/certifications" element={<CertificationsPage />} />
               <Route path="/employee/training-projects" element={<TrainingProjectsPage />} />
-              <Route path="/employee/cv-preview" element={<CVPreviewPage />} />
+              <Route path="/employee/cv-preview/" element={<CVPreviewPage />} />
+              <Route path="/employee/cv-preview/:employeeId" element={<CVPreviewPage />} />
             </Route>
 
             {/* Manager Routes */}
-            <Route element={<MainLayout requiredRole="manager" />}>
+            <Route element={<MainLayout requiredRole="team_manager" />}>
               <Route path="/manager/dashboard" element={<ManagerDashboard />} />
               <Route path="/manager/team" element={<TeamMembersPage />} />
               <Route path="/manager/member/:memberId" element={<MemberProfilePage />} />
               <Route path="/manager/certifications" element={<CertificationTrackingPage />} />
+              <Route path="/manager/trainings" element={<ManagerTrainingsPage />} />
             </Route>
 
             {/* BID Manager Routes */}

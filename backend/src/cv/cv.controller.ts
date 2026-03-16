@@ -1,6 +1,7 @@
 import {
     Controller,
     Post,
+    Get,
     Body,
     UseGuards,
     UseInterceptors,
@@ -8,6 +9,7 @@ import {
     BadRequestException,
     ParseFilePipeBuilder,
     HttpStatus,
+    Param,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -16,10 +18,22 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { UserRole } from '../users/entities/user.entity';
 import { CvService } from './cv.service';
+import { ALLOWED_UPLOAD_MIME_TYPES, MAX_UPLOAD_BYTES } from '../file-validation/file-validation.constants';
 
 @Controller('cv')
 export class CvController {
     constructor(private readonly cvService: CvService) { }
+
+    /**
+     * Returns the full parsed CV profile for the currently logged-in employee.
+     */
+    @Get('profile/me')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.EMPLOYEE)
+    async getMyProfile(@CurrentUser() user: any) {
+        const userId = user.user_id || user.id;
+        return this.cvService.getMyProfile(userId);
+    }
 
     /**
      * Your Logic: Endpoint for AI parsing service to send structured data
@@ -30,6 +44,14 @@ export class CvController {
     }
 
     /**
+     * One-time backfill: populate project dates from stored metadata.json files
+     */
+    @Post('backfill-project-dates')
+    async backfillProjectDates() {
+        return this.cvService.backfillProjectDates();
+    }
+
+    /**
      * Rania's Logic: Endpoint for employees to upload CV files
      */
     @Post('upload')
@@ -37,15 +59,9 @@ export class CvController {
     @Roles(UserRole.EMPLOYEE)
     @UseInterceptors(
         FileInterceptor('file', {
-            limits: { fileSize: 10 * 1024 * 1024 },
+            limits: { fileSize: MAX_UPLOAD_BYTES },
             fileFilter: (_req, file, cb) => {
-                const allowed = [
-                    'application/pdf',
-                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                    'image/png',
-                    'image/jpeg',
-                ];
-                if (!allowed.includes(file.mimetype)) {
+                if (!ALLOWED_UPLOAD_MIME_TYPES.includes((file.mimetype || '').toLowerCase())) {
                     return cb(new BadRequestException('Unsupported file type'), false);
                 }
                 return cb(null, true);
@@ -55,7 +71,7 @@ export class CvController {
     async uploadCv(
         @UploadedFile(
             new ParseFilePipeBuilder()
-                .addMaxSizeValidator({ maxSize: 10 * 1024 * 1024 })
+                .addMaxSizeValidator({ maxSize: MAX_UPLOAD_BYTES })
                 .addFileTypeValidator({
                     fileType:
                         /^(application\/pdf|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|image\/png|image\/jpeg)$/i,
@@ -71,5 +87,15 @@ export class CvController {
 
         const userId = user.user_id || user.id;
         return this.cvService.saveEmployeeCv(userId, file);
+    }
+
+    /**
+     * Endpoint for managers to view employee CV profiles by employee ID
+     */
+    @Get('profile/:employeeId')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
+    async getEmployeeProfile(@Param('employeeId') employeeId: string) {
+        return this.cvService.getMyProfile(employeeId);
     }
 }

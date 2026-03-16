@@ -25,9 +25,15 @@ export class Project {
     @Column({ name: 'client_name', length: 255, nullable: true })
     clientName: string;
 
-    @Column({ name: 'project_year', length: 10, nullable: true })
-    projectYear: string;
-
     @Column({ name: 'project_description', type: 'text', nullable: true })
     projectDescription: string;
+
+    @Column({ name: 'start_date', type: 'date', nullable: true })
+    startDate: Date | null;
+
+    @Column({ name: 'end_date', type: 'date', nullable: true })
+    endDate: Date | null;
+
+    @Column({ name: 'generated_title', length: 255, nullable: true })
+    generatedTitle: string | null;
 }

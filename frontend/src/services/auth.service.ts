@@ -4,6 +4,7 @@ import { User, UserRole } from '@/types';
 export interface AuthResponse {
     access_token: string;
     refresh_token: string;
+    session_id: string;
     user: {
         id: string;
         email: string;
@@ -21,11 +22,13 @@ export const authService = {
 
     async logout(): Promise<void> {
         try {
-            await api.post('/auth/logout');
+            const sessionId = sessionStorage.getItem('session_id');
+            await api.post('/auth/logout', { session_id: sessionId });
         } finally {
             sessionStorage.removeItem('access_token');
-            sessionStorage.removeItem('refresh_token');
             sessionStorage.removeItem('user');
+            sessionStorage.removeItem('refresh_token');
+            sessionStorage.removeItem('session_id');
         }
     },
 
