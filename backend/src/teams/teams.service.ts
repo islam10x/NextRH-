@@ -52,6 +52,10 @@ export class TeamsService {
         }));
     }
 
+    async countAll(): Promise<number> {
+        return this.teamRepo.count();
+    }
+
     async getManagersForEmployee(employeeUserId: string): Promise<string[]> {
         const rows = await this.teamMemberRepo
             .createQueryBuilder('tm')

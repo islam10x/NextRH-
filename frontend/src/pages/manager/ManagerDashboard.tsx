@@ -3,9 +3,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { StatusBadge } from '@/components/common';
-import { mockEmployees, mockTeams, getCertificationStats, getTeamMembers } from '@/data/mockData';
-import { Users, Award, AlertTriangle, Calendar, ChevronRight, TrendingUp, Plus, Link as LinkIcon, GraduationCap } from 'lucide-react';
+import { Users, Award, AlertTriangle, Calendar, ChevronRight, Plus, Link as LinkIcon, GraduationCap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import {
@@ -24,6 +22,7 @@ import { Calendar as CalendarPicker } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { teamService } from '@/services/team.service';
 import { trainingService } from '@/services/training.service';
+import { certificationService, CertificationStats, TeamCertification } from '@/services/certification.service';
 import { toast } from 'sonner';
 import { Training } from '@/types';
 import { format } from 'date-fns';
@@ -44,24 +43,31 @@ const ManagerDashboard: React.FC = () => {
   const [assignError, setAssignError] = useState<string | null>(null);
   const [assignedTrainings, setAssignedTrainings] = useState<Training[]>([]);
   const [loadingTrainings, setLoadingTrainings] = useState(false);
+  const [certificationStats, setCertificationStats] = useState<CertificationStats>({
+    total: 0,
+    active: 0,
+    expiring_soon: 0,
+    expired: 0,
+  });
+  const [teamCertifications, setTeamCertifications] = useState<TeamCertification[]>([]);
+  const [loadingCertifications, setLoadingCertifications] = useState(false);
 
-  // Get team data
-  const team = mockTeams.find((t) => t.managerId === user?.id);
-  const teamMembers = team ? getTeamMembers(team.id) : [];
-  const certStats = getCertificationStats(teamMembers);
+  const teamName = useMemo(() => {
+    const rawName = user?.name || '';
+    const firstName = rawName.split(' ').filter(Boolean)[0];
+    return firstName ? `${firstName}'s Team` : 'Your Team';
+  }, [user]);
 
   const pieData = [
-    { name: 'Active', value: certStats.active, color: 'hsl(var(--success))' },
-    { name: 'Expiring', value: certStats.expiringSoon, color: 'hsl(var(--warning))' },
-    { name: 'Expired', value: certStats.expired, color: 'hsl(var(--destructive))' },
+    { name: 'Active', value: certificationStats.active, color: 'hsl(var(--success))' },
+    { name: 'Expiring', value: certificationStats.expiring_soon, color: 'hsl(var(--warning))' },
+    { name: 'Expired', value: certificationStats.expired, color: 'hsl(var(--destructive))' },
   ].filter((d) => d.value > 0);
 
   // Certification by category data
-  const certByCategory = teamMembers.reduce((acc, emp) => {
-    emp.certifications.forEach((cert) => {
-      const category = cert.issuer.split(' ')[0]; // Simplified category extraction
-      acc[category] = (acc[category] || 0) + 1;
-    });
+  const certByCategory = teamCertifications.reduce((acc, cert) => {
+    const category = cert.issuingOrganization?.split(' ')[0] || 'Other';
+    acc[category] = (acc[category] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);
 
@@ -71,11 +77,9 @@ const ManagerDashboard: React.FC = () => {
     .slice(0, 5);
 
   // Expiring certifications
-  const expiringCerts = teamMembers.flatMap((emp) =>
-    emp.certifications
-      .filter((c) => c.status === 'expiring_soon')
-      .map((c) => ({ ...c, employeeName: emp.name }))
-  ).slice(0, 5);
+  const expiringCerts = teamCertifications
+    .filter((c) => c.status === 'expiring_soon')
+    .slice(0, 5);
 
   const loadMembers = async () => {
     if (!user) return;
@@ -96,8 +100,27 @@ const ManagerDashboard: React.FC = () => {
     }
   };
 
+  const loadCertifications = async () => {
+    if (!user) return;
+    try {
+      setLoadingCertifications(true);
+      const [stats, certs] = await Promise.all([
+        certificationService.getTeamCertificationStats(),
+        certificationService.getTeamCertifications(),
+      ]);
+      setCertificationStats(stats);
+      setTeamCertifications(certs);
+    } catch (error: any) {
+      console.error('Failed to load certifications:', error);
+      toast.error('Failed to load certification data');
+    } finally {
+      setLoadingCertifications(false);
+    }
+  };
+
   useEffect(() => {
     loadMembers();
+    loadCertifications();
   }, []);
 
   const loadAssignedTrainings = async () => {
@@ -168,7 +191,7 @@ const ManagerDashboard: React.FC = () => {
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Team Dashboard</h1>
-          <p className="text-muted-foreground">{team?.name || 'Your Team'} Overview</p>
+          <p className="text-muted-foreground">{teamName} Overview</p>
         </div>
         <div className="flex gap-2">
           <Dialog open={isAssignOpen} onOpenChange={setIsAssignOpen}>
@@ -338,7 +361,7 @@ const ManagerDashboard: React.FC = () => {
             <Users className="h-4 w-4 text-primary" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold">{teamMembers.length}</div>
+            <div className="text-3xl font-bold">{members.length}</div>
             <p className="text-xs text-muted-foreground mt-1">Active employees</p>
           </CardContent>
         </Card>
@@ -349,7 +372,9 @@ const ManagerDashboard: React.FC = () => {
             <Award className="h-4 w-4 text-success" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold text-success">{certStats.active}</div>
+            <div className="text-3xl font-bold text-success">
+              {loadingCertifications ? '...' : certificationStats.active}
+            </div>
             <p className="text-xs text-muted-foreground mt-1">Valid and current</p>
           </CardContent>
         </Card>
@@ -360,7 +385,9 @@ const ManagerDashboard: React.FC = () => {
             <AlertTriangle className="h-4 w-4 text-warning" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold text-warning">{certStats.expiringSoon}</div>
+            <div className="text-3xl font-bold text-warning">
+              {loadingCertifications ? '...' : certificationStats.expiring_soon}
+            </div>
             <p className="text-xs text-muted-foreground mt-1">Within 30 days</p>
           </CardContent>
         </Card>
@@ -371,7 +398,9 @@ const ManagerDashboard: React.FC = () => {
             <Award className="h-4 w-4 text-destructive" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold text-destructive">{certStats.expired}</div>
+            <div className="text-3xl font-bold text-destructive">
+              {loadingCertifications ? '...' : certificationStats.expired}
+            </div>
             <p className="text-xs text-muted-foreground mt-1">Need renewal</p>
           </CardContent>
         </Card>
@@ -387,7 +416,11 @@ const ManagerDashboard: React.FC = () => {
           </CardHeader>
           <CardContent>
             <div className="h-64">
-              {pieData.length > 0 ? (
+              {loadingCertifications ? (
+                <div className="h-full flex items-center justify-center text-muted-foreground">
+                  Loading certification data...
+                </div>
+              ) : pieData.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
@@ -438,7 +471,11 @@ const ManagerDashboard: React.FC = () => {
           </CardHeader>
           <CardContent>
             <div className="h-64">
-              {barData.length > 0 ? (
+              {loadingCertifications ? (
+                <div className="h-full flex items-center justify-center text-muted-foreground">
+                  Loading certification data...
+                </div>
+              ) : barData.length > 0 ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={barData} layout="vertical" margin={{ left: 0, right: 20 }}>
                     <CartesianGrid strokeDasharray="3 3" horizontal={false} />
@@ -477,11 +514,15 @@ const ManagerDashboard: React.FC = () => {
           </Button>
         </CardHeader>
         <CardContent>
-          {expiringCerts.length > 0 ? (
+          {loadingCertifications ? (
+            <div className="text-center py-8 text-muted-foreground">
+              Loading certification data...
+            </div>
+          ) : expiringCerts.length > 0 ? (
             <div className="space-y-3">
               {expiringCerts.map((cert) => (
                 <div
-                  key={cert.id}
+                  key={cert.certification_id}
                   className="flex items-center justify-between p-3 rounded-lg bg-warning/5 border border-warning/20"
                 >
                   <div className="flex items-center gap-3">
@@ -489,15 +530,15 @@ const ManagerDashboard: React.FC = () => {
                       <AlertTriangle className="h-4 w-4 text-warning" />
                     </div>
                     <div>
-                      <p className="font-medium text-sm">{cert.name}</p>
+                      <p className="font-medium text-sm">{cert.certificationName}</p>
                       <p className="text-xs text-muted-foreground">{cert.employeeName}</p>
                     </div>
                   </div>
                   <div className="text-right">
                     <p className="text-sm font-medium text-warning">
-                      {new Date(cert.expirationDate).toLocaleDateString()}
+                      {cert.expirationDate ? new Date(cert.expirationDate).toLocaleDateString() : 'N/A'}
                     </p>
-                    <p className="text-xs text-muted-foreground">{cert.issuer}</p>
+                    <p className="text-xs text-muted-foreground">{cert.issuingOrganization || 'N/A'}</p>
                   </div>
                 </div>
               ))}

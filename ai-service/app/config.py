@@ -35,14 +35,9 @@ class Settings(BaseSettings):
     OLLAMA_URL: str = "http://127.0.0.1:11434"
     OLLAMA_ENABLED: bool = True
     EMBEDDING_MODEL: str = "nomic-embed-text"
-    # RAG chat LLM config. Keep parsing on local Ollama unless you change parsing code explicitly.
-    RAG_CHAT_PROVIDER: str = "ollama"  # ollama | huggingface
+    # RAG chat LLM config (Ollama only).
     RAG_CHAT_MODEL: str = "qwen2.5:1.5b-instruct"
-    RAG_CHAT_HF_MODEL: str = "Qwen/Qwen2.5-7B-Instruct:together"
     RAG_CHAT_TIMEOUT_SECONDS: float = 30.0
-    HF_ROUTER_BASE_URL: str = "https://router.huggingface.co/v1"
-    HF_TOKEN: str | None = None
-    HF_API_KEY: str | None = None
     # Comma-separated candidate roots for employee metadata.json files.
     RAG_METADATA_ROOTS: str = "backend/local-storage,backend/file-storage/CV_Database"
 

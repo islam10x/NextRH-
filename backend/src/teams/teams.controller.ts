@@ -10,6 +10,13 @@ import { UserRole } from '../users/entities/user.entity';
 export class TeamsController {
     constructor(private readonly teamsService: TeamsService) { }
 
+    @Get('count')
+    @Roles(UserRole.BID_MANAGER)
+    async countTeams() {
+        const count = await this.teamsService.countAll();
+        return { count };
+    }
+
     @Get('members/me')
     @Roles(UserRole.TEAM_MANAGER)
     async myTeamMembers(@Req() req: any) {

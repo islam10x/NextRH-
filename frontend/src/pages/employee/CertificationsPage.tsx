@@ -150,6 +150,24 @@ const CertificationsPage: React.FC = () => {
 
   const formatCertName = (name: string) => name.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
 
+  const parseDateOnly = (value?: string | null) => {
+    if (!value) return null;
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+  };
+
+  const getDynamicStatus = (cert: CvCertification): CvCertification['status'] => {
+    const expDate = parseDateOnly(cert.expirationDate);
+    if (!expDate) return cert.status || 'active';
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const daysUntilExpiration = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+    if (daysUntilExpiration < 0) return 'expired';
+    if (daysUntilExpiration <= 30) return 'expiring_soon';
+    return 'active';
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -252,7 +270,9 @@ const CertificationsPage: React.FC = () => {
         </Card>
       ) : filteredCertifications.length > 0 ? (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {filteredCertifications.map((cert, index) => (
+          {filteredCertifications.map((cert, index) => {
+            const displayStatus = getDynamicStatus(cert);
+            return (
             <Card key={`${cert.name}-${index}`} className="hover:shadow-md transition-all duration-200">
               <CardContent className="p-5">
                 <div className="flex items-start justify-between gap-3 mb-4">
@@ -260,8 +280,8 @@ const CertificationsPage: React.FC = () => {
                     <Award className="h-5 w-5 text-primary" />
                   </div>
                   <div className="flex flex-col items-end gap-1">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusClass(cert.status)}`}>
-                      {formatStatus(cert.status)}
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusClass(displayStatus)}`}>
+                      {formatStatus(displayStatus)}
                     </span>
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${uploadClass(cert.isUploaded)}`}>
                       {cert.isUploaded ? 'Uploaded' : 'From CV'}
@@ -289,7 +309,8 @@ const CertificationsPage: React.FC = () => {
                 </div>
               </CardContent>
             </Card>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <Card>

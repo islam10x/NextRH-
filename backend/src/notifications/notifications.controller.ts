@@ -13,6 +13,20 @@ export class NotificationsController {
         return this.notificationsService.listForUser(userId);
     }
 
+    @Get('me/unread-count')
+    async unreadCount(@Req() req: any) {
+        const userId = req.user?.userId || req.user?.user_id || req.user?.id;
+        const count = await this.notificationsService.getUnreadCount(userId);
+        return { count };
+    }
+
+    @Patch('me/read-all')
+    async markAllRead(@Req() req: any) {
+        const userId = req.user?.userId || req.user?.user_id || req.user?.id;
+        await this.notificationsService.markAllReadForUser(userId);
+        return { message: 'all marked as read' };
+    }
+
     @Patch(':id/read')
     async markRead(@Param('id') id: string, @Req() req: any) {
         const userId = req.user?.userId || req.user?.user_id || req.user?.id;

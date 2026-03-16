@@ -1,6 +1,7 @@
 import {
     Controller,
     Post,
+    Get,
     UseGuards,
     UseInterceptors,
     UploadedFile,
@@ -53,5 +54,25 @@ export class CertificationsController {
         }
 
         return this.certificationsService.saveEmployeeCertification(user, file);
+    }
+
+    @Get('bid/stats')
+    @Roles(UserRole.BID_MANAGER)
+    async getBidStats() {
+        return this.certificationsService.getGlobalCertStats();
+    }
+
+    @Get('team')
+    @Roles(UserRole.TEAM_MANAGER)
+    async getTeamCertifications(@CurrentUser() user: any) {
+        const managerId = user?.user_id || user?.id;
+        return this.certificationsService.getTeamCertifications(managerId);
+    }
+
+    @Get('team/stats')
+    @Roles(UserRole.TEAM_MANAGER)
+    async getTeamCertificationStats(@CurrentUser() user: any) {
+        const managerId = user?.user_id || user?.id;
+        return this.certificationsService.getTeamCertificationStats(managerId);
     }
 }

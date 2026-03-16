@@ -17,6 +17,7 @@ The current `docker-compose.yml` defines the following runtime services:
 - Ollama model pull helper (preloads models)
 - ClamAV (virus scanning for uploads)
 - React frontend (UI)
+- n8n (workflow automation for email notifications)
 
 These services run on a shared Docker bridge network and use volumes for DB, models, and AV signatures. See `docker-compose.yml`.
 
@@ -72,7 +73,7 @@ Relevant code: `backend/src/training/training.controller.ts`, `backend/src/train
 2. Ingestion reads employee DB data plus `metadata.json`, merges records, and builds chunked embeddings.
 3. Embeddings are stored in `employee_rag_vectors` in PostgreSQL.
 4. Backend triggers RAG sync on CV and certification updates.
-5. Chat is available via backend `POST /rag/chat`, which proxies to AI service `POST /api/v1/rag/chat` (currently set to using Qwen2.5 7b-instruct api from huggingface for production simulation).
+5. Chat is available via backend `POST /rag/chat`, which proxies to AI service `POST /api/v1/rag/chat` (currently set to local Ollama with Qwen2.5 1.5b instruct by default).
 
 Relevant code: `ai-service/app/rag/models.py`, `ai-service/app/rag/etl_ingest.py`, `ai-service/app/rag/chat_agent.py`, `ai-service/app/api/rag.py`, `backend/src/rag/rag.service.ts`.
 
@@ -83,8 +84,10 @@ Relevant code: `ai-service/app/rag/models.py`, `ai-service/app/rag/etl_ingest.py
 Relevant code: `frontend/src/pages/employee/CVPreviewPage.tsx`, `backend/src/cv/cv.controller.ts`.
 
 ### 7) Notifications Pipeline
-1. Backend creates notifications for training assignment, training status changes, and team additions.
-2. Users fetch notifications via `GET /notifications/me` and can mark read or delete.
+1. Backend creates notifications for training assignment, training status changes, team additions, and certification expiry alerts.
+2. Notifications are pushed to n8n via webhook for immediate email delivery when applicable.
+3. A daily fallback sweep retries any notifications with `email_sent = false`.
+4. Users fetch notifications via `GET /notifications/me`, can mark read/delete, and can mark all read.
 
 Relevant code: `backend/src/notifications/notifications.service.ts`, `backend/src/notifications/notifications.controller.ts`.
 
@@ -99,15 +102,16 @@ Relevant code: `backend/src/notifications/notifications.service.ts`, `backend/sr
 - CV preview UI with client-side PDF export.
 
 ### Partially implemented or UI-only
-- AI chat UI uses mock data and does not call backend RAG endpoints. See `frontend/src/pages/bid/AIChatPage.tsx`.
+- AI chat UI calls backend RAG endpoints and displays the response. See `frontend/src/pages/bid/AIChatPage.tsx`.
 - CV generation UI is a stub using mock data and does not call backend or AI services. See `frontend/src/pages/bid/CVGenerationPage.tsx`.
-- Manager and BID dashboards use mock data. See `frontend/src/pages/manager/ManagerDashboard.tsx` and `frontend/src/pages/bid/BIDDashboard.tsx`.
-- Manager certification tracking and member profile pages use mock data. See `frontend/src/pages/manager/CertificationTrackingPage.tsx` and `frontend/src/pages/manager/MemberProfilePage.tsx`.
+- Manager and BID dashboards use live backend data. See `frontend/src/pages/manager/ManagerDashboard.tsx` and `frontend/src/pages/bid/BIDDashboard.tsx`.
+- Manager certification tracking uses live backend data. See `frontend/src/pages/manager/CertificationTrackingPage.tsx`.
+- Manager member profile pages still use mock data. See `frontend/src/pages/manager/MemberProfilePage.tsx`.
 - Projects can be created from CV parsing but there is no API for manual CRUD, and the employee Projects tab is UI-only. See `backend/src/cv/cv.service.ts` and `frontend/src/pages/employee/TrainingProjectsPage.tsx`.
 - Employees, skills, and projects modules exist as entities only (no controllers/services for CRUD). See `backend/src/employees`, `backend/src/skills`, `backend/src/projects`.
 
 ### Documented but not present in current code or compose
-- n8n workflow automation, Redis/Bull queues, file watcher auto-sync, NextOra integration, and Nginx reverse proxy appear in `Docs/Project_structure.md` but are not present in the repo or `docker-compose.yml`.
+- Redis/Bull queues, file watcher auto-sync, NextOra integration, and Nginx reverse proxy appear in `Docs/Project_structure.md` but are not present in the repo or `docker-compose.yml`.
 
 ## Database and Schema Evolution Status
 - Initial schema is created by `database/init-scripts/*.sql` only on first container initialization.

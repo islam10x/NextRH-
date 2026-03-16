@@ -47,6 +47,12 @@ export class Notification {
     @Column({ name: 'related_entity_id', type: 'uuid', nullable: true })
     relatedEntityId?: string;
 
+    @Column({ name: 'scheduled_at', type: 'timestamp', nullable: true })
+    scheduledAt?: Date;
+
+    @Column({ name: 'email_sent', default: false })
+    emailSent: boolean;
+
     @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;
 }

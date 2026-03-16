@@ -1299,11 +1299,6 @@ Context:
         except Exception as exc:
             err = str(exc or "")
             err_norm = _normalize_for_match(err)
-            if "error code 402" in err_norm or "depleted your monthly included credits" in err_norm:
-                return (
-                    "LLM provider credits are exhausted. "
-                    "Set RAG_CHAT_PROVIDER=ollama for local mode or add Hugging Face credits."
-                )
             if "timeout" in err_norm:
                 return "The language model request timed out. Please try again."
             raise
@@ -1385,13 +1380,6 @@ def chat_loop():
             )
         except Exception as exc:
             err = str(exc or "")
-            err_norm = _normalize_for_match(err)
-            if "error code 402" in err_norm or "depleted your monthly included credits" in err_norm:
-                print(
-                    "Bid Manager: LLM provider credits are exhausted. "
-                    "Set RAG_CHAT_PROVIDER=ollama for local mode or add Hugging Face credits.\n"
-                )
-                continue
             print(f"Bid Manager: Request failed ({err}).\n")
             continue
         dt = time.time() - t0

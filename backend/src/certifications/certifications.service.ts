@@ -3,11 +3,12 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { FileStorageService } from '../file-storage/file-storage.service';
-import { Certification } from './entities/certification.entity';
+import { Certification, CertificationStatus } from './entities/certification.entity';
 import { EmployeeProfile } from '../employees/entities/employee-profile.entity';
 import { RagService } from '../rag/rag.service';
 import { FileValidationService } from '../file-validation/file-validation.service';
 import { formatIsoDate, normalizeFlexibleDate } from '../utils/date-normalizer';
+import { TeamsService } from '../teams/teams.service';
 
 @Injectable()
 export class CertificationsService {
@@ -23,6 +24,7 @@ export class CertificationsService {
         private readonly profileRepository: Repository<EmployeeProfile>,
         private readonly ragService: RagService,
         private readonly fileValidationService: FileValidationService,
+        private readonly teamsService: TeamsService,
     ) {
         this.aiServiceBaseUrl =
             this.configService.get<string>('AI_SERVICE_URL')?.replace(/\/+$/, '') ||
@@ -148,5 +150,145 @@ export class CertificationsService {
 
         // Trigger RAG Sync
         await this.ragService.triggerUserSync(userId);
+    }
+
+    /**
+     * Get global certification statistics for BID managers
+     */
+    async getGlobalCertStats() {
+        const today = new Date();
+        const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+
+        const all = await this.certificationRepository
+            .createQueryBuilder('cert')
+            .leftJoinAndSelect('cert.profile', 'profile')
+            .getMany();
+
+        const stats = {
+            total: all.length,
+            active: 0,
+            expiringSoon: 0,
+            expired: 0,
+            expiringThisMonth: 0,
+        };
+
+        const byOrg: Record<string, number> = {};
+
+        for (const cert of all) {
+            const status = this.calculateStatus(cert.expirationDate);
+            if (status === CertificationStatus.ACTIVE) stats.active++;
+            else if (status === CertificationStatus.EXPIRING_SOON) stats.expiringSoon++;
+            else if (status === CertificationStatus.EXPIRED) stats.expired++;
+
+            if (cert.expirationDate) {
+                const exp = new Date(cert.expirationDate);
+                if (exp >= today && exp <= endOfMonth) stats.expiringThisMonth++;
+            }
+
+            const org = cert.issuingOrganization?.split(' ')[0] || 'Other';
+            byOrg[org] = (byOrg[org] || 0) + 1;
+        }
+
+        const byOrgArray = Object.entries(byOrg)
+            .map(([name, value]) => ({ name, value }))
+            .sort((a, b) => b.value - a.value)
+            .slice(0, 6);
+
+        return { ...stats, byOrg: byOrgArray };
+    }
+
+    /**
+     * Get all certifications for team members managed by a specific manager
+     */
+    async getTeamCertifications(managerUserId: string) {
+        // Get team members
+        const teamMembers = await this.teamsService.getMembersForManager(managerUserId);
+        
+        if (teamMembers.length === 0) {
+            return [];
+        }
+
+        // Get profile IDs for team members
+        const profileIds = teamMembers.map(member => member.profileId).filter(Boolean);
+        
+        if (profileIds.length === 0) {
+            return [];
+        }
+
+        // Query certifications for all team members with employee details
+        const certifications = await this.certificationRepository
+            .createQueryBuilder('cert')
+            .leftJoinAndSelect('cert.profile', 'profile')
+            .leftJoinAndSelect('profile.user', 'user')
+            .where('cert.profile.profile_id IN (:...profileIds)', { profileIds })
+            .orderBy('cert.expirationDate', 'ASC')
+            .getMany();
+
+        // Map to include employee information
+        return certifications.map(cert => ({
+            certification_id: cert.certification_id,
+            certificationName: cert.certificationName,
+            issuingOrganization: cert.issuingOrganization,
+            issueDate: cert.issueDate,
+            expirationDate: cert.expirationDate,
+            status: this.calculateStatus(cert.expirationDate),
+            credentialId: cert.credentialId,
+            employeeId: cert.profile?.user?.user_id,
+            employeeName: cert.profile?.user ? 
+                `${cert.profile.user.firstName || ''} ${cert.profile.user.lastName || ''}`.trim() || cert.profile.user.email :
+                'Unknown',
+            employeeEmail: cert.profile?.user?.email,
+        }));
+    }
+
+    /**
+     * Calculate certification status based on expiration date
+     */
+    private calculateStatus(expirationDate: Date | null): CertificationStatus {
+        if (!expirationDate) {
+            return CertificationStatus.ACTIVE;
+        }
+
+        const now = new Date();
+        const expDate = new Date(expirationDate);
+        const daysUntilExpiration = Math.ceil((expDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+
+        if (daysUntilExpiration < 0) {
+            return CertificationStatus.EXPIRED;
+        } else if (daysUntilExpiration <= 30) {
+            return CertificationStatus.EXPIRING_SOON;
+        } else {
+            return CertificationStatus.ACTIVE;
+        }
+    }
+
+    /**
+     * Get certification statistics for a team
+     */
+    async getTeamCertificationStats(managerUserId: string) {
+        const certifications = await this.getTeamCertifications(managerUserId);
+        
+        const stats = {
+            total: certifications.length,
+            active: 0,
+            expiring_soon: 0,
+            expired: 0,
+        };
+
+        certifications.forEach(cert => {
+            switch (cert.status) {
+                case CertificationStatus.ACTIVE:
+                    stats.active++;
+                    break;
+                case CertificationStatus.EXPIRING_SOON:
+                    stats.expiring_soon++;
+                    break;
+                case CertificationStatus.EXPIRED:
+                    stats.expired++;
+                    break;
+            }
+        });
+
+        return stats;
     }
 }

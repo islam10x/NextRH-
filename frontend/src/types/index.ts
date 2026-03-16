@@ -113,6 +113,7 @@ export interface Notification {
   notificationType?: string;
   relatedEntityType?: string;
   relatedEntityId?: string;
+  priority?: number;
 }
 
 // AI Chat

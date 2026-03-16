@@ -48,6 +48,8 @@ services:
       CLAMAV_HOST: clamav
       CLAMAV_PORT: 3310
       CLAMAV_TIMEOUT: 60000
+      N8N_WEBHOOK_URL: http://cv-n8n:5678/webhook/nextrh-notification
+      N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:-nextrh-n8n-secret}
     volumes:
       - ./file-storage:/app/file-storage
       - ./backend/src:/app/src    # Hot reload in dev
@@ -66,13 +68,8 @@ services:
     environment:
       - DATABASE_URL=postgresql+psycopg://postgres:${DB_PASSWORD}@postgres:5432/cv_management
       - OLLAMA_URL=http://ollama:11434
-      - RAG_CHAT_PROVIDER=${RAG_CHAT_PROVIDER:-ollama}
       - RAG_CHAT_MODEL=${RAG_CHAT_MODEL:-qwen2.5:1.5b-instruct}
-      - RAG_CHAT_HF_MODEL=${RAG_CHAT_HF_MODEL:-Qwen/Qwen2.5-7B-Instruct:together}
       - RAG_CHAT_TIMEOUT_SECONDS=${RAG_CHAT_TIMEOUT_SECONDS:-30}
-      - HF_ROUTER_BASE_URL=${HF_ROUTER_BASE_URL:-https://router.huggingface.co/v1}
-      - HF_TOKEN=${HF_TOKEN:-}
-      - HF_API_KEY=${HF_API_KEY:-}
     volumes:
       - ./file-storage:/app/file-storage
       - ./ai-service/app:/app/app
@@ -158,6 +155,24 @@ services:
       - cv-network
     command: npm run dev
 
+  # n8n Workflow Automation
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: cv-n8n
+    restart: unless-stopped
+    environment:
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=Europe/Paris
+    volumes:
+      - n8n-data:/home/node/.n8n
+    ports:
+      - "5678:5678"
+    networks:
+      - cv-network
+
 networks:
   cv-network:
     driver: bridge
@@ -166,3 +181,4 @@ volumes:
   postgres-data:
   ollama-data:
   clamav-db:
+  n8n-data:

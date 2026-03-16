@@ -10,6 +10,9 @@ interface BackendNotification {
   createdAt: string;
   relatedEntityType?: string;
   relatedEntityId?: string;
+  scheduledAt?: string | null;
+  emailSent?: boolean;
+  priority?: number;
 }
 
 const mapNotification = (n: BackendNotification): Notification => ({
@@ -17,12 +20,18 @@ const mapNotification = (n: BackendNotification): Notification => ({
   userId: '',
   title: n.title,
   message: n.message || '',
-  type: 'info',
+  type:
+    n.priority && n.priority >= 3
+      ? 'error'
+      : n.priority === 2
+        ? 'warning'
+        : 'info',
   read: n.isRead,
   createdAt: n.createdAt,
   notificationType: n.notificationType,
   relatedEntityType: n.relatedEntityType,
   relatedEntityId: n.relatedEntityId,
+  priority: n.priority,
 });
 
 export const notificationService = {
@@ -31,8 +40,17 @@ export const notificationService = {
     return res.data.map(mapNotification);
   },
 
+  async getUnreadCount(): Promise<number> {
+    const res = await api.get<{ count: number }>('/notifications/me/unread-count');
+    return res.data.count;
+  },
+
   async markRead(id: string) {
     await api.patch(`/notifications/${id}/read`);
+  },
+
+  async markAllRead() {
+    await api.patch('/notifications/me/read-all');
   },
 
   async remove(id: string) {
