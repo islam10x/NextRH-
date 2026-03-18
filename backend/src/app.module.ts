@@ -30,16 +30,22 @@ import { ScheduleModule } from '@nestjs/schedule';
         ScheduleModule.forRoot(),
         TypeOrmModule.forRootAsync({
             imports: [ConfigModule],
-            useFactory: (configService: ConfigService) => ({
-                type: 'postgres',
-                host: configService.get<string>('DB_HOST', 'localhost'),
-                port: parseInt(configService.get<string>('DB_PORT', '5432')),
-                username: configService.get<string>('DB_USER', 'postgres'),
-                password: configService.get<string>('DB_PASSWORD', 'change_me'),
-                database: configService.get<string>('DB_NAME', 'cv_management'),
-                entities: [__dirname + '/**/*.entity{.ts,.js}'],
-                synchronize: false, // Using migrations, but for dev true is convenient? User schema provided via SQL -> keep false/manual
-            }),
+            useFactory: (configService: ConfigService) => {
+                const dbPassword = configService.get<string>('DB_PASSWORD');
+                if (!dbPassword) {
+                    throw new Error('DB_PASSWORD is required');
+                }
+                return {
+                    type: 'postgres',
+                    host: configService.get<string>('DB_HOST', 'localhost'),
+                    port: parseInt(configService.get<string>('DB_PORT', '5432')),
+                    username: configService.get<string>('DB_USER', 'postgres'),
+                    password: dbPassword,
+                    database: configService.get<string>('DB_NAME', 'cv_management'),
+                    entities: [__dirname + '/**/*.entity{.ts,.js}'],
+                    synchronize: false, // Using migrations, but for dev true is convenient? User schema provided via SQL -> keep false/manual
+                };
+            },
             inject: [ConfigService],
         }),
         AuthModule,

@@ -7,7 +7,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 class Settings(BaseSettings):
     APP_NAME: str = "AI CV Parser Service"
-    DEBUG: bool = True
+    DEBUG: bool = False
     API_V1_STR: str = "/api/v1"
     
     # Paths
@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     DB_HOST: str = "127.0.0.1"
     DB_PORT: int = 5432
     DB_USER: str = "postgres"
-    DB_PASSWORD: str = "change_me"
+    DB_PASSWORD: str = ""
     DB_NAME: str = "cv_management"
 
     # Optional explicit URL. If omitted, it is derived from DB_* fields above.
@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def build_database_url(self) -> "Settings":
         if not self.DATABASE_URL:
+            if not self.DB_PASSWORD:
+                raise ValueError("DB_PASSWORD is required when DATABASE_URL is not set")
             self.DATABASE_URL = (
                 f"postgresql+psycopg://{self.DB_USER}:{self.DB_PASSWORD}"
                 f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"

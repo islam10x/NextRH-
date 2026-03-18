@@ -25,12 +25,18 @@ import { AuthSession } from './entities/auth-session.entity';
         TypeOrmModule.forFeature([User, InvitationToken, AuthSession]),
         JwtModule.registerAsync({
             imports: [ConfigModule],
-            useFactory: async (configService: ConfigService) => ({
-                secret: configService.get<string>('JWT_SECRET') || 'your-super-secret-jwt-key',
-                signOptions: {
-                    expiresIn: '15m',
-                },
-            }),
+            useFactory: async (configService: ConfigService) => {
+                const secret = configService.get<string>('JWT_SECRET');
+                if (!secret) {
+                    throw new Error('JWT_SECRET is required');
+                }
+                return {
+                    secret,
+                    signOptions: {
+                        expiresIn: '15m',
+                    },
+                };
+            },
             inject: [ConfigService],
         }),
     ],

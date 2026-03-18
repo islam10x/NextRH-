@@ -1,0 +1,166 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: pgvector/pgvector:pg14
+    container_name: cv-postgres
+    environment:
+      POSTGRES_DB: cv_management
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./database/init-scripts:/docker-entrypoint-initdb.d
+    networks:
+      - cv-network
+    restart: unless-stopped
+
+  # NestJS Backend
+  backend:
+    build:
+      context: ./backend
+      target: production
+    container_name: cv-backend
+    env_file:
+      - ./backend/.env
+    environment:
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: cv_management
+      DATABASE_URL: postgresql://postgres:${DB_PASSWORD}@postgres:5432/cv_management
+      JWT_SECRET: ${JWT_SECRET}
+      CLAMAV_ENABLED: 'true'
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: 3310
+      CLAMAV_TIMEOUT: 60000
+      N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://n8n:5678/webhook/nextrh-notification}
+      N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET}
+    volumes:
+      - ./file-storage:/app/file-storage
+    depends_on:
+      - postgres
+      - clamav
+    networks:
+      - cv-network
+    restart: unless-stopped
+
+  # Python AI Service
+  ai-service:
+    build: ./ai-service
+    container_name: cv-ai-service
+    environment:
+      - DATABASE_URL=postgresql+psycopg://postgres:${DB_PASSWORD}@postgres:5432/cv_management
+      - OLLAMA_URL=http://ollama:11434
+      - RAG_CHAT_MODEL=${RAG_CHAT_MODEL:-qwen2.5:1.5b-instruct}
+      - RAG_CHAT_TIMEOUT_SECONDS=${RAG_CHAT_TIMEOUT_SECONDS:-30}
+    volumes:
+      - ./file-storage:/app/file-storage
+    networks:
+      - cv-network
+    depends_on:
+      - postgres
+      - ollama
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+
+  # Ollama for LLM and Embeddings
+  ollama:
+    image: ollama/ollama:latest
+    container_name: cv-ollama
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - cv-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Helper to pull models automatically
+  ollama-pull-models:
+    image: curlimages/curl:latest
+    container_name: cv-ollama-puller
+    networks:
+      - cv-network
+    depends_on:
+      - ollama
+    entrypoint: /bin/sh
+    command:
+      - "-c"
+      - |
+        echo "Waiting for Ollama to start..."
+        until curl -s http://ollama:11434/api/tags > /dev/null; do sleep 2; done
+        echo "Pulling Qwen 2.5 1.5B instruct..."
+        curl -X POST http://ollama:11434/api/pull -d '{"name": "qwen2.5:1.5b-instruct"}'
+        echo "Pulling Nomic Embed Text..."
+        curl -X POST http://ollama:11434/api/pull -d '{"name": "nomic-embed-text"}'
+        echo "Models pulled successfully."
+
+  # ClamAV daemon for antivirus scanning
+  clamav:
+    image: clamav/clamav:stable
+    container_name: cv-clamav
+    volumes:
+      - clamav-db:/var/lib/clamav
+    networks:
+      - cv-network
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan --version || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # React Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        VITE_API_URL: ${VITE_API_URL:-/api}
+    container_name: cv-frontend
+    ports:
+      - "80:80"
+    networks:
+      - cv-network
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # n8n Workflow Automation
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: cv-n8n
+    restart: unless-stopped
+    environment:
+      - N8N_HOST=${N8N_HOST}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=${N8N_PROTOCOL}
+      - WEBHOOK_URL=${WEBHOOK_URL}
+      - GENERIC_TIMEZONE=${N8N_TIMEZONE:-Europe/Paris}
+    volumes:
+      - n8n-data:/home/node/.n8n
+    networks:
+      - cv-network
+
+networks:
+  cv-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  ollama-data:
+  clamav-db:
+  n8n-data:
