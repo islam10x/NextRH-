@@ -1,9 +1,5 @@
 import { DataSource } from 'typeorm';
-import * as dotenv from 'dotenv';
 import * as path from 'path';
-
-// Load .env from root directory
-dotenv.config({ path: path.join(__dirname, '../../../.env') });
 
 const dbPassword = process.env.DB_PASSWORD;
 if (!dbPassword) {

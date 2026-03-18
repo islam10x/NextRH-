@@ -90,6 +90,9 @@ services:
     container_name: cv-ollama-puller
     networks:
       - cv-network
+    environment:
+      - RAG_CHAT_MODEL=${RAG_CHAT_MODEL:-qwen2.5:1.5b-instruct}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
     depends_on:
       - ollama
     entrypoint: /bin/sh
@@ -98,10 +101,12 @@ services:
       - |
         echo "Waiting for Ollama to start..."
         until curl -s http://ollama:11434/api/tags > /dev/null; do sleep 2; done
-        echo "Pulling Qwen 2.5 1.5B instruct..."
-        curl -X POST http://ollama:11434/api/pull -d '{"name": "qwen2.5:1.5b-instruct"}'
-        echo "Pulling Nomic Embed Text..."
-        curl -X POST http://ollama:11434/api/pull -d '{"name": "nomic-embed-text"}'
+        CHAT_MODEL="$${RAG_CHAT_MODEL:-qwen2.5:1.5b-instruct}"
+        EMBED_MODEL="$${EMBEDDING_MODEL:-nomic-embed-text}"
+        echo "Pulling $${CHAT_MODEL}..."
+        curl -X POST http://ollama:11434/api/pull -d "{\"name\": \"$${CHAT_MODEL}\"}"
+        echo "Pulling $${EMBED_MODEL}..."
+        curl -X POST http://ollama:11434/api/pull -d "{\"name\": \"$${EMBED_MODEL}\"}"
         echo "Models pulled successfully."
 
   # ClamAV daemon for antivirus scanning
