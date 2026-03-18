@@ -30,7 +30,10 @@ export class EmailFallbackService {
         this.webhookUrl =
             this.configService.get<string>('N8N_WEBHOOK_URL') || null;
         this.webhookSecret =
-            this.configService.get<string>('N8N_WEBHOOK_SECRET') || 'nextrh-n8n-secret';
+            this.configService.get<string>('N8N_WEBHOOK_SECRET') || '';
+        if (!this.webhookSecret) {
+            throw new Error('N8N_WEBHOOK_SECRET is required');
+        }
     }
 
     /**
