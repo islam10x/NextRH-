@@ -94,7 +94,7 @@ def build_rag_chat_llm(temperature: float = 0.0, timeout: float | None = None):
         base_url=settings.OLLAMA_URL,
         temperature=temperature,
         disable_streaming=True,
-        num_ctx=8192,
+        num_ctx=4096,
     )
     return llm, model_name, "ollama"
 
