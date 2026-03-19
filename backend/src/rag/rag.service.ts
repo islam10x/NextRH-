@@ -106,6 +106,23 @@ export class RagService {
         }
     }
 
+    /**
+     * Delete RAG vectors for a specific user (best-effort).
+     */
+    async deleteUserVectors(userId: string): Promise<void> {
+        try {
+            const url = `${this.aiServiceBaseUrl}/api/v1/rag/vectors/${userId}`;
+            const response = await fetch(url, { method: 'DELETE' });
+            if (!response.ok) {
+                this.logger.error(`Failed to delete RAG vectors for user ${userId}: ${response.statusText}`);
+            } else {
+                this.logger.log(`RAG vectors deletion queued for user ${userId}`);
+            }
+        } catch (error) {
+            this.logger.error(`Error deleting RAG vectors for user ${userId}: ${error.message}`);
+        }
+    }
+
     private resolveResultCount(
         context: any[],
         entities?: Record<string, any> | null,
