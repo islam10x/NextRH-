@@ -77,9 +77,16 @@ export class CertificationsService {
         }
         const parsedExpirationDate = normalizeFlexibleDate(parsedData.expiration_date, 'end');
         const parsedIssueDate = normalizeFlexibleDate(parsedData.issue_date, 'start');
+        const certName = (parsedData.certification_name || 'Certification').trim();
+        const preferredFileName = certName.slice(0, 120);
 
         // 2. Save file to storage
-        const storageResult = await this.fileStorageService.saveEmployeeFile(userId, file, 'Certifications');
+        const storageResult = await this.fileStorageService.saveEmployeeFile(
+            userId,
+            file,
+            'Certifications',
+            { preferredFileName, overwrite: true },
+        );
 
         // 3. Update metadata.json with certification
         await this.fileStorageService.addCertificationToMetadata(userId, {

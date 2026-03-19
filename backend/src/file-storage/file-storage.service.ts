@@ -29,7 +29,12 @@ export class FileStorageService {
     private readonly logger = new Logger(FileStorageService.name);
     constructor(private readonly usersService: UsersService) { }
 
-    async saveEmployeeFile(userId: string, file: Express.Multer.File, category: EmployeeStorageCategory) {
+    async saveEmployeeFile(
+        userId: string,
+        file: Express.Multer.File,
+        category: EmployeeStorageCategory,
+        options?: { preferredFileName?: string; overwrite?: boolean },
+    ) {
         const user = await this.usersService.findById(userId);
         if (!user) {
             throw new NotFoundException('User not found');
@@ -74,7 +79,12 @@ export class FileStorageService {
         const safeOriginalName = this.sanitizeFileName(file.originalname || 'file');
         const storedName = category === 'CV'
             ? `CV${this.resolveExtension(file, safeOriginalName)}`
-            : await this.resolveStoredName(targetDir, safeOriginalName);
+            : await this.resolveStoredName(
+                targetDir,
+                safeOriginalName,
+                file,
+                options,
+            );
 
         const fullPath = path.join(targetDir, storedName);
         await fs.writeFile(fullPath, file.buffer);
@@ -167,7 +177,35 @@ export class FileStorageService {
     }
 
 
-    private async resolveStoredName(targetDir: string, safeOriginalName: string) {
+    private async resolveStoredName(
+        targetDir: string,
+        safeOriginalName: string,
+        file?: Express.Multer.File,
+        options?: { preferredFileName?: string; overwrite?: boolean },
+    ) {
+        const preferredRaw = options?.preferredFileName?.trim();
+        if (preferredRaw) {
+            const sanitizedPreferred = this.sanitizeFileName(preferredRaw);
+            const preferredParsed = path.parse(sanitizedPreferred);
+            const preferredBase = preferredParsed.name || 'certification';
+            const preferredExt = preferredParsed.ext || this.resolveExtension(file, safeOriginalName);
+            const preferredName = `${preferredBase}${preferredExt}`;
+
+            if (options?.overwrite) {
+                await this.removeConflictingFiles(targetDir, preferredBase);
+                return preferredName;
+            }
+
+            const preferredPath = path.join(targetDir, preferredName);
+            try {
+                await fs.access(preferredPath);
+                const timestamp = new Date().getTime();
+                return `${timestamp}-${preferredName}`;
+            } catch {
+                return preferredName;
+            }
+        }
+
         const targetPath = path.join(targetDir, safeOriginalName);
         try {
             await fs.access(targetPath);
@@ -175,6 +213,23 @@ export class FileStorageService {
             return `${timestamp}-${safeOriginalName}`;
         } catch {
             return safeOriginalName;
+        }
+    }
+
+    private async removeConflictingFiles(targetDir: string, baseName: string) {
+        try {
+            const files = await fs.readdir(targetDir);
+            const lowerBase = baseName.toLowerCase();
+            await Promise.all(
+                files.map(async (filename) => {
+                    const parsed = path.parse(filename);
+                    if (parsed.name.toLowerCase() === lowerBase) {
+                        await fs.unlink(path.join(targetDir, filename));
+                    }
+                })
+            );
+        } catch (error) {
+            this.logger.warn(`Failed to remove conflicting files in ${targetDir}: ${error.message}`);
         }
     }
 

@@ -130,26 +130,46 @@ class CertificationOCR:
                     issue_date = self._extract_issue_date_basic(cleaned_text)
                 else:
                     logger.info("EasyOCR requested but not available; skipping.")
-            # Always run LLM extraction for accuracy (no fallback gating).
+
+            # If embedded text exists in PDFs, prefer its extracted name to avoid OCR misspellings.
+            embedded_text = self._extract_embedded_text(text)
+            if embedded_text:
+                embedded_name = self._select_embedded_cert_name(
+                    embedded_text,
+                    user_first_name=user_first_name,
+                    user_last_name=user_last_name,
+                    issuer_hint=cert_data.get('issuer'),
+                    current_name=cert_data.get('name'),
+                )
+                if embedded_name:
+                    cert_data['name'] = embedded_name
+
+            # Run LLM extraction only when rule-based parsing looks incomplete.
             llm_data = {}
-            if cleaned_text:
-                if not self._is_likely_certificate(cleaned_text):
-                    logger.info("Document failed certificate gatekeeper check, but LLM is forced on for accuracy.")
+            needs_fallback = self._needs_more_info(cert_data, issue_date, len(cleaned_text))
+            if cleaned_text and needs_fallback:
+                if self._is_likely_certificate(cleaned_text):
+                    logger.info("Rule-based parsing incomplete. Falling back to LLM extraction.")
+                    llm_start = time.perf_counter()
+                    llm_data = self._llm_fallback_extraction(cleaned_text)
+                    llm_elapsed = time.perf_counter() - llm_start
+                    logger.info(f"LLM extraction completed in {llm_elapsed:.2f}s")
                 else:
-                    logger.info("Running LLM extraction (forced for accuracy).")
-                llm_start = time.perf_counter()
-                llm_data = self._llm_fallback_extraction(cleaned_text)
-                llm_elapsed = time.perf_counter() - llm_start
-                logger.info(f"LLM extraction completed in {llm_elapsed:.2f}s")
-            else:
+                    logger.info("Document failed certificate gatekeeper check. Skipping LLM fallback.")
+            elif not cleaned_text:
                 logger.info("No OCR text extracted; skipping LLM extraction.")
+            else:
+                logger.info("Rule-based parsing looks sufficient. Skipping LLM fallback.")
 
             # Merge LLM results (LLM takes precedence when it provides a value)
             if llm_data:
                 # Trust the LLM for the name if it provided one, as it's better at understanding context than regex
                 llm_name = llm_data.get('name')
                 if llm_name and llm_name.lower() not in ["null", "none", "", "unknown"]:
-                    cert_data['name'] = llm_name
+                    # Only allow LLM to override when the current name is missing/generic.
+                    if cert_data.get('name') in [None, "", "Unknown Certification"] or self._is_generic_cert_name(cert_data.get('name', "")):
+                        if not self._is_generic_cert_name(llm_name):
+                            cert_data['name'] = llm_name
                     
                 llm_issuer = llm_data.get('issuer')
                 if llm_issuer and not cert_data['issuer']:
@@ -520,6 +540,16 @@ RAW TEXT:
         
         return '\n'.join(clean_lines)
 
+    def _clean_text(self, value: str) -> str:
+        """Normalize a single line for lightweight comparisons."""
+        if not value:
+            return ""
+        value = value.replace("\xa0", " ")
+        value = re.sub(r"\s+", " ", value).strip()
+        value = re.sub(r"^[\-\u2013\u2014,:;|\"']+", "", value).strip()
+        value = re.sub(r"[\-\u2013\u2014,:;|\"']+$", "", value).strip()
+        return value
+
     def _should_run_easyocr(
         self,
         is_pdf: bool,
@@ -772,6 +802,119 @@ RAW TEXT:
                 return issuer
                 
         return None
+
+    def _extract_embedded_text(self, raw_text: str) -> str:
+        """Pull embedded-text block from combined PDF text when available."""
+        if not raw_text:
+            return ""
+        marker_embedded = "--- Embedded Text ---"
+        marker_ocr_supplement = "--- OCR Supplement ---"
+        if marker_embedded in raw_text:
+            return raw_text.split(marker_embedded, 1)[1].strip()
+        if marker_ocr_supplement in raw_text:
+            return raw_text.split(marker_ocr_supplement, 1)[0].strip()
+        return ""
+
+    def _is_generic_cert_name(self, name: str) -> bool:
+        """Heuristic to detect boilerplate names that should not override parsed results."""
+        if not name:
+            return True
+        lower = str(name).strip().lower()
+        if len(lower) < 6:
+            return True
+        generic_phrases = [
+            "this certifies that",
+            "certifies that",
+            "certificate of completion",
+            "certificate of achievement",
+            "certificate of attendance",
+            "certificate of participation",
+            "certificate",
+            "certification",
+            "attestation",
+            "diploma",
+            "has successfully completed",
+        ]
+        return any(phrase in lower for phrase in generic_phrases)
+
+    def _select_embedded_cert_name(
+        self,
+        embedded_text: str,
+        user_first_name: Optional[str] = None,
+        user_last_name: Optional[str] = None,
+        issuer_hint: Optional[str] = None,
+        current_name: Optional[str] = None,
+    ) -> Optional[str]:
+        """Pick the best cert-name candidate from embedded PDF text."""
+        import difflib
+
+        if not embedded_text:
+            return None
+
+        full_name = ""
+        if user_first_name and user_last_name:
+            full_name = f"{user_first_name} {user_last_name}".strip().lower()
+
+        def looks_like_date(value: str) -> bool:
+            if not value:
+                return False
+            return bool(re.search(
+                r"(\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b|\b\d{4}\b|[A-Za-z]+\s+\d{1,2},?\s+\d{4})",
+                value,
+            ))
+
+        signal_words = [
+            "certified", "certification", "certificate", "specialist", "professional", "associate",
+            "expert", "engineer", "architect", "administrator", "developer", "foundation",
+            "foundations", "advanced", "practitioner", "nse", "forti", "aws", "azure", "google",
+            "gcp", "cisco", "comptia", "pmi", "itil",
+        ]
+
+        lines = [self._clean_text(line) for line in embedded_text.splitlines()]
+        candidates: list[tuple[str, int]] = []
+
+        for line in lines:
+            if not line:
+                continue
+            lower = line.lower()
+            if full_name and full_name in lower:
+                continue
+            if "powered by" in lower or "tcpdf" in lower or "www" in lower or "http" in lower:
+                continue
+
+            score = 0
+            if 8 <= len(line) <= 80:
+                score += 2
+            if issuer_hint and issuer_hint.lower() in lower:
+                score += 4
+            if any(word in lower for word in signal_words):
+                score += 3
+            if re.search(r"\b[A-Z]{2,}\b", line):
+                score += 1
+            if re.search(r"\d", line):
+                score += 1
+            if self._is_generic_cert_name(line):
+                score -= 5
+            if looks_like_date(line):
+                score -= 4
+
+            candidates.append((line, score))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda item: item[1], reverse=True)
+        best_line, best_score = candidates[0]
+        if best_score <= 0:
+            return None
+
+        if current_name and not self._is_generic_cert_name(current_name):
+            ratio = difflib.SequenceMatcher(None, current_name.lower(), best_line.lower()).ratio()
+            if ratio >= 0.85 and best_line.lower() != current_name.lower():
+                return best_line
+            return None
+
+        return best_line
     
     def _extract_expiration_date(self, text: str) -> Optional[str]:
         """Extract expiration date from text"""

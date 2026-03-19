@@ -9,6 +9,7 @@ from uuid import UUID
 from langchain_core.documents import Document
 from langchain_ollama import OllamaEmbeddings
 from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import insert
 
 from app.config import settings
 from app.rag.db import SessionLocal
@@ -668,21 +669,41 @@ def ingest_employee(user_id: str | UUID, session: Any = None) -> bool:
 
     with SessionLocal() as s:
         init_rag_schema()
-        # Delete all existing chunks for this user, then insert fresh ones
+        # Delete all existing chunks for this user, then insert fresh ones.
         s.query(EmployeeRagVector).filter(EmployeeRagVector.user_id == uid).delete()
         s.flush()
 
+        # Deduplicate chunks by chunk_id to avoid integrity errors on retries.
+        chunk_map: dict[str, tuple[str, dict[str, Any]]] = {}
         for content, meta in chunks:
-            chunk_id = meta.get("chunk_id", f"{uid}_{meta.get('chunk_type', 'unknown')}")
-            embedding = embedder.embed_query(content)
-            new_vec = EmployeeRagVector(
-                user_id=uid,
-                chunk_id=chunk_id,
-                content=content,
-                metadata_json=meta,
-                embedding=embedding,
+            chunk_id = str(meta.get("chunk_id", f"{uid}_{meta.get('chunk_type', 'unknown')}")).strip()
+            if not chunk_id:
+                continue
+            chunk_map[chunk_id] = (content, meta)
+
+        if chunk_map:
+            rows: list[dict[str, Any]] = []
+            for chunk_id, (content, meta) in chunk_map.items():
+                embedding = embedder.embed_query(content)
+                rows.append({
+                    "user_id": uid,
+                    "chunk_id": chunk_id,
+                    "content": content,
+                    "metadata_json": meta,
+                    "embedding": embedding,
+                })
+
+            stmt = insert(EmployeeRagVector).values(rows)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["chunk_id"],
+                set_={
+                    "user_id": stmt.excluded.user_id,
+                    "content": stmt.excluded.content,
+                    "metadata_json": stmt.excluded.metadata_json,
+                    "embedding": stmt.excluded.embedding,
+                },
             )
-            s.add(new_vec)
+            s.execute(stmt)
 
         s.commit()
 

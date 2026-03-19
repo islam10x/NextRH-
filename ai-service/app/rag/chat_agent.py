@@ -23,8 +23,8 @@ from langchain_ollama import OllamaEmbeddings
 from app.config import settings
 from app.utils.llm import build_rag_chat_llm, parse_json_object
 
-TOP_K = 18
-TOP_K_PER_MATCHED_EMPLOYEE = 20
+TOP_K = 8
+TOP_K_PER_MATCHED_EMPLOYEE = 12
 
 
 def _normalize_for_match(value: str) -> str:

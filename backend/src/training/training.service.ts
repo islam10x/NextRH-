@@ -293,7 +293,13 @@ export class TrainingService {
             }
         }
 
-        const storage = await this.fileStorageService.saveEmployeeFile(userId, file, 'Certifications');
+        const preferredFileName = certName.slice(0, 120);
+        const storage = await this.fileStorageService.saveEmployeeFile(
+            userId,
+            file,
+            'Certifications',
+            { preferredFileName, overwrite: true },
+        );
 
         training.proofFilePath = storage.path;
         training.status = 'completed';

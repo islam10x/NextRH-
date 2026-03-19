@@ -76,13 +76,7 @@ services:
     networks:
       - cv-network
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+
 
   # Helper to pull models automatically
   ollama-pull-models:
