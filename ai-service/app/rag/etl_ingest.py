@@ -832,6 +832,20 @@ def ingest_directory(embedder: Any = None) -> None:
 
     print(f"[OK] Directory chunk updated - {len(rows)} employees listed")
 
+
+def delete_employee_vectors(user_id: str | UUID) -> bool:
+    """Delete all RAG vectors for a user and refresh the directory chunk."""
+    from app.rag.models import EmployeeRagVector, init_rag_schema
+
+    uid = UUID(str(user_id))
+    with SessionLocal() as session:
+        init_rag_schema()
+        session.query(EmployeeRagVector).filter(EmployeeRagVector.user_id == uid).delete()
+        session.commit()
+
+    ingest_directory()
+    return True
+
 def run_ingestion(limit: int | None, dry_run: bool) -> None:
     from app.rag.models import init_rag_schema
 

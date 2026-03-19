@@ -1,7 +1,7 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 from uuid import UUID
-from app.rag.etl_ingest import ingest_employee, run_ingestion
+from app.rag.etl_ingest import ingest_employee, run_ingestion, delete_employee_vectors
 from app.rag.chat_agent import build_chain
 from app.utils.llm import build_rag_chat_llm, parse_json_object
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -20,6 +20,12 @@ async def sync_all_rag(background_tasks: BackgroundTasks):
     """Trigger a full re-ingestion of all employees."""
     background_tasks.add_task(run_ingestion, limit=None, dry_run=False)
     return {"message": "Full RAG sync started in background"}
+
+@router.delete("/vectors/{user_id}")
+async def delete_user_vectors(user_id: UUID, background_tasks: BackgroundTasks):
+    """Delete all RAG vectors for a user and refresh the directory chunk."""
+    background_tasks.add_task(delete_employee_vectors, str(user_id))
+    return {"message": f"RAG vectors deletion queued for user {user_id}"}
 
 class ChatRequest(BaseModel):
     message: str

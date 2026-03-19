@@ -1,16 +1,19 @@
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { User, UserStatus } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { RagService } from '../rag/rag.service';
 
 @Injectable()
 export class UsersService {
+    private readonly logger = new Logger(UsersService.name);
     constructor(
         @InjectRepository(User)
         private readonly usersRepository: Repository<User>,
+        private readonly ragService: RagService,
     ) { }
 
     async create(createUserDto: CreateUserDto): Promise<User> {
@@ -128,6 +131,11 @@ export class UsersService {
     async remove(id: string): Promise<void> {
         const user = await this.findById(id);
         await this.usersRepository.remove(user);
+        try {
+            await this.ragService.deleteUserVectors(user.user_id);
+        } catch (error) {
+            this.logger.warn(`Failed to delete RAG vectors for user ${user.user_id}: ${error?.message ?? error}`);
+        }
     }
 
     async validatePassword(plainPassword: string, hashedPassword: string): Promise<boolean> {
