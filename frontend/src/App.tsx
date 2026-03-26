@@ -11,6 +11,7 @@ import { EmployeeDashboard, CVUploadPage, CertificationsPage, TrainingProjectsPa
 import { ManagerDashboard, TeamMembersPage, MemberProfilePage, CertificationTrackingPage, ManagerTrainingsPage } from "@/pages/manager";
 import { BIDDashboard, EmployeeDirectoryPage, AIChatPage, CVGenerationPage } from "@/pages/bid";
 import NotFound from "./pages/NotFound";
+import ProfileSettingsPage from "./pages/ProfileSettingsPage";
 
 const queryClient = new QueryClient();
 
@@ -34,6 +35,7 @@ const App = () => (
               <Route path="/employee/training-projects" element={<TrainingProjectsPage />} />
               <Route path="/employee/cv-preview/" element={<CVPreviewPage />} />
               <Route path="/employee/cv-preview/:employeeId" element={<CVPreviewPage />} />
+              <Route path="/employee/settings" element={<ProfileSettingsPage />} />
             </Route>
 
             {/* Manager Routes */}
@@ -43,6 +45,7 @@ const App = () => (
               <Route path="/manager/member/:memberId" element={<MemberProfilePage />} />
               <Route path="/manager/certifications" element={<CertificationTrackingPage />} />
               <Route path="/manager/trainings" element={<ManagerTrainingsPage />} />
+              <Route path="/manager/settings" element={<ProfileSettingsPage />} />
             </Route>
 
             {/* BID Manager Routes */}
@@ -52,6 +55,7 @@ const App = () => (
               <Route path="/bid/employee/:memberId" element={<MemberProfilePage />} />
               <Route path="/bid/ai-chat" element={<AIChatPage />} />
               <Route path="/bid/cv-generation" element={<CVGenerationPage />} />
+              <Route path="/bid/settings" element={<ProfileSettingsPage />} />
             </Route>
 
             <Route path="*" element={<NotFound />} />

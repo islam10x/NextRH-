@@ -13,8 +13,12 @@ const api = axios.create({
 api.interceptors.request.use(
     (config: InternalAxiosRequestConfig) => {
         const token = sessionStorage.getItem('access_token');
+        const sessionId = sessionStorage.getItem('session_id');
         if (token) {
             config.headers.set('Authorization', `Bearer ${token}`);
+        }
+        if (sessionId) {
+            config.headers.set('x-session-id', sessionId);
         }
         return config;
     },
@@ -44,6 +48,11 @@ api.interceptors.response.use(
     (response) => response,
     async (error: AxiosError) => {
         const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
+        const url = String(originalRequest?.url || '');
+
+        if (url.includes('/auth/logout')) {
+            return Promise.reject(error);
+        }
 
         // If it's a 401 error and not the retry request
         if (error.response?.status === 401 && !originalRequest._retry) {

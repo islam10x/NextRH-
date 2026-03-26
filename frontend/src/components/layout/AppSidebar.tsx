@@ -33,7 +33,7 @@ import {
   Settings,
   ChevronRight,
 } from 'lucide-react';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -111,6 +111,12 @@ export const AppSidebar: React.FC = () => {
     navigate('/login');
   };
 
+  const settingsPath = user?.role === 'employee'
+    ? '/employee/settings'
+    : user?.role === 'team_manager'
+      ? '/manager/settings'
+      : '/bid/settings';
+
   return (
     <Sidebar className="border-r-0">
       <SidebarHeader className="border-b border-sidebar-border px-4 py-4">
@@ -171,6 +177,7 @@ export const AppSidebar: React.FC = () => {
               className="w-full justify-start gap-3 px-2 py-6 text-sidebar-foreground hover:bg-sidebar-accent"
             >
               <Avatar className="h-8 w-8">
+                <AvatarImage src={user?.avatar || undefined} alt={user?.name} />
                 <AvatarFallback className="bg-sidebar-primary text-sidebar-primary-foreground text-xs">
                   {user?.name
                     .split(' ')
@@ -188,7 +195,7 @@ export const AppSidebar: React.FC = () => {
           <DropdownMenuContent align="end" className="w-56 bg-popover">
             <DropdownMenuLabel>My Account</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
+            <DropdownMenuItem onClick={() => navigate(settingsPath)}>
               <Settings className="mr-2 h-4 w-4" />
               Settings
             </DropdownMenuItem>

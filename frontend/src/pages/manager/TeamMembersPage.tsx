@@ -4,7 +4,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   Search,
   Eye,
@@ -49,6 +49,7 @@ interface DBUser {
   firstName?: string;
   lastName?: string;
   invitedAt?: string;
+  avatarUrl?: string | null;
 }
 
 const TeamMembersPage: React.FC = () => {
@@ -256,6 +257,7 @@ const TeamMembersPage: React.FC = () => {
                         <CardContent className="p-5">
                           <div className="flex items-start gap-4">
                             <Avatar className="h-12 w-12 ring-2 ring-primary/5 group-hover:ring-primary/10 transition-all">
+                              <AvatarImage src={u.avatarUrl || undefined} alt={displayName} />
                               <AvatarFallback className="bg-primary/5 text-primary">
                                 {displayName.substring(0, 2).toUpperCase()}
                               </AvatarFallback>
@@ -271,7 +273,7 @@ const TeamMembersPage: React.FC = () => {
                             variant="outline"
                             size="sm"
                             className="w-full mt-4 text-xs font-medium gap-1.5"
-                            onClick={() => navigate(`/employee/cv-preview/${u.user_id}`)}
+                            onClick={() => navigate(`/manager/member/${u.user_id}`)}
                           >
                             <Eye className="h-4 w-4" /> View CV
                           </Button>

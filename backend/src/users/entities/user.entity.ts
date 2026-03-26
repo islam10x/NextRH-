@@ -61,6 +61,9 @@ export class User {
     @Column({ name: 'current_hashed_refresh_token', nullable: true })
     currentHashedRefreshToken?: string;
 
+    @Column({ name: 'avatar_path', nullable: true })
+    avatarPath?: string | null;
+
     @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;
 

@@ -23,6 +23,7 @@ import { RolesGuard } from './guards/roles.guard';
 import { Roles } from './decorators/roles.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { UserRole } from '../users/entities/user.entity';
+import { UsersService } from '../users/users.service';
 
 const REFRESH_COOKIE = 'refresh_token';
 
@@ -31,6 +32,7 @@ export class AuthController {
     constructor(
         private readonly authService: AuthService,
         private readonly invitationsService: InvitationsService,
+        private readonly usersService: UsersService,
     ) { }
 
     @Post('invite')
@@ -112,7 +114,7 @@ export class AuthController {
     @Get('profile')
     @UseGuards(JwtAuthGuard)
     async getProfile(@CurrentUser() user: any) {
-        return user;
+        return this.usersService.getOwnProfile(user.user_id || user.id);
     }
 
     @Post('invite/resend/:userId')

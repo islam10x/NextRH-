@@ -32,6 +32,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       email: backendUser.email,
       name,
       role: backendUser.role as UserRole,
+      avatar: backendUser.avatarUrl || backendUser.avatar || '',
+      firstName,
+      lastName,
       title: 'Employee', // Default, backend doesn't send yet
       yearsOfExperience: 0 // Default
     };
@@ -77,7 +80,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, []);
 
   const logout = useCallback(() => {
-    authService.logout(); // Clears storage and calls API
+    void authService.logout(); // Clears storage and calls API
     setUser(null);
   }, []);
 
