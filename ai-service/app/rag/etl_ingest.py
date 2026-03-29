@@ -585,7 +585,7 @@ def load_employees() -> list[EmployeeRow]:
                 ORDER BY is_current DESC, created_at DESC
                 LIMIT 1
             ) ms ON TRUE
-            WHERE u.role = 'employee'
+            WHERE u.role IN ('employee', 'team_manager', 'bid_manager')
         """)
         base_rows = session.execute(query).mappings().all()
 

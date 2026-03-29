@@ -17,6 +17,7 @@ env/
 uploads/
 templates/
 backend/file-storage/
+file-storage/
 qdrant_local/
 ai-service/qdrant_local/
 # Environment variables

@@ -90,8 +90,6 @@ services:
       - "11434:11434"
     volumes:
       - ollama-data:/root/.ollama
-    networks:
-      - cv-network
     deploy:
       resources:
         reservations:
@@ -99,6 +97,9 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+    networks:
+      - cv-network
+ 
 
   # Helper to pull models automatically
   ollama-pull-models:

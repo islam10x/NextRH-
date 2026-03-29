@@ -84,7 +84,7 @@ export class TrainingService {
                     userId: row.profile?.user?.user_id || '',
                     type: 'training_assigned',
                     title: 'New training assigned',
-                    message: `${row.trainingTitle}${row.dueDate ? ` · Due ${row.dueDate}` : ''}`,
+                    message: `${row.trainingTitle}${row.dueDate ? ` - Due ${row.dueDate}` : ''}${managerName ? ` - Assigned by ${managerName}` : ''}`,
                     relatedEntityType: 'training_session',
                     relatedEntityId: row.training_id,
                 })
@@ -110,10 +110,28 @@ export class TrainingService {
     }
 
     async listForEmployee(profileId: string) {
-        return this.trainingRepo.find({
+        const rows = await this.trainingRepo.find({
             where: { profile: { profile_id: profileId } },
             order: { createdAt: 'DESC' },
         });
+
+        const managerEmails = Array.from(
+            new Set(rows.map((row) => row.assignedBy).filter(Boolean) as string[])
+        );
+        const managers = managerEmails.length
+            ? await this.usersRepo.find({ where: { email: In(managerEmails) } })
+            : [];
+        const managerNameByEmail = new Map(
+            managers.map((mgr) => [
+                mgr.email,
+                [mgr.firstName, mgr.lastName].filter(Boolean).join(' ') || mgr.email,
+            ]),
+        );
+
+        return rows.map((row) => ({
+            ...row,
+            assignedByName: row.assignedBy ? managerNameByEmail.get(row.assignedBy) || row.assignedBy : null,
+        }));
     }
 
     async listForUser(userId: string) {

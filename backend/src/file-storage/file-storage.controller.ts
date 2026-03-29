@@ -12,7 +12,7 @@ export class FileStorageController {
     constructor(private readonly fileStorageService: FileStorageService) { }
 
     @Get('metadata/me')
-    @Roles(UserRole.EMPLOYEE)
+    @Roles(UserRole.EMPLOYEE, UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
     async getMyMetadata(@CurrentUser() user: any) {
         const userId = user.user_id || user.id;
         return this.fileStorageService.getEmployeeMetadata(userId);

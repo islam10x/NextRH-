@@ -16,13 +16,17 @@ import {
 import { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { InvitationsService } from './invitations.service';
+import { PasswordResetService } from './password-reset.service';
 import { LoginDto } from './dto/login.dto';
 import { InviteDto } from './dto/invite.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { Roles } from './decorators/roles.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { UserRole } from '../users/entities/user.entity';
+import { UsersService } from '../users/users.service';
 
 const REFRESH_COOKIE = 'refresh_token';
 
@@ -31,6 +35,8 @@ export class AuthController {
     constructor(
         private readonly authService: AuthService,
         private readonly invitationsService: InvitationsService,
+        private readonly passwordResetService: PasswordResetService,
+        private readonly usersService: UsersService,
     ) { }
 
     @Post('invite')
@@ -57,6 +63,29 @@ export class AuthController {
     @HttpCode(HttpStatus.OK)
     async setupPassword(@Body() body: { token: string; password: string }) {
         return this.invitationsService.setupPassword(body.token, body.password);
+    }
+
+    @Post('forgot-password')
+    @HttpCode(HttpStatus.OK)
+    async forgotPassword(
+        @Body() body: ForgotPasswordDto,
+        @Req() req: Request,
+    ) {
+        return this.passwordResetService.requestPasswordReset(body.email, {
+            userAgent: req.headers['user-agent'],
+            ipAddress: req.ip,
+        });
+    }
+
+    @Get('reset/validate')
+    async validateResetToken(@Query('token') token: string) {
+        return this.passwordResetService.validateResetToken(token);
+    }
+
+    @Post('reset-password')
+    @HttpCode(HttpStatus.OK)
+    async resetPassword(@Body() body: ResetPasswordDto) {
+        return this.passwordResetService.resetPassword(body.token, body.password);
     }
 
     @Post('login')
@@ -112,7 +141,7 @@ export class AuthController {
     @Get('profile')
     @UseGuards(JwtAuthGuard)
     async getProfile(@CurrentUser() user: any) {
-        return user;
+        return this.usersService.getOwnProfile(user.user_id || user.id);
     }
 
     @Post('invite/resend/:userId')

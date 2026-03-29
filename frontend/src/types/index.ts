@@ -7,6 +7,8 @@ export interface User {
   name: string;
   role: UserRole;
   avatar?: string;
+  firstName?: string;
+  lastName?: string;
   teamId?: string;
   title: string;
   yearsOfExperience: number;
@@ -46,6 +48,7 @@ export interface Training {
   proofFilePath?: string;
   proofUrl?: string;
   assigneeName?: string;
+  assignedByName?: string;
   assignedAt?: string;
   startDate?: string;
 }
@@ -61,6 +64,10 @@ export interface Project {
   technologies: string[];
   description: string;
   role: string;
+  assigneeName?: string;
+  assigneeEmail?: string;
+  assigneeProfileId?: string;
+  assignedByName?: string;
 }
 
 // Employee (extended user for profiles)

@@ -1,14 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Users, Award, AlertTriangle, Building2, TrendingUp, ChevronRight, Loader2 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { Users, Award, AlertTriangle, Building2, Loader2 } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { bidService, BidDashboardStats } from '@/services/bid.service';
 
 const BIDDashboard: React.FC = () => {
-  const navigate = useNavigate();
   const [stats, setStats] = useState<BidDashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -53,10 +49,6 @@ const BIDDashboard: React.FC = () => {
           <h1 className="text-2xl font-bold text-foreground">BID Dashboard</h1>
           <p className="text-muted-foreground">Overview of key performance metrics</p>
         </div>
-        <Button onClick={() => navigate('/bid/ai-chat')}>
-          <TrendingUp className="mr-2 h-4 w-4" />
-          Generate Report
-        </Button>
       </div>
 
       {/* Stats Cards */}
@@ -161,53 +153,7 @@ const BIDDashboard: React.FC = () => {
         </Card>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* Expiring Certifications */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Expiring Certifications</CardTitle>
-            <CardDescription>Certifications expiring in the next 30 days</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">Total expiring</span>
-                <Badge variant="outline" className="bg-warning/10 text-warning border-warning/20">
-                  {certStats.expiringSoon}
-                </Badge>
-              </div>
-              <Button variant="outline" className="w-full" onClick={() => navigate('/bid/certifications')}>
-                View all certifications
-                <ChevronRight className="ml-2 h-4 w-4" />
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Quick Actions */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Quick Actions</CardTitle>
-            <CardDescription>Common tasks for BID managers</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              <Button variant="outline" className="w-full justify-between" onClick={() => navigate('/bid/ai-chat')}>
-                <span>Ask AI Assistant</span>
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-              <Button variant="outline" className="w-full justify-between" onClick={() => navigate('/bid/reports')}>
-                <span>Generate Report</span>
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-              <Button variant="outline" className="w-full justify-between" onClick={() => navigate('/bid/employees')}>
-                <span>Manage Employees</span>
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      {/* Removed Expiring Certifications and Quick Actions sections */}
     </div>
   );
 };

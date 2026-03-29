@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { Team } from './entities/team.entity';
 import { TeamMember } from './entities/team-member.entity';
 import { EmployeeProfile } from '../employees/entities/employee-profile.entity';
+import { User, UserRole } from '../users/entities/user.entity';
 
 @Injectable()
 export class TeamsService {
@@ -68,19 +69,23 @@ export class TeamsService {
     }
 
     async ensureMembership(managerUserId: string, employeeUserId: string): Promise<void> {
+        const userRepo = this.teamRepo.manager.getRepository(User);
+        const manager = await userRepo.findOne({ where: { user_id: managerUserId } });
+        if (!manager || manager.role !== UserRole.TEAM_MANAGER) {
+            // Only team managers own teams
+            return;
+        }
+
         // 1. Find or create the Team for this manager
         let team = await this.teamRepo.findOne({
             where: { manager: { user_id: managerUserId } },
         });
 
         if (!team) {
-            // Get manager details for team name
-            const userRepo = this.teamRepo.manager.getRepository('User');
-            const manager = await userRepo.findOne({ where: { user_id: managerUserId } });
-            
+            // Use manager details for team name
             let teamName = 'Team';
-            if (manager && (manager as any).firstName) {
-                teamName = `${(manager as any).firstName}'s Team`;
+            if (manager.firstName) {
+                teamName = `${manager.firstName}'s Team`;
             }
 
             team = this.teamRepo.create({

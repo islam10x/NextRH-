@@ -186,7 +186,18 @@ class CertificationOCR:
             if user_first_name and user_last_name:
                 is_verified = self._verify_user_name(cleaned_text, user_first_name, user_last_name)
                 if not is_verified:
-                    logger.warning(f"Name verification failed for {user_first_name} {user_last_name} (soft warning, not blocking)")
+                    logger.warning(
+                        f"Name verification failed for {user_first_name} {user_last_name} (blocking upload)"
+                    )
+                    return {
+                        'success': False,
+                        'error': 'The uploaded certificate does not appear to belong to your name. Please upload a certificate that matches your profile name.',
+                        'certification_name': 'Unknown Certification',
+                        'issuer': None,
+                        'expiration_date': None,
+                        'issue_date': None,
+                        'credential_id': None,
+                    }
 
             return {
                 'success': True,

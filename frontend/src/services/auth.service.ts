@@ -11,6 +11,7 @@ export interface AuthResponse {
         firstName: string;
         lastName: string;
         role: UserRole;
+        avatarUrl?: string | null;
     };
 }
 
@@ -23,7 +24,13 @@ export const authService = {
     async logout(): Promise<void> {
         try {
             const sessionId = sessionStorage.getItem('session_id');
-            await api.post('/auth/logout', { session_id: sessionId });
+            if (sessionId) {
+                await api.post('/auth/logout', { session_id: sessionId });
+            }
+        } catch (error: any) {
+            if (error?.response?.status && error.response.status !== 401) {
+                throw error;
+            }
         } finally {
             sessionStorage.removeItem('access_token');
             sessionStorage.removeItem('user');

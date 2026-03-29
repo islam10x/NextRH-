@@ -24,7 +24,7 @@ export class CertificationsController {
     constructor(private readonly certificationsService: CertificationsService) { }
 
     @Post('upload')
-    @Roles(UserRole.EMPLOYEE)
+    @Roles(UserRole.EMPLOYEE, UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
     @UseInterceptors(
         FileInterceptor('file', {
             limits: { fileSize: MAX_UPLOAD_BYTES },

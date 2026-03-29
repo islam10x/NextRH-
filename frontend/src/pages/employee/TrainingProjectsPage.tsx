@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { useSearchParams } from 'react-router-dom';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -9,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Training, Project } from '@/types';
 import { trainingService } from '@/services/training.service';
+import { projectService } from '@/services/project.service';
 import {
   Dialog,
   DialogContent,
@@ -16,14 +18,11 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog';
 import {
   GraduationCap,
   Briefcase,
-  Plus,
   Calendar,
-  Clock,
   Building2,
   Code,
   ChevronRight,
@@ -34,14 +33,21 @@ import { toast } from 'sonner';
 const TrainingProjectsPage: React.FC = () => {
   const { user } = useAuth();
   const [isProjectDialogOpen, setIsProjectDialogOpen] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab') === 'projects' ? 'projects' : 'trainings';
+  const [activeTab, setActiveTab] = useState<'trainings' | 'projects'>(initialTab);
   const [trainings, setTrainings] = useState<Training[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isProjectLoading, setIsProjectLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [completionDialogOpen, setCompletionDialogOpen] = useState(false);
   const [selectedTraining, setSelectedTraining] = useState<Training | null>(null);
   const [completionComment, setCompletionComment] = useState<string>('');
   const [completionFile, setCompletionFile] = useState<File | null>(null);
-  const projects: Project[] = [];
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [projectRole, setProjectRole] = useState('');
+  const [projectDescription, setProjectDescription] = useState('');
 
   const formatDate = (dateString: string) => {
     if (!dateString) return 'n/a';
@@ -101,6 +107,43 @@ const TrainingProjectsPage: React.FC = () => {
     loadTrainings();
   }, [user]);
 
+  const loadProjects = async () => {
+    if (!user) return;
+    setIsProjectLoading(true);
+    try {
+      const data = await projectService.listMine();
+      setProjects(data);
+    } catch (error: any) {
+      console.error('Failed to fetch projects', error);
+      toast.error(error?.response?.data?.message || 'Failed to load projects');
+    } finally {
+      setIsProjectLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadProjects();
+  }, [user]);
+
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (tab === 'projects' || tab === 'trainings') {
+      setActiveTab(tab);
+    }
+  }, [searchParams]);
+
+  const handleTabChange = (value: string) => {
+    if (value !== 'trainings' && value !== 'projects') return;
+    setActiveTab(value);
+    const next = new URLSearchParams(searchParams.toString());
+    if (value === 'trainings') {
+      next.delete('tab');
+    } else {
+      next.set('tab', 'projects');
+    }
+    setSearchParams(next, { replace: true });
+  };
+
   const handleStart = async (trainingId: string) => {
     try {
       await trainingService.start(trainingId);
@@ -145,6 +188,9 @@ const TrainingProjectsPage: React.FC = () => {
             </div>
             {training.provider && (
               <p className="text-sm text-muted-foreground">{training.provider}</p>
+            )}
+            {training.assignedByName && (
+              <p className="text-xs text-muted-foreground">Assigned by {training.assignedByName}</p>
             )}
             <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
               <span className="flex items-center gap-1">
@@ -213,8 +259,13 @@ const TrainingProjectsPage: React.FC = () => {
               {formatDate(project.startDate)} - {project.endDate ? formatDate(project.endDate) : 'Present'}
             </span>
           </div>
+          {project.assignedByName && (
+            <p className="text-xs text-muted-foreground">Assigned by {project.assignedByName}</p>
+          )}
 
-          <p className="text-sm text-muted-foreground line-clamp-2">{project.description}</p>
+          <p className="text-sm text-muted-foreground line-clamp-2">
+            {project.description || 'Add your contribution details to help build your CV.'}
+          </p>
 
           <div className="flex flex-wrap gap-1.5">
             {project.technologies.map((tech) => (
@@ -224,12 +275,28 @@ const TrainingProjectsPage: React.FC = () => {
               </Badge>
             ))}
           </div>
+
+          <div className="flex justify-end">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setSelectedProject(project);
+                setProjectRole(project.role || '');
+                setProjectDescription(project.description || '');
+                setIsProjectDialogOpen(true);
+              }}
+            >
+              Update Contribution
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>
   );
 
   return (
+    <>
     <div className="space-y-6">
       {/* Header */}
       <div>
@@ -238,7 +305,7 @@ const TrainingProjectsPage: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      <Tabs defaultValue="trainings" className="space-y-6">
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-6">
         <TabsList className="grid w-full max-w-md grid-cols-2">
           <TabsTrigger value="trainings" className="flex items-center gap-2">
             <GraduationCap className="h-4 w-4" />
@@ -275,64 +342,9 @@ const TrainingProjectsPage: React.FC = () => {
 
         {/* Projects Tab */}
         <TabsContent value="projects" className="space-y-4">
-          <div className="flex justify-end">
-            <Dialog open={isProjectDialogOpen} onOpenChange={setIsProjectDialogOpen}>
-              <DialogTrigger asChild>
-                <Button>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Add Project
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="sm:max-w-lg">
-                <DialogHeader>
-                  <DialogTitle>Add Project</DialogTitle>
-                  <DialogDescription>
-                    Add a project you've worked on.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4 py-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="projectName">Project Name</Label>
-                    <Input id="projectName" placeholder="e.g., Cloud Migration Initiative" />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="client">Client</Label>
-                    <Input id="client" placeholder="e.g., Company Name" />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="role">Your Role</Label>
-                    <Input id="role" placeholder="e.g., Lead Developer" />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="startDate">Start Date</Label>
-                      <Input id="startDate" type="date" />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="endDate">End Date</Label>
-                      <Input id="endDate" type="date" />
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="technologies">Technologies</Label>
-                    <Input id="technologies" placeholder="e.g., React, Node.js, AWS (comma separated)" />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="projectDesc">Description</Label>
-                    <Textarea id="projectDesc" placeholder="Describe your contributions and achievements..." />
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setIsProjectDialogOpen(false)}>
-                    Cancel
-                  </Button>
-                  <Button onClick={() => setIsProjectDialogOpen(false)}>Add Project</Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
-          </div>
-
-          {projects.length > 0 ? (
+          {isProjectLoading ? (
+            <Card><CardContent className="py-8 text-center text-muted-foreground">Loading projects...</CardContent></Card>
+          ) : projects.length > 0 ? (
             <div className="grid gap-4 md:grid-cols-2">
               {projects.map((project) => (
                 <ProjectCard key={project.id} project={project} />
@@ -342,14 +354,10 @@ const TrainingProjectsPage: React.FC = () => {
             <Card>
               <CardContent className="py-16 text-center">
                 <Briefcase className="h-12 w-12 mx-auto text-muted-foreground/50 mb-4" />
-                <h3 className="font-medium text-lg mb-1">No project records</h3>
+                <h3 className="font-medium text-lg mb-1">No assigned projects</h3>
                 <p className="text-muted-foreground text-sm mb-4">
-                  Add your project experience
+                  Your manager will assign projects here. Once assigned, add your contribution details.
                 </p>
-                <Button onClick={() => setIsProjectDialogOpen(true)}>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Add Project
-                </Button>
               </CardContent>
             </Card>
           )}
@@ -402,6 +410,69 @@ const TrainingProjectsPage: React.FC = () => {
         </DialogContent>
       </Dialog>
     </div>
+
+      <Dialog open={isProjectDialogOpen} onOpenChange={setIsProjectDialogOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Update Contribution</DialogTitle>
+            <DialogDescription>
+              Describe what you contributed to this project. This will appear in your CV.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1">
+              <Label>Project</Label>
+              <p className="text-sm font-semibold text-foreground">{selectedProject?.name || 'Project'}</p>
+              {selectedProject?.client && (
+                <p className="text-xs text-muted-foreground">{selectedProject.client}</p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="projectRole">Your Role</Label>
+              <Input
+                id="projectRole"
+                value={projectRole}
+                onChange={(e) => setProjectRole(e.target.value)}
+                placeholder="e.g., Lead Developer"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="projectContribution">Contribution</Label>
+              <Textarea
+                id="projectContribution"
+                value={projectDescription}
+                onChange={(e) => setProjectDescription(e.target.value)}
+                placeholder="Describe your contributions and achievements..."
+                rows={5}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsProjectDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={async () => {
+                if (!selectedProject) return;
+                try {
+                  await projectService.updateParticipation(selectedProject.id, {
+                    description: projectDescription,
+                    role: projectRole,
+                  });
+                  toast.success('Project contribution updated');
+                  setIsProjectDialogOpen(false);
+                  loadProjects();
+                } catch (error: any) {
+                  toast.error(error?.response?.data?.message || 'Unable to update project');
+                }
+              }}
+            >
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 };
 

@@ -23,6 +23,7 @@ export interface AccessTokenResponse {
         firstName: string;
         lastName: string;
         role: string;
+        avatarUrl?: string | null;
     };
 }
 
@@ -71,6 +72,7 @@ export class AuthService {
                 firstName: user.firstName,
                 lastName: user.lastName,
                 role: user.role,
+                avatarUrl: this.usersService.getAvatarUrl(user.avatarPath),
             },
         };
     }
@@ -184,6 +186,7 @@ export class AuthService {
                     firstName: session.user.firstName,
                     lastName: session.user.lastName,
                     role: session.user.role,
+                    avatarUrl: this.usersService.getAvatarUrl(session.user.avatarPath),
                 },
             };
         } catch (error) {

@@ -5,7 +5,7 @@ import { authService } from '@/services/auth.service';
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
-  login: (email: string, password: string) => Promise<User | null>;
+  login: (email: string, password: string) => Promise<{ user: User | null; error?: string }>;
   logout: () => void;
   updateUser: (backendUser: any) => void;
   isLoading: boolean;
@@ -32,6 +32,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       email: backendUser.email,
       name,
       role: backendUser.role as UserRole,
+      avatar: backendUser.avatarUrl || backendUser.avatar || '',
+      firstName,
+      lastName,
       title: 'Employee', // Default, backend doesn't send yet
       yearsOfExperience: 0 // Default
     };
@@ -57,7 +60,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
 
 
-  const login = useCallback(async (email: string, password: string): Promise<User | null> => {
+  const login = useCallback(async (email: string, password: string): Promise<{ user: User | null; error?: string }> => {
     try {
       const response = await authService.login(email, password);
 
@@ -69,15 +72,21 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const mappedUser = mapBackendUserToFrontend(response.user);
       sessionStorage.setItem('user', JSON.stringify(mappedUser));
       setUser(mappedUser);
-      return mappedUser;
-    } catch (error) {
+      return { user: mappedUser };
+    } catch (error: any) {
       console.error('Login failed', error);
-      return null;
+      const rawMessage = error?.response?.data?.message;
+      const message = Array.isArray(rawMessage) ? rawMessage.join(', ') : rawMessage;
+      const friendlyMessage =
+        message === 'Invalid credentials'
+          ? 'Invalid email or password.'
+          : message || 'Login failed. Please try again.';
+      return { user: null, error: friendlyMessage };
     }
   }, []);
 
   const logout = useCallback(() => {
-    authService.logout(); // Clears storage and calls API
+    void authService.logout(); // Clears storage and calls API
     setUser(null);
   }, []);
 

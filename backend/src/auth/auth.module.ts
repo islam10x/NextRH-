@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
@@ -15,14 +15,16 @@ import { InvitationsService } from './invitations.service';
 import { User } from '../users/entities/user.entity';
 import { InvitationToken } from './entities/invitation-token.entity';
 import { AuthSession } from './entities/auth-session.entity';
+import { PasswordResetToken } from './entities/password-reset-token.entity';
+import { PasswordResetService } from './password-reset.service';
 
 @Module({
     imports: [
-        UsersModule,
+        forwardRef(() => UsersModule),
         TeamsModule,
         NotificationsModule,
         PassportModule,
-        TypeOrmModule.forFeature([User, InvitationToken, AuthSession]),
+        TypeOrmModule.forFeature([User, InvitationToken, PasswordResetToken, AuthSession]),
         JwtModule.registerAsync({
             imports: [ConfigModule],
             useFactory: async (configService: ConfigService) => {
@@ -41,7 +43,7 @@ import { AuthSession } from './entities/auth-session.entity';
         }),
     ],
     controllers: [AuthController],
-    providers: [AuthService, InvitationsService, JwtStrategy, JwtAuthGuard, RolesGuard],
-    exports: [AuthService, InvitationsService, JwtAuthGuard, RolesGuard],
+    providers: [AuthService, InvitationsService, PasswordResetService, JwtStrategy, JwtAuthGuard, RolesGuard],
+    exports: [AuthService, InvitationsService, PasswordResetService, JwtAuthGuard, RolesGuard],
 })
 export class AuthModule { }

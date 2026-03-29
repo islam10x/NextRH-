@@ -47,7 +47,8 @@ const formatDateRange = (startDate: string | null | undefined, endDate: string |
 const CVPreviewPage: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const { employeeId } = useParams<{ employeeId: string }>();
+  const { employeeId, memberId } = useParams<{ employeeId?: string; memberId?: string }>();
+  const targetUserId = employeeId || memberId;
   const [profile, setProfile] = useState<CvProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -59,7 +60,7 @@ const CVPreviewPage: React.FC = () => {
         return;
       }
       try {
-        const url = employeeId ? `/cv/profile/${employeeId}` : '/cv/profile/me';
+        const url = targetUserId ? `/cv/profile/${targetUserId}` : '/cv/profile/me';
         const response = await api.get<CvProfile>(url);
         setProfile(response.data);
       } catch (err) {
@@ -70,7 +71,7 @@ const CVPreviewPage: React.FC = () => {
     };
 
     fetchProfile();
-  }, [user, employeeId]);
+  }, [user, targetUserId]);
 
   const handleDownloadPDF = async () => {
     try {
@@ -440,7 +441,7 @@ const CVPreviewPage: React.FC = () => {
               ? 'Please refresh the page or try uploading your CV again.'
               : 'Upload your CV to see your parsed profile here.'}
           </p>
-          {!error && (
+          {!error && !targetUserId && (
             <Button size="sm" onClick={() => navigate('/employee/cv-upload')}>
               Upload CV
             </Button>

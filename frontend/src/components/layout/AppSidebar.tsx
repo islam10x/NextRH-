@@ -24,6 +24,7 @@ import {
   GraduationCap,
   Eye,
   Users,
+  Briefcase,
   Clock3,
   Search,
   MessageSquare,
@@ -33,7 +34,7 @@ import {
   Settings,
   ChevronRight,
 } from 'lucide-react';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -61,8 +62,12 @@ const employeeNavItems: NavItem[] = [
 const managerNavItems: NavItem[] = [
   { title: 'Team Dashboard', url: '/manager/dashboard', icon: LayoutDashboard },
   { title: 'Team Members', url: '/manager/team', icon: Users },
+  { title: 'Projects', url: '/manager/projects', icon: Briefcase },
   { title: 'Certification Tracking', url: '/manager/certifications', icon: Award },
   { title: 'Trainings', url: '/manager/trainings', icon: Clock3 },
+  { title: 'Upload CV', url: '/employee/cv-upload', icon: FileText },
+  { title: 'My Certifications', url: '/employee/certifications', icon: Award },
+  { title: 'My CV Preview', url: '/employee/cv-preview', icon: Eye },
 ];
 
 const bidManagerNavItems: NavItem[] = [
@@ -70,6 +75,9 @@ const bidManagerNavItems: NavItem[] = [
   { title: 'Employee Directory', url: '/bid/directory', icon: Search },
   { title: 'AI Assistant', url: '/bid/ai-chat', icon: MessageSquare },
   { title: 'Generate CV', url: '/bid/cv-generation', icon: FileOutput },
+  { title: 'Upload CV', url: '/employee/cv-upload', icon: FileText },
+  { title: 'My Certifications', url: '/employee/certifications', icon: Award },
+  { title: 'My CV Preview', url: '/employee/cv-preview', icon: Eye },
 ];
 
 export const AppSidebar: React.FC = () => {
@@ -110,6 +118,12 @@ export const AppSidebar: React.FC = () => {
     logout();
     navigate('/login');
   };
+
+  const settingsPath = user?.role === 'employee'
+    ? '/employee/settings'
+    : user?.role === 'team_manager'
+      ? '/manager/settings'
+      : '/bid/settings';
 
   return (
     <Sidebar className="border-r-0">
@@ -171,6 +185,7 @@ export const AppSidebar: React.FC = () => {
               className="w-full justify-start gap-3 px-2 py-6 text-sidebar-foreground hover:bg-sidebar-accent"
             >
               <Avatar className="h-8 w-8">
+                <AvatarImage src={user?.avatar || undefined} alt={user?.name} />
                 <AvatarFallback className="bg-sidebar-primary text-sidebar-primary-foreground text-xs">
                   {user?.name
                     .split(' ')
@@ -188,7 +203,7 @@ export const AppSidebar: React.FC = () => {
           <DropdownMenuContent align="end" className="w-56 bg-popover">
             <DropdownMenuLabel>My Account</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
+            <DropdownMenuItem onClick={() => navigate(settingsPath)}>
               <Settings className="mr-2 h-4 w-4" />
               Settings
             </DropdownMenuItem>
