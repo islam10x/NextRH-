@@ -7,6 +7,8 @@ export interface User {
   name: string;
   role: UserRole;
   avatar?: string;
+  firstName?: string;
+  lastName?: string;
   teamId?: string;
   title: string;
   yearsOfExperience: number;

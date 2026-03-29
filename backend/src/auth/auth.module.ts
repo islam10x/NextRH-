@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
@@ -20,7 +20,7 @@ import { PasswordResetService } from './password-reset.service';
 
 @Module({
     imports: [
-        UsersModule,
+        forwardRef(() => UsersModule),
         TeamsModule,
         NotificationsModule,
         PassportModule,
