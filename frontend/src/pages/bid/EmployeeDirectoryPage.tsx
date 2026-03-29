@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Search, Eye, Award, UserPlus, Mail, Shield, Loader2, RotateCcw, Trash2, Users as UsersIcon, Clock, Briefcase } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -34,6 +34,7 @@ interface DBUser {
   firstName?: string;
   lastName?: string;
   invitedAt?: string;
+  avatarUrl?: string | null;
 }
 
 const EmployeeDirectoryPage: React.FC = () => {
@@ -110,6 +111,7 @@ const EmployeeDirectoryPage: React.FC = () => {
                     <CardContent className="p-5">
                       <div className="flex items-start gap-4">
                         <Avatar className="h-12 w-12 ring-2 ring-primary/5 group-hover:ring-primary/10 transition-all">
+                          <AvatarImage src={u.avatarUrl || undefined} alt={displayName} />
                           <AvatarFallback className="bg-primary/5 text-primary">
                             {displayName.substring(0, 2).toUpperCase()}
                           </AvatarFallback>
