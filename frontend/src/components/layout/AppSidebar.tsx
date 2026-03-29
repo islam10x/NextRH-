@@ -24,6 +24,7 @@ import {
   GraduationCap,
   Eye,
   Users,
+  Briefcase,
   Clock3,
   Search,
   MessageSquare,
@@ -61,8 +62,12 @@ const employeeNavItems: NavItem[] = [
 const managerNavItems: NavItem[] = [
   { title: 'Team Dashboard', url: '/manager/dashboard', icon: LayoutDashboard },
   { title: 'Team Members', url: '/manager/team', icon: Users },
+  { title: 'Projects', url: '/manager/projects', icon: Briefcase },
   { title: 'Certification Tracking', url: '/manager/certifications', icon: Award },
   { title: 'Trainings', url: '/manager/trainings', icon: Clock3 },
+  { title: 'Upload CV', url: '/employee/cv-upload', icon: FileText },
+  { title: 'My Certifications', url: '/employee/certifications', icon: Award },
+  { title: 'My CV Preview', url: '/employee/cv-preview', icon: Eye },
 ];
 
 const bidManagerNavItems: NavItem[] = [
@@ -70,6 +75,9 @@ const bidManagerNavItems: NavItem[] = [
   { title: 'Employee Directory', url: '/bid/directory', icon: Search },
   { title: 'AI Assistant', url: '/bid/ai-chat', icon: MessageSquare },
   { title: 'Generate CV', url: '/bid/cv-generation', icon: FileOutput },
+  { title: 'Upload CV', url: '/employee/cv-upload', icon: FileText },
+  { title: 'My Certifications', url: '/employee/certifications', icon: Award },
+  { title: 'My CV Preview', url: '/employee/cv-preview', icon: Eye },
 ];
 
 export const AppSidebar: React.FC = () => {

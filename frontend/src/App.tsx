@@ -7,8 +7,10 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import { MainLayout } from "@/components/layout";
 import LoginPage from "@/pages/auth/LoginPage";
 import SetupPasswordPage from "@/pages/auth/SetupPasswordPage";
+import ForgotPasswordPage from "@/pages/auth/ForgotPasswordPage";
+import ResetPasswordPage from "@/pages/auth/ResetPasswordPage";
 import { EmployeeDashboard, CVUploadPage, CertificationsPage, TrainingProjectsPage, CVPreviewPage } from "@/pages/employee";
-import { ManagerDashboard, TeamMembersPage, MemberProfilePage, CertificationTrackingPage, ManagerTrainingsPage } from "@/pages/manager";
+import { ManagerDashboard, TeamMembersPage, MemberProfilePage, CertificationTrackingPage, ManagerTrainingsPage, ManagerProjectsPage } from "@/pages/manager";
 import { BIDDashboard, EmployeeDirectoryPage, AIChatPage, CVGenerationPage } from "@/pages/bid";
 import NotFound from "./pages/NotFound";
 
@@ -25,13 +27,19 @@ const App = () => (
             <Route path="/" element={<Navigate to="/login" replace />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/auth/setup-password" element={<SetupPasswordPage />} />
+            <Route path="/auth/forgot-password" element={<ForgotPasswordPage />} />
+            <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
 
             {/* Employee Routes */}
             <Route element={<MainLayout requiredRole="employee" />}>
               <Route path="/employee/dashboard" element={<EmployeeDashboard />} />
+              <Route path="/employee/training-projects" element={<TrainingProjectsPage />} />
+            </Route>
+
+            {/* Shared self-service routes (employees + managers) */}
+            <Route element={<MainLayout requiredRole={["employee", "team_manager", "bid_manager"]} />}>
               <Route path="/employee/cv-upload" element={<CVUploadPage />} />
               <Route path="/employee/certifications" element={<CertificationsPage />} />
-              <Route path="/employee/training-projects" element={<TrainingProjectsPage />} />
               <Route path="/employee/cv-preview/" element={<CVPreviewPage />} />
               <Route path="/employee/cv-preview/:employeeId" element={<CVPreviewPage />} />
             </Route>
@@ -43,6 +51,7 @@ const App = () => (
               <Route path="/manager/member/:memberId" element={<MemberProfilePage />} />
               <Route path="/manager/certifications" element={<CertificationTrackingPage />} />
               <Route path="/manager/trainings" element={<ManagerTrainingsPage />} />
+              <Route path="/manager/projects" element={<ManagerProjectsPage />} />
             </Route>
 
             {/* BID Manager Routes */}

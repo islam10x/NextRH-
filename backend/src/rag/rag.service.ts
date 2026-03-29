@@ -395,7 +395,17 @@ export class RagService {
             return Array.from(draft.sourceTypes).some((type) => type !== 'directory');
         });
 
-        if (queryTokens.length > 0) {
+        const nameMatches =
+            queryTokens.length >= 2
+                ? Array.from(results.values()).filter((draft) =>
+                    this.nameHasAllTokens(draft.name, queryTokens)
+                )
+                : [];
+
+        const forcedByName = nameMatches.length > 0;
+        if (forcedByName) {
+            scored = nameMatches;
+        } else if (queryTokens.length > 0) {
             scored = scored.filter((draft) => draft.tokenMatch);
         }
 
@@ -418,7 +428,7 @@ export class RagService {
             return { draft, score };
         });
 
-        if (scoredWithRank.length === 0 && allowDirectoryFallback && directoryFallback.length > 0) {
+        if (!forcedByName && scoredWithRank.length === 0 && allowDirectoryFallback && directoryFallback.length > 0) {
             return directoryFallback.slice(0, 6).map((draft) => ({
                 name: draft.name,
                 role: draft.role,
@@ -452,6 +462,17 @@ export class RagService {
             return match[1].trim();
         }
         return null;
+    }
+
+    private nameHasAllTokens(name: string, tokens: string[]): boolean {
+        if (!name || tokens.length === 0) return false;
+        const normalized = name
+            .toLowerCase()
+            .replace(/[^a-z0-9\s]/g, ' ')
+            .split(/\s+/)
+            .filter(Boolean);
+        if (!normalized.length) return false;
+        return tokens.every((token) => normalized.includes(token));
     }
 
     private isDirectoryQuery(query?: string): boolean {

@@ -29,7 +29,7 @@ export class CvController {
      */
     @Get('profile/me')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.EMPLOYEE)
+    @Roles(UserRole.EMPLOYEE, UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
     async getMyProfile(@CurrentUser() user: any) {
         const userId = user.user_id || user.id;
         return this.cvService.getMyProfile(userId);
@@ -56,7 +56,7 @@ export class CvController {
      */
     @Post('upload')
     @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.EMPLOYEE)
+    @Roles(UserRole.EMPLOYEE, UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
     @UseInterceptors(
         FileInterceptor('file', {
             limits: { fileSize: MAX_UPLOAD_BYTES },

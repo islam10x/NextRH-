@@ -10,6 +10,7 @@ import {
   CheckCircle,
   FileText,
   CheckCheck,
+  Briefcase,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -60,6 +61,10 @@ function getNotificationIcon(type?: string) {
       return <BookOpen className="h-4 w-4 text-indigo-500 shrink-0" />;
     case 'training_completed':
       return <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />;
+    case 'project_assigned':
+      return <Briefcase className="h-4 w-4 text-blue-500 shrink-0" />;
+    case 'project_updated':
+      return <Briefcase className="h-4 w-4 text-indigo-500 shrink-0" />;
     case 'cv_update_needed':
       return <FileText className="h-4 w-4 text-orange-500 shrink-0" />;
     default:
@@ -125,6 +130,9 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ title, showSearch = false 
       notification.notificationType === 'training_assigned' ||
       notification.notificationType === 'training_started' ||
       notification.notificationType === 'training_completed';
+    const isProject =
+      notification.notificationType === 'project_assigned' ||
+      notification.notificationType === 'project_updated';
 
     if (isCert) {
       navigate(
@@ -136,6 +144,12 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ title, showSearch = false 
       navigate(
         user?.role === 'team_manager'
           ? '/manager/trainings'
+          : '/employee/training-projects',
+      );
+    } else if (isProject) {
+      navigate(
+        user?.role === 'team_manager'
+          ? '/manager/projects'
           : '/employee/training-projects',
       );
     }

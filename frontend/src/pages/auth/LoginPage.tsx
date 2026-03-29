@@ -82,6 +82,16 @@ const LoginPage: React.FC = () => {
                     className="h-11"
                   />
                 </div>
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="px-0 text-sm text-muted-foreground"
+                    onClick={() => navigate('/auth/forgot-password')}
+                  >
+                    Forgot password?
+                  </Button>
+                </div>
               </div>
             </CardContent>
 

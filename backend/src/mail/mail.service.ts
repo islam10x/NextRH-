@@ -88,6 +88,38 @@ export class MailService {
         }
     }
 
+    async sendPasswordResetEmail(to: string, token: string) {
+        const resetUrl = `${this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173'}/auth/reset-password?token=${token}`;
+        const systemFrom =
+            this.configService.get<string>('MAIL_FROM_ADDRESS') ||
+            this.configService.get<string>('SMTP_FROM');
+
+        const mailOptions = {
+            from: `"CV Manager Security" <${systemFrom}>`,
+            to,
+            subject: 'Reset your CV Manager password',
+            html: `
+                <div style="font-family: Arial, sans-serif; max-width: 640px; margin: auto; padding: 24px; border: 1px solid #eaeaea; border-radius: 10px;">
+                    <h2 style="color: #3b82f6; margin-bottom: 12px;">Reset your password</h2>
+                    <p style="margin: 6px 0;">We received a request to reset your CV Manager password.</p>
+                    <p style="margin: 6px 0;">If you made this request, click the button below. This link expires in 1 hour.</p>
+                    <div style="text-align: center; margin: 22px 0;">
+                        <a href="${resetUrl}" style="background-color: #3b82f6; color: white; padding: 12px 22px; text-decoration: none; border-radius: 6px; font-weight: 600;">Reset Password</a>
+                    </div>
+                    <p style="color: #666; font-size: 0.9em;">If you didn't request this, you can safely ignore this email.</p>
+                </div>
+            `,
+        };
+
+        try {
+            await this.transporter.sendMail(mailOptions);
+            console.log(`Password reset email sent to ${to}`);
+        } catch (error) {
+            console.error('Error sending password reset email:', error);
+            throw error;
+        }
+    }
+
     async sendTrainingAssignedEmail(params: {
         to: string;
         trainingTitle: string;

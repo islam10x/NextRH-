@@ -61,6 +61,9 @@ export interface Project {
   technologies: string[];
   description: string;
   role: string;
+  assigneeName?: string;
+  assigneeEmail?: string;
+  assigneeProfileId?: string;
 }
 
 // Employee (extended user for profiles)

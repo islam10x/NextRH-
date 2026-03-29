@@ -20,4 +20,7 @@ export class ProjectParticipant {
 
     @Column({ type: 'text' })
     description: string;
+
+    @Column({ name: 'assigned_by', type: 'uuid', nullable: true })
+    assignedBy: string | null;
 }

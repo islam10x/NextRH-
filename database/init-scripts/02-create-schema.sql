@@ -10,7 +10,7 @@ CREATE TYPE skill_source AS ENUM ('cv', 'certification', 'training', 'project', 
 CREATE TYPE certification_status AS ENUM ('active', 'expired', 'expiring_soon');
 CREATE TYPE parsing_status AS ENUM ('pending', 'processing', 'completed', 'failed');
 CREATE TYPE template_type AS ENUM ('standard', 'canadian', 'eu', 'client_specific');
-CREATE TYPE notification_type AS ENUM ('certification_expiring', 'certification_expired', 'cv_update_needed');
+CREATE TYPE notification_type AS ENUM ('certification_expiring', 'certification_expired', 'cv_update_needed', 'training_assigned', 'training_started', 'training_completed', 'team_added', 'project_assigned', 'project_updated');
 CREATE TYPE alert_type AS ENUM ('expiring_soon', 'expired', 'renewal_reminder');
 CREATE TYPE training_status AS ENUM ('assigned', 'in_progress', 'completed');
 
@@ -149,6 +149,7 @@ CREATE TABLE IF NOT EXISTS project_participants (
     participant_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id UUID REFERENCES projects(project_id) ON DELETE CASCADE,
     profile_id UUID REFERENCES employee_profiles(profile_id) ON DELETE CASCADE,
+    assigned_by UUID REFERENCES users(user_id),
     role VARCHAR(255),
     description TEXT NOT NULL,
     CONSTRAINT uq_project_profile UNIQUE (project_id, profile_id)

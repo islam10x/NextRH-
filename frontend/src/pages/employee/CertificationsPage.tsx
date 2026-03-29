@@ -3,10 +3,10 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import api from '@/services/api';
-import { CvCertification, CvProfile } from '@/types';
+import { CvCertification, CvProfile, UploadStatus } from '@/types';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { Award, Plus, Upload, Search, Calendar, Loader2 } from 'lucide-react';
+import { Award, Plus, Upload, Search, Calendar, Loader2, CheckCircle, File } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -18,6 +18,14 @@ import {
 } from '@/components/ui/dialog';
 import { useAuth } from '@/contexts/AuthContext';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { UploadProgress } from '@/components/common';
+import { cn } from '@/lib/utils';
+
+interface UploadedFileInfo {
+  name: string;
+  size: number;
+  type: string;
+}
 
 const CertificationsPage: React.FC = () => {
   const ALLOWED_TYPES = useMemo(
@@ -33,9 +41,10 @@ const CertificationsPage: React.FC = () => {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<UploadStatus>('idle');
+  const [progress, setProgress] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [uploadedFile, setUploadedFile] = useState<UploadedFileInfo | null>(null);
   const [profile, setProfile] = useState<CvProfile | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const { user } = useAuth();
@@ -75,9 +84,15 @@ const CertificationsPage: React.FC = () => {
 
   const uploadCertificate = useCallback(
     async (file: File) => {
-      setIsUploading(true);
+      setUploadedFile({
+        name: file.name,
+        size: file.size,
+        type: file.type,
+      });
+      setUploadStatus('uploading');
+      setProgress(0);
       setUploadError(null);
-      setUploadedFileName(null);
+      let markedParsing = false;
 
       try {
         const formData = new FormData();
@@ -85,12 +100,24 @@ const CertificationsPage: React.FC = () => {
 
         await api.post('/certifications/upload', formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
+          onUploadProgress: (event) => {
+            if (event.total) {
+              const pct = Math.round((event.loaded / event.total) * 100);
+              setProgress(pct);
+              if (pct >= 100 && !markedParsing) {
+                markedParsing = true;
+                setUploadStatus('parsing');
+              }
+            }
+          },
         });
 
-        setUploadedFileName(file.name);
+        setProgress(100);
+        setUploadStatus('completed');
         await loadData();
       } catch (err) {
         console.error('Certificate upload failed', err);
+        setUploadStatus('error');
         if (axios.isAxiosError(err)) {
           const message = (err.response?.data as { message?: string } | undefined)?.message;
           const friendly =
@@ -103,8 +130,6 @@ const CertificationsPage: React.FC = () => {
           setUploadError('Upload failed. Please try again.');
           toast.error('Upload failed. Please try again.');
         }
-      } finally {
-        setIsUploading(false);
       }
     },
     [loadData]
@@ -150,6 +175,34 @@ const CertificationsPage: React.FC = () => {
 
   const formatCertName = (name: string) => name.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
 
+  const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const getStatusMessage = (): string => {
+    switch (uploadStatus) {
+      case 'uploading':
+        return 'Uploading certification...';
+      case 'parsing':
+        return 'Parsing document with AI...';
+      case 'completed':
+        return 'Certification uploaded successfully!';
+      case 'error':
+        return 'Upload failed. Please try again.';
+      default:
+        return '';
+    }
+  };
+
+  const resetUploadState = () => {
+    setUploadStatus('idle');
+    setProgress(0);
+    setUploadError(null);
+    setUploadedFile(null);
+  };
+
   const parseDateOnly = (value?: string | null) => {
     if (!value) return null;
     const parsed = new Date(value);
@@ -175,13 +228,19 @@ const CertificationsPage: React.FC = () => {
           <h1 className="text-2xl font-bold text-foreground">Certifications</h1>
           <p className="text-muted-foreground">Upload and review extracted certifications</p>
         </div>
-        <Dialog open={isAddDialogOpen} onOpenChange={(open) => {
-          if (open && !hasConfiguredName) {
-            // Do not open the dialog if they don't have a name configured
-            return;
-          }
-          setIsAddDialogOpen(open);
-        }}>
+        <Dialog
+          open={isAddDialogOpen}
+          onOpenChange={(open) => {
+            if (open && !hasConfiguredName) {
+              // Do not open the dialog if they don't have a name configured
+              return;
+            }
+            if (!open) {
+              resetUploadState();
+            }
+            setIsAddDialogOpen(open);
+          }}
+        >
           <DialogTrigger asChild>
             <Button disabled={!hasConfiguredName}>
               <Plus className="h-4 w-4 mr-2" />
@@ -196,36 +255,144 @@ const CertificationsPage: React.FC = () => {
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
-              <div className="relative border-2 border-dashed rounded-lg p-6 text-center hover:border-primary/50 transition-colors cursor-pointer">
-                <input
-                  type="file"
-                  accept=".pdf,.docx,.png,.jpg,.jpeg"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    const validationError = validateFile(file);
-                    if (validationError) {
-                      setUploadError(validationError);
-                      toast.error(validationError);
-                      return;
-                    }
-                    uploadCertificate(file);
-                  }}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                />
-                <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-                <p className="text-sm font-medium">Upload Certificate</p>
-                <p className="text-xs text-muted-foreground">PDF, DOCX, PNG, JPG (max 10MB)</p>
-                {isUploading && (
-                  <p className="text-xs text-muted-foreground mt-2">Uploading...</p>
-                )}
-                {uploadedFileName && (
-                  <p className="text-xs text-success mt-2">Uploaded: {uploadedFileName}</p>
-                )}
-                {uploadError && (
-                  <p className="text-xs text-destructive mt-2">{uploadError}</p>
-                )}
-              </div>
+              {uploadStatus === 'idle' ? (
+                <div className="relative border-2 border-dashed rounded-lg p-6 text-center hover:border-primary/50 transition-colors cursor-pointer">
+                  <input
+                    type="file"
+                    accept=".pdf,.docx,.png,.jpg,.jpeg"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const validationError = validateFile(file);
+                      if (validationError) {
+                        setUploadError(validationError);
+                        toast.error(validationError);
+                        return;
+                      }
+                      uploadCertificate(file);
+                    }}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  />
+                  <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+                  <p className="text-sm font-medium">Upload Certificate</p>
+                  <p className="text-xs text-muted-foreground">PDF, DOCX, PNG, JPG (max 10MB)</p>
+                  {uploadError && (
+                    <p className="text-xs text-destructive mt-2">{uploadError}</p>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {uploadedFile && (
+                    <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/50">
+                      <div className="p-2 rounded-lg bg-primary/10">
+                        <File className="h-5 w-5 text-primary" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium truncate">{uploadedFile.name}</p>
+                        <p className="text-xs text-muted-foreground">{formatFileSize(uploadedFile.size)}</p>
+                      </div>
+                      {uploadStatus === 'completed' && (
+                        <CheckCircle className="h-5 w-5 text-success" />
+                      )}
+                    </div>
+                  )}
+
+                  {(uploadStatus === 'uploading' || uploadStatus === 'parsing') && (
+                    <UploadProgress
+                      progress={uploadStatus === 'parsing' ? 100 : progress}
+                      status={getStatusMessage()}
+                    />
+                  )}
+
+                  {uploadStatus === 'parsing' && (
+                    <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                      Parsing certification details...
+                    </div>
+                  )}
+
+                  {/* Status Steps */}
+                  {uploadStatus !== 'idle' && (
+                    <div className="flex items-center justify-center gap-2 py-2">
+                      {['Uploading', 'Parsing', 'Completed'].map((step, index) => {
+                        const isActive =
+                          (step === 'Uploading' && uploadStatus === 'uploading') ||
+                          (step === 'Parsing' && uploadStatus === 'parsing') ||
+                          (step === 'Completed' && uploadStatus === 'completed');
+                        const isCompleted =
+                          (step === 'Uploading' && ['parsing', 'completed'].includes(uploadStatus)) ||
+                          (step === 'Parsing' && uploadStatus === 'completed') ||
+                          (step === 'Completed' && uploadStatus === 'completed');
+
+                        return (
+                          <React.Fragment key={step}>
+                            <div
+                              className={cn(
+                                'flex items-center gap-2 px-3 py-1.5 rounded-full text-xs transition-colors',
+                                isActive && 'bg-primary text-primary-foreground',
+                                isCompleted && 'bg-success/10 text-success',
+                                !isActive && !isCompleted && 'bg-muted text-muted-foreground'
+                              )}
+                            >
+                              {isCompleted ? (
+                                <CheckCircle className="h-3.5 w-3.5" />
+                              ) : isActive ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <span className="h-3.5 w-3.5 flex items-center justify-center text-[10px]">
+                                  {index + 1}
+                                </span>
+                              )}
+                              {step}
+                            </div>
+                            {index < 2 && (
+                              <div
+                                className={cn(
+                                  'w-6 h-0.5 rounded-full',
+                                  isCompleted ? 'bg-success' : 'bg-muted'
+                                )}
+                              />
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {uploadStatus === 'completed' && (
+                    <div className="p-3 rounded-lg bg-success/10 border border-success/20 text-sm">
+                      <div className="flex items-center gap-2 text-success">
+                        <CheckCircle className="h-4 w-4" />
+                        Certification uploaded successfully.
+                      </div>
+                    </div>
+                  )}
+
+                  {uploadStatus === 'error' && uploadError && (
+                    <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-sm text-destructive">
+                      {uploadError}
+                    </div>
+                  )}
+
+                  <div className="flex justify-center gap-2 pt-2">
+                    {uploadStatus === 'completed' && (
+                      <Button variant="outline" onClick={resetUploadState}>
+                        Upload Another
+                      </Button>
+                    )}
+                    {(uploadStatus === 'uploading' || uploadStatus === 'parsing') && (
+                      <Button variant="outline" onClick={resetUploadState}>
+                        Cancel
+                      </Button>
+                    )}
+                    {uploadStatus === 'error' && (
+                      <Button variant="outline" onClick={resetUploadState}>
+                        Try Again
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsAddDialogOpen(false)}>
