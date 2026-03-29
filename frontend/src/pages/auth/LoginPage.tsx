@@ -5,14 +5,15 @@ import { UserRole } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { FileText, Loader2 } from 'lucide-react';
-import { toast } from 'sonner';
 
 const LoginPage: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const { login } = useAuth();
   const navigate = useNavigate();
 
@@ -20,7 +21,8 @@ const LoginPage: React.FC = () => {
     e.preventDefault();
     setIsLoading(true);
 
-    const user = await login(email, password);
+    setErrorMessage(null);
+    const { user, error } = await login(email, password);
     setIsLoading(false);
 
     if (user) {
@@ -32,6 +34,8 @@ const LoginPage: React.FC = () => {
             ? '/manager/dashboard'
             : '/bid/dashboard';
       navigate(redirectPath);
+    } else if (error) {
+      setErrorMessage(error);
     }
   };
 
@@ -59,6 +63,11 @@ const LoginPage: React.FC = () => {
 
           <form onSubmit={handleSubmit}>
             <CardContent className="space-y-6">
+              {errorMessage && (
+                <Alert variant="destructive">
+                  <AlertDescription>{errorMessage}</AlertDescription>
+                </Alert>
+              )}
               <div className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="email">Email</Label>

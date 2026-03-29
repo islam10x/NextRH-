@@ -48,6 +48,7 @@ export interface Training {
   proofFilePath?: string;
   proofUrl?: string;
   assigneeName?: string;
+  assignedByName?: string;
   assignedAt?: string;
   startDate?: string;
 }
@@ -66,6 +67,7 @@ export interface Project {
   assigneeName?: string;
   assigneeEmail?: string;
   assigneeProfileId?: string;
+  assignedByName?: string;
 }
 
 // Employee (extended user for profiles)

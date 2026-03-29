@@ -7,6 +7,7 @@ const mapProject = (p: any): Project => ({
   assigneeProfileId: p.assigneeProfileId || p.assignee_profile_id || p.profileId || p.profile_id,
   assigneeName: p.assigneeName || p.assignee_name,
   assigneeEmail: p.assigneeEmail || p.assignee_email,
+  assignedByName: p.assignedByName || p.assigned_by_name,
   name: p.name || p.projectName || p.project_name || '',
   client: p.client || p.clientName || p.client_name || '',
   startDate: p.startDate || p.start_date || '',

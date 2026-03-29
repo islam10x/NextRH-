@@ -27,6 +27,7 @@ const mapTraining = (t: any): Training => ({
   proofFilePath: t.proofFilePath || t.proof_file_path,
   proofUrl: `${api.defaults.baseURL?.replace(/\/$/, '') || ''}/training/${t.training_id || t.id}/proof`,
   description: t.description,
+  assignedByName: t.assignedByName || t.assigned_by_name,
   assigneeName:
     t.assigneeName ||
     (t.profile?.user

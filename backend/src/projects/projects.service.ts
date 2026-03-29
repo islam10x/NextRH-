@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, IsNull, Not, Repository } from 'typeorm';
 import { Project } from './entities/project.entity';
 import { ProjectParticipant } from './entities/participant.entity';
 import { EmployeeProfile } from '../employees/entities/employee-profile.entity';
@@ -9,6 +9,7 @@ import { AssignProjectDto } from './dto/assign-project.dto';
 import { UpdateParticipationDto } from './dto/update-participation.dto';
 import { TeamsService } from '../teams/teams.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { User } from '../users/entities/user.entity';
 
 @Injectable()
 export class ProjectsService {
@@ -21,6 +22,8 @@ export class ProjectsService {
         private readonly profileRepo: Repository<EmployeeProfile>,
         @InjectRepository(Skill)
         private readonly skillRepo: Repository<Skill>,
+        @InjectRepository(User)
+        private readonly usersRepo: Repository<User>,
         private readonly teamsService: TeamsService,
         private readonly notificationsService: NotificationsService,
     ) { }
@@ -47,6 +50,11 @@ export class ProjectsService {
 
         const startDate = dto.startDate ? this.toDate(dto.startDate) : null;
         const endDate = dto.endDate ? this.toDate(dto.endDate) : null;
+
+        const manager = await this.usersRepo.findOne({ where: { user_id: managerUserId } });
+        const managerName = manager
+            ? [manager.firstName, manager.lastName].filter(Boolean).join(' ')
+            : null;
 
         let project = await this.projectRepo.findOne({
             where: {
@@ -125,7 +133,7 @@ export class ProjectsService {
                     userId,
                     type: 'project_assigned',
                     title: 'New project assigned',
-                    message: `${projectLabel}${clientLabel}`,
+                    message: `${projectLabel}${clientLabel}${managerName ? ` - Assigned by ${managerName}` : ''}`,
                     relatedEntityType: 'project',
                     relatedEntityId: project.project_id,
                 });
@@ -144,10 +152,26 @@ export class ProjectsService {
         }
 
         const participants = await this.participantRepo.find({
-            where: { profile: { profile_id: profile.profile_id } },
+            where: {
+                profile: { profile_id: profile.profile_id },
+                assignedBy: Not(IsNull()),
+            },
             relations: ['project', 'project.skills'],
             order: { participant_id: 'DESC' },
         });
+
+        const managerIds = Array.from(
+            new Set(participants.map((p) => p.assignedBy).filter(Boolean) as string[])
+        );
+        const managers = managerIds.length
+            ? await this.usersRepo.find({ where: { user_id: In(managerIds) } })
+            : [];
+        const managerNameById = new Map(
+            managers.map((mgr) => [
+                mgr.user_id,
+                [mgr.firstName, mgr.lastName].filter(Boolean).join(' ') || mgr.email,
+            ]),
+        );
 
         return participants.map((p) => ({
             id: p.participant_id,
@@ -159,6 +183,7 @@ export class ProjectsService {
             technologies: (p.project?.skills ?? []).map((s) => s.skillName),
             description: p.description || p.project?.projectDescription || '',
             role: p.role || 'Contributor',
+            assignedByName: p.assignedBy ? managerNameById.get(p.assignedBy) || '' : '',
         }));
     }
 

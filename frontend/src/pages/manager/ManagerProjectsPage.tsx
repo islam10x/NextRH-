@@ -2,9 +2,21 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 import { projectService } from '@/services/project.service';
+import { teamService } from '@/services/team.service';
 import { Project } from '@/types';
-import { Briefcase, Building2, Calendar, Code, User } from 'lucide-react';
+import { Briefcase, Building2, Calendar, Code, Search, User } from 'lucide-react';
 import { toast } from 'sonner';
 
 const formatDate = (dateString?: string) => {
@@ -20,6 +32,19 @@ const ManagerProjectsPage: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
+  const [isAssignOpen, setIsAssignOpen] = useState(false);
+  const [members, setMembers] = useState<{ userId: string; profileId: string | null; name: string; email: string }[]>([]);
+  const [selectedProfiles, setSelectedProfiles] = useState<string[]>([]);
+  const [assignSearch, setAssignSearch] = useState('');
+  const [loadingMembers, setLoadingMembers] = useState(false);
+  const [isAssigning, setIsAssigning] = useState(false);
+  const [projectName, setProjectName] = useState('');
+  const [clientName, setClientName] = useState('');
+  const [projectRole, setProjectRole] = useState('');
+  const [projectStartDate, setProjectStartDate] = useState('');
+  const [projectEndDate, setProjectEndDate] = useState('');
+  const [projectTechnologies, setProjectTechnologies] = useState('');
+  const [projectDescription, setProjectDescription] = useState('');
 
   const load = async () => {
     setLoading(true);
@@ -33,8 +58,27 @@ const ManagerProjectsPage: React.FC = () => {
     }
   };
 
+  const loadMembers = async () => {
+    setLoadingMembers(true);
+    try {
+      const data = await teamService.listMyMembers();
+      const mapped = data.map((m) => ({
+        userId: m.userId,
+        profileId: m.profileId,
+        name: [m.firstName, m.lastName].filter(Boolean).join(' ') || m.email,
+        email: m.email,
+      }));
+      setMembers(mapped);
+    } catch (error: any) {
+      toast.error(error?.response?.data?.message || 'Failed to load team members');
+    } finally {
+      setLoadingMembers(false);
+    }
+  };
+
   useEffect(() => {
     load();
+    loadMembers();
   }, []);
 
   const filteredProjects = useMemo(() => {
@@ -56,6 +100,79 @@ const ManagerProjectsPage: React.FC = () => {
     });
   }, [projects, search]);
 
+  const filteredMembers = useMemo(() => {
+    const query = assignSearch.trim().toLowerCase();
+    if (!query) return members;
+    return members.filter((m) => {
+      const name = (m.name || '').toLowerCase();
+      const email = (m.email || '').toLowerCase();
+      return name.includes(query) || email.includes(query);
+    });
+  }, [assignSearch, members]);
+
+  const toggleSelection = (profileId: string | null) => {
+    if (!profileId) {
+      toast.error('This member has no profile yet');
+      return;
+    }
+    setSelectedProfiles((prev) =>
+      prev.includes(profileId) ? prev.filter((id) => id !== profileId) : [...prev, profileId]
+    );
+  };
+
+  const resetAssignForm = () => {
+    setSelectedProfiles([]);
+    setAssignSearch('');
+    setProjectName('');
+    setClientName('');
+    setProjectRole('');
+    setProjectStartDate('');
+    setProjectEndDate('');
+    setProjectTechnologies('');
+    setProjectDescription('');
+  };
+
+  const handleAssign = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!projectName.trim()) {
+      toast.error('Project name is required.');
+      return;
+    }
+    if (selectedProfiles.length === 0) {
+      toast.error('Select at least one team member.');
+      return;
+    }
+
+    setIsAssigning(true);
+    try {
+      const technologies = projectTechnologies
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean);
+
+      await projectService.assign({
+        projectName: projectName.trim(),
+        clientName: clientName.trim() || undefined,
+        projectDescription: projectDescription.trim() || undefined,
+        startDate: projectStartDate || undefined,
+        endDate: projectEndDate || undefined,
+        technologies: technologies.length ? technologies : undefined,
+        assigneeProfileIds: selectedProfiles,
+        role: projectRole.trim() || undefined,
+      });
+
+      const count = selectedProfiles.length;
+      toast.success(`Project assigned to ${count} member${count === 1 ? '' : 's'}`);
+      setIsAssignOpen(false);
+      resetAssignForm();
+      load();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.message || 'Failed to assign project');
+    } finally {
+      setIsAssigning(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -63,12 +180,150 @@ const ManagerProjectsPage: React.FC = () => {
           <h1 className="text-2xl font-bold text-foreground">Projects</h1>
           <p className="text-muted-foreground">Assigned projects across your team.</p>
         </div>
-        <div className="w-full md:w-64">
-          <Input
-            placeholder="Search projects..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+        <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+          <Dialog
+            open={isAssignOpen}
+            onOpenChange={(open) => {
+              if (!open) resetAssignForm();
+              setIsAssignOpen(open);
+            }}
+          >
+            <DialogTrigger asChild>
+              <Button className="w-full sm:w-auto">Assign Project</Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-[520px] max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle className="text-xl">Assign Project</DialogTitle>
+                <DialogDescription>
+                  Assign a project to one or more team members.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={handleAssign} className="space-y-4">
+                <div className="space-y-4 py-2 max-h-[60vh] overflow-y-auto pr-1">
+                  <div className="space-y-2">
+                    <Label htmlFor="projectName">Project Name</Label>
+                    <Input
+                      id="projectName"
+                      placeholder="e.g., Cloud Migration Initiative"
+                      value={projectName}
+                      onChange={(e) => setProjectName(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="clientName">Client</Label>
+                    <Input
+                      id="clientName"
+                      placeholder="e.g., Company Name"
+                      value={clientName}
+                      onChange={(e) => setClientName(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="projectRole">Role for Assignee</Label>
+                    <Input
+                      id="projectRole"
+                      placeholder="e.g., Lead Developer"
+                      value={projectRole}
+                      onChange={(e) => setProjectRole(e.target.value)}
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="startDate">Start Date</Label>
+                      <Input
+                        id="startDate"
+                        type="date"
+                        value={projectStartDate}
+                        onChange={(e) => setProjectStartDate(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="endDate">End Date</Label>
+                      <Input
+                        id="endDate"
+                        type="date"
+                        value={projectEndDate}
+                        onChange={(e) => setProjectEndDate(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="technologies">Technologies</Label>
+                    <Input
+                      id="technologies"
+                      placeholder="e.g., React, Node.js, AWS"
+                      value={projectTechnologies}
+                      onChange={(e) => setProjectTechnologies(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="projectDescription">Project Summary</Label>
+                    <Input
+                      id="projectDescription"
+                      placeholder="Short project context for the team"
+                      value={projectDescription}
+                      onChange={(e) => setProjectDescription(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Team members</Label>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        placeholder="Search team members..."
+                        value={assignSearch}
+                        onChange={(e) => setAssignSearch(e.target.value)}
+                        className="pl-9"
+                      />
+                    </div>
+                    <div className="max-h-48 overflow-auto rounded-md border p-2 space-y-2">
+                      {loadingMembers ? (
+                        <p className="text-sm text-muted-foreground">Loading members...</p>
+                      ) : members.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No team members found</p>
+                      ) : filteredMembers.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No matching team members</p>
+                      ) : (
+                        filteredMembers.map((m) => {
+                          const disabled = !m.profileId;
+                          const checked = m.profileId ? selectedProfiles.includes(m.profileId) : false;
+                          return (
+                            <label key={m.userId} className="flex items-center gap-2 text-sm cursor-pointer">
+                              <input
+                                type="checkbox"
+                                disabled={disabled}
+                                checked={checked}
+                                onChange={() => toggleSelection(m.profileId)}
+                              />
+                              <span className={disabled ? 'text-muted-foreground' : ''}>
+                                {m.name} ({m.email}) {disabled && '(no profile yet)'}
+                              </span>
+                            </label>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <DialogFooter className="pt-4 gap-2">
+                  <Button type="button" variant="ghost" onClick={() => setIsAssignOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button type="submit" disabled={isAssigning}>
+                    {isAssigning ? 'Assigning...' : 'Assign Project'}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
+          <div className="w-full md:w-64">
+            <Input
+              placeholder="Search projects..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
         </div>
       </div>
 

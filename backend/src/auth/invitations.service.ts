@@ -27,28 +27,31 @@ export class InvitationsService {
         // 1. Check if user exists
         const existingUser = await this.usersService.findByEmail(email);
         const manager = await this.usersRepository.findOne({ where: { user_id: invitedByUserId } });
+        const isTeamManager = manager?.role === UserRole.TEAM_MANAGER;
 
         if (existingUser) {
             if (existingUser.status === UserStatus.ACTIVE || existingUser.status === UserStatus.PENDING_INVITATION) {
-                await this.teamsService.ensureMembership(invitedByUserId, existingUser.user_id);
-                
-                // Notifications and Emails
-                const managerName = manager ? `${manager.firstName || ''} ${manager.lastName || ''}`.trim() : 'a manager';
-                
-                await this.notificationsService.create({
-                    userId: existingUser.user_id,
-                    type: 'team_added',
-                    title: `Added to ${managerName}'s Team`,
-                    message: `You have been added to ${managerName}'s team.`,
-                });
+                if (isTeamManager) {
+                    await this.teamsService.ensureMembership(invitedByUserId, existingUser.user_id);
 
-                if (existingUser.status === UserStatus.ACTIVE) {
-                    await this.mailService.sendTeamAddedEmail(existingUser.email, managerName, manager?.email);
+                    // Notifications and Emails
+                    const managerName = manager ? `${manager.firstName || ''} ${manager.lastName || ''}`.trim() : 'a manager';
+
+                    await this.notificationsService.create({
+                        userId: existingUser.user_id,
+                        type: 'team_added',
+                        title: `Added to ${managerName}'s Team`,
+                        message: `You have been added to ${managerName}'s team.`,
+                    });
+
+                    if (existingUser.status === UserStatus.ACTIVE) {
+                        await this.mailService.sendTeamAddedEmail(existingUser.email, managerName, manager?.email);
+                    }
                 }
 
-                return { message: existingUser.status === UserStatus.ACTIVE 
-                    ? 'User is already registered and has been added to your team' 
-                    : 'User is already pending registration and has been added to your team' };
+                return { message: existingUser.status === UserStatus.ACTIVE
+                    ? (isTeamManager ? 'User is already registered and has been added to your team' : 'User is already registered')
+                    : (isTeamManager ? 'User is already pending registration and has been added to your team' : 'User is already pending registration') };
             }
             throw new BadRequestException('User account is disabled or in an invalid state');
         }
@@ -65,8 +68,10 @@ export class InvitationsService {
 
         const savedUser = await this.usersRepository.save(newUser);
 
-        // Add to manager's team
-        await this.teamsService.ensureMembership(invitedByUserId, savedUser.user_id);
+        // Add to manager's team (only for team managers)
+        if (isTeamManager) {
+            await this.teamsService.ensureMembership(invitedByUserId, savedUser.user_id);
+        }
 
         // 3. Generate Secret and Hash
         const secret = uuidv4(); // This is the plain secret

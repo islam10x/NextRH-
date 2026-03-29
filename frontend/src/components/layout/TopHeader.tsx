@@ -35,7 +35,9 @@ interface TopHeaderProps {
 /** Returns a human-readable relative time string */
 function timeAgo(dateStr: string): string {
   const now = new Date();
-  const date = new Date(dateStr);
+  const normalized = dateStr.replace(' ', 'T');
+  const hasTimezone = /[zZ]|[+-]\d{2}:\d{2}$/.test(normalized);
+  const date = new Date(hasTimezone ? normalized : `${normalized}Z`);
   const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
 
   if (seconds < 60) return 'just now';
@@ -144,13 +146,13 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ title, showSearch = false 
       navigate(
         user?.role === 'team_manager'
           ? '/manager/trainings'
-          : '/employee/training-projects',
+          : '/employee/training-projects?tab=trainings',
       );
     } else if (isProject) {
       navigate(
         user?.role === 'team_manager'
           ? '/manager/projects'
-          : '/employee/training-projects',
+          : '/employee/training-projects?tab=projects',
       );
     }
   };

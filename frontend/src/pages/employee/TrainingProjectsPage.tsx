@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { useSearchParams } from 'react-router-dom';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -32,6 +33,9 @@ import { toast } from 'sonner';
 const TrainingProjectsPage: React.FC = () => {
   const { user } = useAuth();
   const [isProjectDialogOpen, setIsProjectDialogOpen] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab') === 'projects' ? 'projects' : 'trainings';
+  const [activeTab, setActiveTab] = useState<'trainings' | 'projects'>(initialTab);
   const [trainings, setTrainings] = useState<Training[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -121,6 +125,25 @@ const TrainingProjectsPage: React.FC = () => {
     loadProjects();
   }, [user]);
 
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (tab === 'projects' || tab === 'trainings') {
+      setActiveTab(tab);
+    }
+  }, [searchParams]);
+
+  const handleTabChange = (value: string) => {
+    if (value !== 'trainings' && value !== 'projects') return;
+    setActiveTab(value);
+    const next = new URLSearchParams(searchParams.toString());
+    if (value === 'trainings') {
+      next.delete('tab');
+    } else {
+      next.set('tab', 'projects');
+    }
+    setSearchParams(next, { replace: true });
+  };
+
   const handleStart = async (trainingId: string) => {
     try {
       await trainingService.start(trainingId);
@@ -165,6 +188,9 @@ const TrainingProjectsPage: React.FC = () => {
             </div>
             {training.provider && (
               <p className="text-sm text-muted-foreground">{training.provider}</p>
+            )}
+            {training.assignedByName && (
+              <p className="text-xs text-muted-foreground">Assigned by {training.assignedByName}</p>
             )}
             <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
               <span className="flex items-center gap-1">
@@ -233,6 +259,9 @@ const TrainingProjectsPage: React.FC = () => {
               {formatDate(project.startDate)} - {project.endDate ? formatDate(project.endDate) : 'Present'}
             </span>
           </div>
+          {project.assignedByName && (
+            <p className="text-xs text-muted-foreground">Assigned by {project.assignedByName}</p>
+          )}
 
           <p className="text-sm text-muted-foreground line-clamp-2">
             {project.description || 'Add your contribution details to help build your CV.'}
@@ -276,7 +305,7 @@ const TrainingProjectsPage: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      <Tabs defaultValue="trainings" className="space-y-6">
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-6">
         <TabsList className="grid w-full max-w-md grid-cols-2">
           <TabsTrigger value="trainings" className="flex items-center gap-2">
             <GraduationCap className="h-4 w-4" />

@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { trainingService } from '@/services/training.service';
 import { teamService } from '@/services/team.service';
 import { Training } from '@/types';
-import { GraduationCap, Link as LinkIcon, Plus, Calendar } from 'lucide-react';
+import { GraduationCap, Link as LinkIcon, Plus, Calendar, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   Dialog,
@@ -35,6 +35,7 @@ const ManagerTrainingsPage: React.FC = () => {
   const [isAssignOpen, setIsAssignOpen] = useState(false);
   const [members, setMembers] = useState<{ userId: string; profileId: string | null; name: string; email: string }[]>([]);
   const [selectedProfiles, setSelectedProfiles] = useState<string[]>([]);
+  const [memberSearch, setMemberSearch] = useState('');
   const [title, setTitle] = useState('');
   const [url, setUrl] = useState('');
   const [dueDate, setDueDate] = useState('');
@@ -89,6 +90,16 @@ const ManagerTrainingsPage: React.FC = () => {
     );
   };
 
+  const filteredMembers = useMemo(() => {
+    const query = memberSearch.trim().toLowerCase();
+    if (!query) return members;
+    return members.filter((m) => {
+      const name = (m.name || '').toLowerCase();
+      const email = (m.email || '').toLowerCase();
+      return name.includes(query) || email.includes(query);
+    });
+  }, [memberSearch, members]);
+
   const handleAssign = async () => {
     if (!title.trim()) return toast.error('Training title is required');
     if (selectedProfiles.length === 0) return toast.error('Select at least one employee');
@@ -132,7 +143,13 @@ const ManagerTrainingsPage: React.FC = () => {
           <h1 className="text-2xl font-bold text-foreground">Trainings</h1>
           <p className="text-muted-foreground">History of trainings you assigned and their progress.</p>
         </div>
-        <Dialog open={isAssignOpen} onOpenChange={setIsAssignOpen}>
+        <Dialog
+          open={isAssignOpen}
+          onOpenChange={(open) => {
+            if (!open) setMemberSearch('');
+            setIsAssignOpen(open);
+          }}
+        >
           <DialogTrigger asChild>
             <Button>
               <Plus className="h-4 w-4 mr-2" />
@@ -203,13 +220,24 @@ const ManagerTrainingsPage: React.FC = () => {
               </div>
               <div className="space-y-2">
                 <Label>Team members</Label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    placeholder="Search team members..."
+                    value={memberSearch}
+                    onChange={(e) => setMemberSearch(e.target.value)}
+                    className="pl-9"
+                  />
+                </div>
                 <div className="max-h-48 overflow-auto rounded-md border p-2 space-y-2">
                   {loadingMembers ? (
                     <p className="text-sm text-muted-foreground">Loading members...</p>
                   ) : members.length === 0 ? (
                     <p className="text-sm text-muted-foreground">No members found</p>
+                  ) : filteredMembers.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No matching members</p>
                   ) : (
-                    members.map((m) => {
+                    filteredMembers.map((m) => {
                       const disabled = !m.profileId;
                       const checked = m.profileId ? selectedProfiles.includes(m.profileId) : false;
                       return (

@@ -1,23 +1,18 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Users, Award, AlertTriangle, Calendar, ChevronRight, GraduationCap } from 'lucide-react';
+import { Users, Award, AlertTriangle, Calendar, ChevronRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { teamService } from '@/services/team.service';
-import { trainingService } from '@/services/training.service';
 import { certificationService, CertificationStats, TeamCertification } from '@/services/certification.service';
 import { toast } from 'sonner';
-import { Training } from '@/types';
 
 const ManagerDashboard: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [members, setMembers] = useState<{ userId: string; profileId: string | null; name: string; email: string }[]>([]);
-  const [assignedTrainings, setAssignedTrainings] = useState<Training[]>([]);
-  const [loadingTrainings, setLoadingTrainings] = useState(false);
   const [certificationStats, setCertificationStats] = useState<CertificationStats>({
     total: 0,
     active: 0,
@@ -95,30 +90,6 @@ const ManagerDashboard: React.FC = () => {
     loadCertifications();
   }, []);
 
-  const loadAssignedTrainings = async () => {
-    setLoadingTrainings(true);
-    try {
-      const data = await trainingService.listAssignedByMe();
-      setAssignedTrainings(data);
-    } catch (error: any) {
-      toast.error(error?.response?.data?.message || 'Failed to load assigned trainings');
-    } finally {
-      setLoadingTrainings(false);
-    }
-  };
-
-  useEffect(() => {
-    loadAssignedTrainings();
-  }, []);
-
-  const recentTrainings = [...assignedTrainings]
-    .sort((a, b) => {
-      const aTime = a.assignedAt ? new Date(a.assignedAt).getTime() : 0;
-      const bTime = b.assignedAt ? new Date(b.assignedAt).getTime() : 0;
-      return bTime - aTime;
-    })
-    .slice(0, 5);
-
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -134,47 +105,6 @@ const ManagerDashboard: React.FC = () => {
           </Button>
         </div>
       </div>
-
-      {/* Assigned trainings list */}
-      <Card className="animate-fade-in">
-        <CardHeader>
-          <CardTitle className="text-lg">Assigned Trainings</CardTitle>
-          <CardDescription>Trainings you assigned to your team</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {loadingTrainings ? (
-            <p className="text-sm text-muted-foreground">Loading...</p>
-          ) : assignedTrainings.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No trainings assigned yet.</p>
-          ) : (
-            <div className="space-y-3">
-              {recentTrainings.map((t) => (
-                <div key={t.id} className="border rounded-lg p-3 flex flex-col gap-1">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <GraduationCap className="h-4 w-4 text-primary" />
-                      <span className="font-medium">{t.name}</span>
-                    </div>
-                    <Badge variant="secondary">{t.status || 'assigned'}</Badge>
-                  </div>
-                  {t.assigneeName && <p className="text-xs text-muted-foreground">Assignee: {t.assigneeName}</p>}
-                  {t.provider && <p className="text-xs text-muted-foreground">{t.provider}</p>}
-                  <div className="flex gap-3 text-xs text-muted-foreground flex-wrap">
-                    <span>Assigned: {t.assignedAt ? new Date(t.assignedAt).toLocaleDateString() : 'n/a'}</span>
-                    <span>Due: {t.dueDate ? new Date(t.dueDate).toISOString().slice(0, 10) : 'n/a'}</span>
-                    {t.trainingUrl && (
-                      <a href={t.trainingUrl} target="_blank" rel="noreferrer" className="text-primary hover:underline">
-                        Link
-                      </a>
-                    )}
-                    {t.description && <span>Comment: {t.description}</span>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
 
       {/* Stats Grid */}
       <div className="grid gap-4 md:grid-cols-4">
