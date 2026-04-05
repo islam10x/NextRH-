@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     # RAG chat LLM config (Ollama only).
     RAG_CHAT_MODEL: str = "qwen2.5:1.5b-instruct"
     RAG_CHAT_TIMEOUT_SECONDS: float = 30.0
+    # Translation (CV generation) — uses Ollama
+    TRANSLATION_MODEL: str | None = None
+    TRANSLATION_TIMEOUT_SECONDS: float = 25.0
+    TRANSLATION_ENABLED: bool = True
     # Comma-separated candidate roots for employee metadata.json files.
     RAG_METADATA_ROOTS: str = "backend/local-storage,backend/file-storage/CV_Database"
 

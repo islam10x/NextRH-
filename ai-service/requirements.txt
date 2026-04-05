@@ -14,6 +14,8 @@ pdfkit
 pydantic
 pytest
 httpx
+pypdf
+pdf2docx
 opencv-python-headless
 Pillow
 pydantic-settings

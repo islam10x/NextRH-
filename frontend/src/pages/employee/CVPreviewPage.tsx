@@ -428,18 +428,33 @@ const CVPreviewPage: React.FC = () => {
       profile.skills.length === 0 &&
       !profile.professionalSummary);
 
+  const isManagerView = Boolean(targetUserId);
+  const managerErrorTitle = 'Unable to load this CV profile.';
+  const managerErrorBody = 'Please refresh the page and try again.';
+  const managerEmptyTitle = 'This employee has not uploaded a CV yet.';
+  const managerEmptyBody = 'Ask them to upload their CV to view the profile.';
+  const employeeErrorTitle = 'Failed to load CV profile. Please try again.';
+  const employeeErrorBody = 'Please refresh the page or try uploading your CV again.';
+  const employeeEmptyTitle = 'You have not uploaded a CV yet.';
+  const employeeEmptyBody = 'Upload your CV to generate your profile here.';
+
   if (error || isEmpty) {
+    const title = error
+      ? (isManagerView ? managerErrorTitle : employeeErrorTitle)
+      : (isManagerView ? managerEmptyTitle : employeeEmptyTitle);
+    const body = error
+      ? (isManagerView ? managerErrorBody : employeeErrorBody)
+      : (isManagerView ? managerEmptyBody : employeeEmptyBody);
+
     return (
       <Card>
         <CardContent className="py-16 text-center space-y-4">
           <FileText className="h-12 w-12 mx-auto text-muted-foreground/50" />
           <h3 className="font-medium text-lg">
-            {error ?? 'No CV data available'}
+            {title}
           </h3>
           <p className="text-muted-foreground text-sm">
-            {error
-              ? 'Please refresh the page or try uploading your CV again.'
-              : 'Upload your CV to see your parsed profile here.'}
+            {body}
           </p>
           {!error && !targetUserId && (
             <Button size="sm" onClick={() => navigate('/employee/cv-upload')}>
