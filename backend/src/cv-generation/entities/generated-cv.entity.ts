@@ -23,6 +23,10 @@ export class GeneratedCv {
     @JoinColumn({ name: 'template_id' })
     template?: CvTemplate | null;
 
+    @ManyToOne(() => CvTemplate, { nullable: true })
+    @JoinColumn({ name: 'resolved_template_id' })
+    resolvedTemplate?: CvTemplate | null;
+
     @ManyToOne(() => User, { nullable: true })
     @JoinColumn({ name: 'generated_by' })
     generatedBy?: User | null;

@@ -17,6 +17,8 @@ type AiGenerateResponse = {
     docx_relative_path?: string;
     pdf_relative_path?: string | null;
     field_mapping?: Record<string, string> | null;
+    matched_template_path?: string | null;
+    matched_template_relative_path?: string | null;
 };
 
 @Injectable()
@@ -113,11 +115,24 @@ export class CvGenerationService {
 
         const docxPath = this.resolveRelativePath(aiResponse.docx_relative_path || aiResponse.docx_path);
         const pdfPath = this.resolveRelativePath(aiResponse.pdf_relative_path || aiResponse.pdf_path || null);
+        const matchedTemplatePath = this.resolveRelativePath(
+            aiResponse.matched_template_relative_path || aiResponse.matched_template_path || null,
+        );
 
         // Update the record with completed status and file paths.
         saved.docxPath = docxPath;
         saved.pdfPath = pdfPath;
         saved.status = 'completed';
+
+        if (matchedTemplatePath) {
+            const resolved = await this.templateRepo.findOne({ where: { filePath: matchedTemplatePath } });
+            if (resolved) {
+                (saved as any).resolvedTemplate = resolved as CvTemplate;
+                this.logger.log(`Matched template stored: ${resolved.template_id}`);
+            } else {
+                this.logger.warn(`Matched template not found for path: ${matchedTemplatePath}`);
+            }
+        }
         await this.generatedRepo.save(saved);
 
         // Cache the computed field mapping on the template for future reuse.

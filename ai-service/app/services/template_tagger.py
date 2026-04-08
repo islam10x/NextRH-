@@ -26,6 +26,10 @@ from docx.oxml import OxmlElement
 
 logger = logging.getLogger(__name__)
 
+def _tagger_enable_conditionals() -> bool:
+    """Return True if auto-tagger should insert conditional wrappers."""
+    return os.getenv("CV_TEMPLATE_TAGGER_CONDITIONALS", "1") != "0"
+
 
 # ============================================================================
 # REGEX PATTERNS
@@ -115,6 +119,15 @@ def _build_date_line(text: str, start_var: str, end_var: str) -> str:
         open_label = "Present"
     elif "CURRENT" in upper_text:
         open_label = "Current"
+
+    # If conditional wrappers are disabled, avoid block tags entirely.
+    if not _tagger_enable_conditionals():
+        # Use inline Jinja expressions to avoid {% if %} blocks.
+        return (
+            f"{{{{ {start_var} or '' }}}}"
+            f"{{{{ ' - ' if ({start_var} or {end_var}) else '' }}}}"
+            f"{{{{ ({end_var} or open_end_label) if ({start_var} or {end_var}) else '' }}}}"
+        )
 
     # If open-ended label is needed, use a dynamic context variable.
     open_suffix = " - {{ open_end_label }}" if open_label else ""
@@ -1561,8 +1574,26 @@ def _tag_entry_content(
 # XML PARAGRAPH MANIPULATION
 # ============================================================================
 
+def _should_skip_conditional_tag(text: str) -> bool:
+    if _tagger_enable_conditionals():
+        return False
+    stripped = (text or "").strip()
+    if not stripped.startswith("{%"):
+        return False
+    return (
+        stripped.startswith("{%p if")
+        or stripped.startswith("{%p else")
+        or stripped.startswith("{%p endif")
+        or stripped.startswith("{% if")
+        or stripped.startswith("{% else")
+        or stripped.startswith("{% endif")
+    )
+
+
 def _insert_paragraph_before(paragraph, text: str):
     """Insert a new paragraph containing ``text`` before the given paragraph."""
+    if _should_skip_conditional_tag(text):
+        return
     new_p = OxmlElement("w:p")
     new_r = OxmlElement("w:r")
     new_t = OxmlElement("w:t")
@@ -1576,6 +1607,8 @@ def _insert_paragraph_before(paragraph, text: str):
 
 def _insert_paragraph_after(paragraph, text: str):
     """Insert a new paragraph containing ``text`` after the given paragraph."""
+    if _should_skip_conditional_tag(text):
+        return
     new_p = OxmlElement("w:p")
     new_r = OxmlElement("w:r")
     new_t = OxmlElement("w:t")

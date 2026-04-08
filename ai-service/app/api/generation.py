@@ -73,6 +73,7 @@ async def generate_cv(req: GenerateCvRequest):
 
     docx_path = result.get("docx_path")
     pdf_path = result.get("pdf_path")
+    matched_template_path = result.get("matched_template_path")
 
     def to_relative(path_str: Optional[str]):
         if not path_str:
@@ -88,6 +89,8 @@ async def generate_cv(req: GenerateCvRequest):
         "docx_relative_path": to_relative(docx_path),
         "pdf_relative_path": to_relative(pdf_path),
         "field_mapping": result.get("field_mapping"),
+        "matched_template_path": matched_template_path,
+        "matched_template_relative_path": to_relative(matched_template_path),
     }
 
 

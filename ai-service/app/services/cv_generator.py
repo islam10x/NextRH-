@@ -5,15 +5,22 @@ import re
 import shutil
 import subprocess
 import tempfile
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from docx import Document as DocxDocument
 from docxtpl import DocxTemplate
+from jinja2 import TemplateSyntaxError
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import BooleanObject
 
 from app.services.translation_service import translate_json_payload
+from app.services.ocr_rebuilder import is_docx_scanned, is_pdf_scanned, rebuild_scanned_template
+from app.services.pdf_overlay import apply_pdf_overlay, build_auto_overlay_mapping
+from app.services.scanned_template_builder import build_docx_template_from_scanned_pdf
+from app.services.template_retrieval import find_closest_template
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +100,28 @@ def _normalize_lines(value: Any) -> List[str]:
 
 
 def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
-    projects = list(profile.get("projects") or [])
-    for p in projects:
-        # User requested fallback: generated title -> actual project name -> role -> placeholder
-        p["displayTitle"] = p.get("generatedTitle") or p.get("name") or p.get("role") or "Unknown Project"
+    raw_projects = list(profile.get("projects") or [])
+    projects: List[Dict[str, Any]] = []
+    for p in raw_projects:
+        # Prefer actual project names; avoid using role as a title to keep projects distinct from experiences.
+        name = str(p.get("name") or "").strip()
+        generated = str(p.get("generatedTitle") or "").strip()
+
+        def _is_placeholder(value: str) -> bool:
+            norm = value.strip().lower()
+            return norm in {"unknown project", "unknown", "n/a", "na", "none", "null"}
+
+        if _is_placeholder(name):
+            name = ""
+        if _is_placeholder(generated):
+            generated = ""
+
+        if not name and not generated:
+            # Skip entries that only have a role or placeholder title.
+            continue
+
+        p["displayTitle"] = name or generated
+        projects.append(p)
 
     work_experiences = list(profile.get("workExperiences") or [])
 
@@ -183,6 +208,9 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
         "email": profile.get("email") or "",
         "phone": profile.get("phone") or "",
         "address": profile.get("address") or "",
+        "birth_date": profile.get("birthDate") or profile.get("birth_date") or "",
+        "marital_status": profile.get("maritalStatus") or profile.get("marital_status") or "",
+        "hire_date": profile.get("hireDate") or profile.get("hire_date") or "",
         "current_position": profile.get("currentPosition") or "",
         "professional_summary": profile.get("professionalSummary") or "",
         "total_experience_years": profile.get("totalExperienceYears") or "",
@@ -194,6 +222,8 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
         "languages": profile.get("languages") or [],
         "awards": profile.get("awards") or profile.get("distinctions") or [],
         "last_update": profile.get("lastUpdate") or "",
+        "last_degree": "",
+        "last_degree_year": "",
         "open_end_label": "Present",
         "section_titles": {},
     }
@@ -300,6 +330,453 @@ def _apply_translations(context: Dict[str, Any], translated: Dict[str, Any]) -> 
     return context
 
 
+def _normalize_header_text(value: str) -> str:
+    if not value:
+        return ""
+    normalized = unicodedata.normalize("NFD", value)
+    normalized = "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
+    normalized = normalized.lower()
+    normalized = " ".join(normalized.split())
+    return normalized
+
+
+_SECTION_KEYWORDS = {
+    "experience": {
+        "experience", "experience professionnelle", "work experience", "employment",
+        "parcours", "emploi", "poste", "fonctions", "carriere", "career",
+    },
+    "education": {
+        "education", "formation", "formation academique", "academique",
+        "diplome", "etudes", "etudes superieures", "scolarite",
+        "academic", "academics", "qualification",
+    },
+    "projects": {
+        "projets", "projects", "project", "realisations", "missions",
+        "key projects", "notable projects",
+    },
+    "certifications": {
+        "certificat", "certification", "certifications", "certificate", "licenses", "licence",
+    },
+    "skills": {
+        "competences", "skills", "competencies", "expertise",
+        "technologies", "outils", "tech stack",
+    },
+    "summary": {"profil", "summary", "resume", "synthese", "presentation", "about", "overview"},
+    "contact": {"contact", "coordonnees", "informations personnelles", "contact info"},
+    "languages": {"langues", "languages", "idiomas", "idiomes"},
+    "awards": {"distinctions", "awards", "recompenses", "honors", "prix"},
+}
+
+
+def _tokenize_header(text: str) -> set[str]:
+    norm = _normalize_header_text(text)
+    tokens = re.split(r"[^a-z0-9]+", norm)
+    return {t for t in tokens if len(t) > 1}
+
+
+def _analyze_authoring_rules_docx(docx_path: str, note: Optional[str] = None) -> Dict[str, Any]:
+    """Return an authoring rule report for a DOCX template."""
+    doc = DocxDocument(docx_path)
+
+    # Detect headings
+    sections: List[Dict[str, Any]] = []
+    seen_sections = set()
+    for para in doc.paragraphs:
+        raw_text = (para.text or "").strip()
+        if not raw_text:
+            continue
+        norm = _normalize_header_text(raw_text)
+        for section, keywords in _SECTION_KEYWORDS.items():
+            if section in seen_sections:
+                continue
+            if any(keyword in norm for keyword in keywords):
+                sections.append({
+                    "section": section,
+                    "match": raw_text,
+                    "source": "heading",
+                })
+                seen_sections.add(section)
+
+    # Placeholder detection
+    placeholder_patterns = {
+        "dots": re.compile(r"^[\\s·•.…\\.]{3,}$"),
+        "insert_text": re.compile(r"(inserez|insert).*texte|lorem", re.IGNORECASE),
+        "date_placeholder": re.compile(r"(mois|month)\\s+20xx", re.IGNORECASE),
+        "zeros": re.compile(r"^0{2,}$"),
+    }
+    placeholder_counts = {k: 0 for k in placeholder_patterns}
+
+    def _count_placeholders(text: str) -> None:
+        if not text:
+            return
+        for key, pattern in placeholder_patterns.items():
+            if pattern.search(text.strip()):
+                placeholder_counts[key] += 1
+
+    for para in doc.paragraphs:
+        _count_placeholders(para.text or "")
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                _count_placeholders(cell.text or "")
+
+    # Tables + inferred mapping
+    tables: List[Dict[str, Any]] = []
+    recognized_tables = 0
+    for idx, table in enumerate(doc.tables, 1):
+        if not table.rows:
+            continue
+        header_row = table.rows[0]
+        raw_headers = [cell.text.strip() for cell in header_row.cells]
+
+        def _is_placeholder_header(text: str) -> bool:
+            return not text or re.search(r"[·•…\\.]{3,}", text) is not None
+
+        # If header row is empty/placeholder, try the next row as header hints.
+        if all(_is_placeholder_header(h) for h in raw_headers) and len(table.rows) > 1:
+            raw_headers = [cell.text.strip() for cell in table.rows[1].cells]
+
+        headers = [_normalize_header_text(cell) for cell in raw_headers]
+        header_tokens = [_tokenize_header(cell) for cell in raw_headers]
+        tokens_all = set().union(*header_tokens) if header_tokens else set()
+
+        inferred_section = None
+        # Strong signals first
+        if {"certificat", "certification", "certificate", "licence", "license"} & tokens_all and {
+            "date", "obtention", "issue", "issued"
+        } & tokens_all:
+            inferred_section = "certifications"
+        elif {"institution", "ecole", "universite", "school", "college"} & tokens_all and {
+            "diplome", "degree", "diploma"
+        } & tokens_all:
+            inferred_section = "education"
+        elif {"projet", "project"} & tokens_all and {"client", "customer", "mission"} & tokens_all:
+            inferred_section = "projects"
+        elif {"organisme", "entreprise", "societe", "company", "employeur"} & tokens_all and {
+            "fonction", "poste", "role", "position", "title"
+        } & tokens_all:
+            inferred_section = "experience"
+        elif {"competence", "skills", "expertise"} & tokens_all:
+            inferred_section = "skills"
+        else:
+            # Softer scoring fallback
+            scores = {"experience": 0, "projects": 0, "education": 0, "certifications": 0, "skills": 0}
+            for tokens in header_tokens:
+                if tokens & {"periode", "period", "dates", "date", "from", "to"}:
+                    scores["experience"] += 1
+                    scores["projects"] += 1
+                    scores["education"] += 1
+                if tokens & {"organisme", "entreprise", "societe", "company", "employeur"}:
+                    scores["experience"] += 2
+                if tokens & {"fonction", "poste", "role", "position", "title"}:
+                    scores["experience"] += 2
+                if tokens & {"client", "customer"}:
+                    scores["projects"] += 2
+                if tokens & {"projet", "project", "mission"}:
+                    scores["projects"] += 2
+                if tokens & {"institution", "ecole", "universite", "school", "college"}:
+                    scores["education"] += 2
+                if tokens & {"diplome", "degree", "diploma"}:
+                    scores["education"] += 2
+                if tokens & {"certificat", "certification", "certificate"}:
+                    scores["certifications"] += 2
+                if tokens & {"competence", "skills", "expertise"}:
+                    scores["skills"] += 2
+            best_section = max(scores, key=scores.get)
+            if scores[best_section] >= 2:
+                inferred_section = best_section
+
+        if inferred_section:
+            recognized_tables += 1
+
+        # Suggested column mapping
+        col_map: Dict[str, str] = {}
+        for col_idx, header in enumerate(headers):
+            tokens = header_tokens[col_idx] if col_idx < len(header_tokens) else set()
+            if inferred_section == "experience":
+                if tokens & {"periode", "period", "dates", "date", "from", "to"}:
+                    col_map[str(col_idx)] = "date_range"
+                elif tokens & {"organisme", "entreprise", "societe", "company", "employeur"}:
+                    col_map[str(col_idx)] = "companyName"
+                elif tokens & {"fonction", "poste", "role", "position", "title", "intitule"}:
+                    col_map[str(col_idx)] = "jobTitle"
+                elif tokens & {"duree", "duration", "delai", "temps"}:
+                    col_map[str(col_idx)] = "duration"
+            elif inferred_section == "projects":
+                if tokens & {"annee", "year"}:
+                    col_map[str(col_idx)] = "year"
+                elif tokens & {"periode", "period", "dates", "date"}:
+                    col_map[str(col_idx)] = "date_range"
+                elif tokens & {"client", "customer"}:
+                    col_map[str(col_idx)] = "client"
+                elif tokens & {"projet", "project", "mission", "intitule"}:
+                    col_map[str(col_idx)] = "displayTitle"
+                elif tokens & {"delai", "duree", "duration"}:
+                    col_map[str(col_idx)] = "duration"
+            elif inferred_section == "education":
+                if tokens & {"periode", "annee", "year", "date"}:
+                    col_map[str(col_idx)] = "date_range"
+                elif tokens & {"institution", "ecole", "universite", "school", "college"}:
+                    col_map[str(col_idx)] = "institution"
+                elif tokens & {"diplome", "degree", "diploma"}:
+                    col_map[str(col_idx)] = "degree"
+                elif tokens & {"specialite", "specialisation", "field", "filiere", "domaine"}:
+                    col_map[str(col_idx)] = "fieldOfStudy"
+            elif inferred_section == "certifications":
+                if tokens & {"certificat", "certification", "certificate"}:
+                    col_map[str(col_idx)] = "name"
+                elif tokens & {"date", "obtention", "issue", "issued"}:
+                    col_map[str(col_idx)] = "issueDate"
+                elif tokens & {"organisme", "issuer", "organisation", "provider"}:
+                    col_map[str(col_idx)] = "issuingOrganization"
+
+        loop_key = None
+        if inferred_section == "experience":
+            loop_key = "work_experiences"
+        elif inferred_section == "projects":
+            loop_key = "projects"
+        elif inferred_section == "education":
+            loop_key = "educations"
+        elif inferred_section == "certifications":
+            loop_key = "certifications"
+
+        tables.append({
+            "index": idx,
+            "headers": raw_headers,
+            "section": inferred_section,
+            "row_count": len(table.rows),
+            "col_count": len(table.columns),
+            "suggested_loop": loop_key,
+            "suggested_columns": col_map,
+        })
+
+    # Confidence score
+    confidence = 0.3
+    confidence += min(0.4, 0.05 * len(sections))
+    confidence += min(0.4, 0.1 * recognized_tables)
+    confidence = min(confidence, 0.95)
+
+    recommendations: List[str] = []
+    if not sections:
+        recommendations.append("Add clear section headings (Experience, Education, Projects, Certifications).")
+    if recognized_tables == 0:
+        recommendations.append("No structured tables detected; use tables with headers to enable loops.")
+    if any(placeholder_counts.values()):
+        recommendations.append("Replace dotted placeholders or 'Insérez votre texte ici' with fields or leave them empty.")
+
+    return {
+        "docx_path": docx_path,
+        "sections": sections,
+        "tables": tables,
+        "placeholders": placeholder_counts,
+        "confidence": round(confidence, 2),
+        "recommendations": recommendations,
+        "note": note,
+    }
+
+
+def _postprocess_annexe9_tables(docx_path: str, context: Dict[str, Any]) -> None:
+    """Fix Annexe 9 tables by rebuilding rows with python-docx.
+
+    This avoids docxtpl repeating cells (columns) when loops are embedded inside
+    table rows. Only runs for the Annexe 9 auto-template.
+    """
+    doc = DocxDocument(docx_path)
+
+    for table in doc.tables:
+        if not table.rows:
+            continue
+        headers = [_normalize_header_text(cell.text) for cell in table.rows[0].cells]
+        if len(headers) < 4:
+            continue
+        if "periode" not in headers[0] or "projet" not in headers[1] or "client" not in headers[2]:
+            continue
+
+        is_projects = "delai" in headers[3] or "délai" in headers[3]
+        items = context.get("projects", []) if is_projects else context.get("work_experiences", [])
+
+        # Remove all data rows (keep header row only)
+        while len(table.rows) > 1:
+            table._tbl.remove(table.rows[1]._tr)
+
+        # Add a base row to preserve table layout
+        if not items:
+            row = table.add_row().cells
+            row[0].text = "N/A"
+            row[1].text = "N/A"
+            row[2].text = "N/A"
+            row[3].text = "N/A"
+            continue
+
+        for item in items:
+            row = table.add_row().cells
+            row[0].text = str(item.get("date_range") or "")
+            if is_projects:
+                row[1].text = str(item.get("displayTitle") or item.get("name") or "")
+                row[2].text = str(item.get("client") or "")
+                row[3].text = str(item.get("duration") or "")
+            else:
+                row[1].text = str(item.get("jobTitle") or "")
+                row[2].text = str(item.get("companyName") or "")
+                row[3].text = str(item.get("duration") or "")
+
+    doc.save(docx_path)
+
+
+def _clear_table_rows(table: Any) -> None:
+    while len(table.rows) > 1:
+        table._tbl.remove(table.rows[1]._tr)
+
+
+def _safe_text(value: Any, fallback: str = "N/A") -> str:
+    text = str(value).strip() if value is not None else ""
+    return text if text else fallback
+
+
+def _docx_contains_jinja(doc: DocxDocument) -> bool:
+    def _has_tag(text: str) -> bool:
+        if not text:
+            return False
+        return "{{" in text or "{%" in text
+
+    for para in doc.paragraphs:
+        if _has_tag(para.text or ""):
+            return True
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                if _has_tag(cell.text or ""):
+                    return True
+    return False
+
+
+def _fill_common_placeholders(doc: DocxDocument, context: Dict[str, Any]) -> None:
+    placeholder_re = re.compile(r"^[\\.·•…\\s]{3,}$")
+    placeholder_count = 0
+
+    def _replace_contact_line(text: str) -> Optional[str]:
+        norm = _normalize_header_text(text)
+        if norm.startswith("tel"):
+            return f"Tél : {context.get('phone') or 'N/A'}"
+        if norm.startswith("email"):
+            return f"Email : {context.get('email') or 'N/A'}"
+        if norm.startswith("adresse"):
+            return f"Adresse : {context.get('address') or 'N/A'}"
+        if norm.startswith("nom") and "prenom" in norm:
+            return f"Nom et Prénom : {context.get('full_name') or 'N/A'}"
+        return None
+
+    for para in doc.paragraphs:
+        text = (para.text or "").strip()
+        if not text:
+            continue
+        replacement = _replace_contact_line(text)
+        if replacement:
+            para.text = replacement
+            continue
+        if placeholder_re.match(text):
+            placeholder_count += 1
+            if placeholder_count == 1:
+                para.text = _safe_text(context.get("full_name"))
+            elif placeholder_count == 2:
+                para.text = _safe_text(context.get("current_position"))
+
+
+def _resolve_rule_value(section: str, field: str, item: Dict[str, Any]) -> str:
+    field = field or ""
+    if field == "date_range":
+        return str(item.get("date_range") or "")
+    if field == "year":
+        start = item.get("startDate") or ""
+        end = item.get("endDate") or ""
+        value = str(start or end or "")
+        return value[:4] if value else ""
+
+    # Standard mappings
+    if section == "experience":
+        if field == "companyName":
+            return str(item.get("companyName") or "")
+        if field == "jobTitle":
+            return str(item.get("jobTitle") or "")
+        if field == "duration":
+            return str(item.get("duration") or "")
+    if section == "projects":
+        if field in {"displayTitle", "name"}:
+            return str(item.get("displayTitle") or item.get("name") or "")
+        if field == "client":
+            return str(item.get("client") or "")
+        if field == "duration":
+            return str(item.get("duration") or "")
+    if section == "education":
+        if field == "institution":
+            return str(item.get("institution") or item.get("school") or "")
+        if field == "degree":
+            degree = item.get("degree") or ""
+            field_of = item.get("fieldOfStudy") or item.get("field") or ""
+            return str(f"{degree} - {field_of}".strip(" -")) if field_of else str(degree)
+        if field == "fieldOfStudy":
+            return str(item.get("fieldOfStudy") or item.get("field") or "")
+    if section == "certifications":
+        if field == "name":
+            return str(
+                item.get("name")
+                or item.get("title")
+                or item.get("certification_name")
+                or ""
+            )
+        if field == "issueDate":
+            return str(item.get("issueDate") or item.get("issue_date") or item.get("issuedAt") or "")
+        if field == "issuingOrganization":
+            return str(item.get("issuingOrganization") or item.get("issuer") or "")
+
+    return str(item.get(field) or "")
+
+
+def _render_from_authoring_rules(
+    template_path: str,
+    output_path: str,
+    context: Dict[str, Any],
+    rules: Dict[str, Any],
+) -> None:
+    doc = DocxDocument(template_path)
+    _fill_common_placeholders(doc, context)
+
+    tables = rules.get("tables") or []
+    for table_rule in tables:
+        idx = table_rule.get("index")
+        section = table_rule.get("section")
+        if not idx or not section:
+            continue
+        if idx - 1 >= len(doc.tables):
+            continue
+        table = doc.tables[idx - 1]
+        # Clear all data rows
+        while len(table.rows) > 1:
+            table._tbl.remove(table.rows[1]._tr)
+
+        loop_key = table_rule.get("suggested_loop")
+        if loop_key:
+            items = context.get(loop_key) or []
+        else:
+            items = []
+
+        col_map = table_rule.get("suggested_columns") or {}
+        col_count = len(table.columns)
+
+        if not items:
+            row = table.add_row().cells
+            for col_idx in range(col_count):
+                row[col_idx].text = "N/A"
+            continue
+
+        for item in items:
+            row = table.add_row().cells
+            for col_idx in range(col_count):
+                field = col_map.get(str(col_idx)) or ""
+                row[col_idx].text = _resolve_rule_value(section, field, item) if field else ""
+
+    doc.save(output_path)
+
 def _expand_context_with_aliases(context: Dict[str, Any]) -> Dict[str, Any]:
     """Add alias keys to the context so DOCX templates using alternative
     placeholder names (e.g. ``{{ nom }}`` instead of ``{{ full_name }}``)
@@ -385,35 +862,183 @@ def generate_cv_document(
         else:
             context["open_end_label"] = "Present"
 
+    # Derive last degree fields when available.
+    if not context.get("last_degree") and not context.get("last_degree_year"):
+        degree, year = _derive_last_degree(context)
+        context["last_degree"] = degree
+        context["last_degree_year"] = year
+
+    # Precompute date ranges for table-friendly templates.
+    open_end_label = context.get("open_end_label") or "Present"
+    for exp in context.get("work_experiences", []) or []:
+        start = exp.get("startDate") or ""
+        end = exp.get("endDate") or ""
+        if start and not end:
+            end = open_end_label
+        if start and end:
+            exp["date_range"] = f"{start} - {end}"
+        else:
+            exp["date_range"] = str(start or end or "")
+
+    for proj in context.get("projects", []) or []:
+        start = proj.get("startDate") or ""
+        end = proj.get("endDate") or ""
+        if start and not end:
+            end = open_end_label
+        if start and end:
+            proj["date_range"] = f"{start} - {end}"
+        else:
+            proj["date_range"] = str(start or end or "")
+
+    for edu in context.get("educations", []) or []:
+        start = edu.get("startDate") or ""
+        end = edu.get("endDate") or edu.get("graduationDate") or ""
+        if start and not end:
+            end = open_end_label
+        if start and end:
+            edu["date_range"] = f"{start} - {end}"
+        else:
+            edu["date_range"] = str(start or end or edu.get("year") or "")
+
+    prefix = filename_prefix or _safe_filename(context.get("full_name") or "cv")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    base_name = f"{prefix}_{timestamp}"
+
     template_ext = Path(template_path).suffix.lower()
-    
-    # If the template is a PDF, we convert it to a DOCX first so DocxTemplate
-    # can naturally expand Jinja tags and lists without the limitations of 
-    # static AcroForm boxes.
+
+    # If the template is a PDF, convert it to DOCX so DocxTemplate can expand
+    # Jinja tags and lists. For scanned PDFs, run OCR rebuild instead.
     temp_dir = None
+    matched_template_path: Optional[str] = None
+    auto_template_used = False
     if template_ext == ".pdf":
-        logger.info(f"Converting PDF template to DOCX using pdf2docx: {template_path}")
-        from pdf2docx import Converter
-        
-        temp_dir = tempfile.mkdtemp()
-        converted_docx_path = os.path.join(temp_dir, "converted_template.docx")
-        
+        if "pdf" not in output_formats:
+            output_formats.append("pdf")
+        if is_pdf_scanned(template_path):
+            docx_template_path = None
+            if os.getenv("CV_TEMPLATE_DOCX_FROM_SCAN", "1") != "0":
+                docx_template_path = build_docx_template_from_scanned_pdf(
+                    template_path,
+                    output_dir=os.path.dirname(template_path),
+                )
+
+            if docx_template_path:
+                logger.info(f"Using auto-generated DOCX template: {docx_template_path}")
+                template_path = docx_template_path
+                template_ext = ".docx"
+                auto_template_used = True
+            else:
+                if os.getenv("CV_TEMPLATE_RETRIEVE", "1") != "0":
+                    min_score = 0.12
+                    try:
+                        min_score = float(os.getenv("CV_TEMPLATE_RETRIEVE_MIN_SCORE", "0.12"))
+                    except Exception:
+                        min_score = 0.12
+                    library_dir = os.getenv("CV_TEMPLATE_LIBRARY_DIR") or os.path.dirname(template_path)
+                    result = find_closest_template(
+                        template_path,
+                        templates_dir=library_dir,
+                        min_score=min_score,
+                        top_k=3,
+                    )
+                    match = result.get("best") if isinstance(result, dict) else None
+                    if match:
+                        matched_path, score = match
+                        logger.info(
+                            f"Using retrieved template (score={score:.3f}): {matched_path}"
+                        )
+                        template_path = matched_path
+                        template_ext = ".docx"
+                        matched_template_path = matched_path
+
+                if template_ext != ".docx":
+                    overlay_mapping = None
+                    if isinstance(cached_field_mapping, dict):
+                        overlay_mapping = cached_field_mapping.get("overlay")
+                        if overlay_mapping is None and (
+                            cached_field_mapping.get("fields") or cached_field_mapping.get("tables")
+                        ):
+                            overlay_mapping = cached_field_mapping
+
+                    if overlay_mapping is None and os.getenv("CV_TEMPLATE_OVERLAY_AUTO", "1") != "0":
+                        overlay_mapping = build_auto_overlay_mapping(template_path, context)
+
+                    if overlay_mapping and (overlay_mapping.get("fields") or overlay_mapping.get("tables")):
+                        pdf_path = os.path.join(output_dir, f"{base_name}.pdf")
+                        logger.info(f"Using overlay mode for scanned PDF: {template_path}")
+                        apply_pdf_overlay(template_path, pdf_path, context, overlay_mapping)
+                        return {
+                            "docx_path": None,
+                            "pdf_path": pdf_path,
+                            "field_mapping": {"overlay": overlay_mapping},
+                        }
+
+                    logger.info(f"Scanned PDF detected, running OCR rebuild: {template_path}")
+                    template_path = rebuild_scanned_template(template_path)
+                    template_ext = ".docx"
+        else:
+            logger.info(f"Converting PDF template to DOCX using pdf2docx: {template_path}")
+            from pdf2docx import Converter
+
+            temp_dir = tempfile.mkdtemp()
+            converted_docx_path = os.path.join(temp_dir, "converted_template.docx")
+
+            try:
+                cv = Converter(template_path)
+                cv.convert(converted_docx_path)
+                cv.close()
+                # Pretend the uploaded file was a DOCX!
+                template_path = converted_docx_path
+                template_ext = ".docx"
+            except Exception as e:
+                logger.error(f"Failed to convert PDF template to DOCX: {e}")
+                raise RuntimeError(f"PDF to DOCX conversion failed: {str(e)}")
+
+    # Analyzer-driven rendering (no DB storage)
+    analyzer_only = os.getenv("CV_TEMPLATE_ANALYZER_ONLY", "1") != "0"
+    if template_ext == ".docx" and os.getenv("CV_TEMPLATE_USE_ANALYZER", "1") != "0":
         try:
-            cv = Converter(template_path)
-            cv.convert(converted_docx_path)
-            cv.close()
-            # Pretend the uploaded file was a DOCX!
-            template_path = converted_docx_path
-            
-            if "pdf" not in output_formats:
-                output_formats.append("pdf")
-        except Exception as e:
-            logger.error(f"Failed to convert PDF template to DOCX: {e}")
-            raise RuntimeError(f"PDF to DOCX conversion failed: {str(e)}")
+            doc = DocxDocument(template_path)
+            if not _docx_contains_jinja(doc):
+                rules = _analyze_authoring_rules_docx(template_path)
+                min_conf = 0.5
+                try:
+                    min_conf = float(os.getenv("CV_TEMPLATE_ANALYZER_MIN_CONF", "0.5"))
+                except Exception:
+                    min_conf = 0.5
+                if rules.get("confidence", 0) >= min_conf and any(
+                    t.get("section") for t in (rules.get("tables") or [])
+                ):
+                    logger.info(
+                        f"[DEBUG] Using analyzer rules (confidence={rules.get('confidence')}) for rendering."
+                    )
+                    docx_path = os.path.join(output_dir, f"{base_name}.docx")
+                    _render_from_authoring_rules(template_path, docx_path, context, rules)
+                    pdf_path = None
+                    if "pdf" in output_formats:
+                        pdf_path = _convert_to_pdf(docx_path, output_dir)
+                    return {
+                        "docx_path": docx_path,
+                        "pdf_path": pdf_path,
+                        "field_mapping": None,
+                        "matched_template_path": matched_template_path,
+                    }
+                if analyzer_only:
+                    raise RuntimeError(
+                        "Analyzer rules were insufficient to render this template. "
+                        "Add explicit DOCX tags or adjust headers to match detected sections."
+                    )
+        except Exception as exc:
+            if analyzer_only:
+                raise
+            logger.warning(f"[WARN] Analyzer-based rendering failed: {exc}")
 
     # --- Auto-tag if the template has no Jinja2 tags ---
     from app.services.template_tagger import auto_tag_template
-    tagged_path = auto_tag_template(template_path)
+    raw_template_path = template_path
+    tagged_path = template_path
+    if not auto_template_used:
+        tagged_path = auto_tag_template(template_path)
     # If the path changed, that means it generated a tagged file; we should use it!
     # Update: wait, in cv_generator `tagged_path` is the NEW template_path, so template_path is updated. 
     # We just need to capture the tagged_path to remove it at the end.
@@ -429,10 +1054,6 @@ def generate_cv_document(
         logger.info("[DEBUG] No changes made by Auto-tagger.")
 
     # --- DOCX generation (handles both original DOCX and converted PDFs) ---
-    prefix = filename_prefix or _safe_filename(context.get("full_name") or "cv")
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    base_name = f"{prefix}_{timestamp}"
-
     docx_path = os.path.join(output_dir, f"{base_name}.docx")
     logger.info(f"[DEBUG] Initializing DocxTemplate with path: {template_path}")
     doc = DocxTemplate(template_path)
@@ -448,9 +1069,40 @@ def generate_cv_document(
             logger.info(f"[DEBUG] Context Var '{k}': {str(v)[:50]}")
 
     logger.info("[DEBUG] Executing doc.render()...")
-    doc.render(render_context)
-    logger.info("[DEBUG] doc.render() finished.")
+    try:
+        doc.render(render_context)
+        logger.info("[DEBUG] doc.render() finished.")
+    except TemplateSyntaxError as exc:
+        logger.error(f"[ERROR] Template syntax error during render: {exc}")
+        # If auto-tagging produced a bad template, retry once with conditionals disabled.
+        if tagged_path != raw_template_path:
+            prev_flag = os.getenv("CV_TEMPLATE_TAGGER_CONDITIONALS")
+            os.environ["CV_TEMPLATE_TAGGER_CONDITIONALS"] = "0"
+            try:
+                safe_tagged = auto_tag_template(raw_template_path)
+                logger.warning(
+                    f"[WARN] Retrying render with conditionals disabled using tagged template: {safe_tagged}"
+                )
+                template_path = safe_tagged
+                tagged_path = safe_tagged
+                doc = DocxTemplate(template_path)
+                doc.render(render_context)
+                logger.info("[DEBUG] doc.render() finished (safe mode).")
+            finally:
+                if prev_flag is None:
+                    os.environ.pop("CV_TEMPLATE_TAGGER_CONDITIONALS", None)
+                else:
+                    os.environ["CV_TEMPLATE_TAGGER_CONDITIONALS"] = prev_flag
+        else:
+            raise
     doc.save(docx_path)
+
+    if auto_template_used:
+        try:
+            _postprocess_annexe9_tables(docx_path, context)
+            logger.info("[DEBUG] Annexe 9 tables post-processed.")
+        except Exception as exc:
+            logger.warning(f"[WARN] Annexe 9 post-processing failed: {exc}")
 
     pdf_path = None
     if "pdf" in output_formats:
@@ -468,6 +1120,7 @@ def generate_cv_document(
         "docx_path": docx_path,
         "pdf_path": pdf_path,
         "field_mapping": None,
+        "matched_template_path": matched_template_path,
     }
 
 
@@ -837,6 +1490,22 @@ def _format_date_range(start_value: Any, end_value: Any) -> str:
     return start or end
 
 
+def _derive_last_degree(context: Dict[str, Any]) -> tuple[str, str]:
+    educations = context.get("educations") or []
+    if not educations:
+        return "", ""
+
+    def sort_key(edu: Dict[str, Any]) -> str:
+        return str(edu.get("endDate") or edu.get("startDate") or "")
+
+    latest = sorted(educations, key=sort_key, reverse=True)[0]
+    degree = str(latest.get("degree") or latest.get("fieldOfStudy") or "")
+    year = str(latest.get("endDate") or latest.get("startDate") or "")
+    if year and len(year) >= 4:
+        year = year[:4]
+    return degree, year
+
+
 def _build_pdf_field_map(context: Dict[str, Any]) -> Dict[str, str]:
     def join_items(items: List[Dict[str, Any]], fmt: str, empty_placeholder: str = "N/A") -> str:
         if not items:
@@ -968,10 +1637,32 @@ def analyze_template(template_path: str) -> Dict[str, Any]:
     ext = Path(template_path).suffix.lower()
 
     if ext == ".pdf":
+        if is_pdf_scanned(template_path):
+            rebuilt_path = rebuild_scanned_template(template_path)
+            result = _analyze_docx_template(rebuilt_path)
+            result["template_type"] = "pdf_scanned"
+            result["rebuilt_docx_path"] = rebuilt_path
+            result["authoring_rules"] = _analyze_authoring_rules_docx(
+                rebuilt_path,
+                note="Rules derived from OCR rebuild of scanned PDF.",
+            )
+            return result
         return _analyze_pdf_template(template_path)
 
     if ext == ".docx":
-        return _analyze_docx_template(template_path)
+        if is_docx_scanned(template_path):
+            rebuilt_path = rebuild_scanned_template(template_path)
+            result = _analyze_docx_template(rebuilt_path)
+            result["template_type"] = "docx_scanned"
+            result["rebuilt_docx_path"] = rebuilt_path
+            result["authoring_rules"] = _analyze_authoring_rules_docx(
+                rebuilt_path,
+                note="Rules derived from OCR rebuild of scanned DOCX.",
+            )
+            return result
+        result = _analyze_docx_template(template_path)
+        result["authoring_rules"] = _analyze_authoring_rules_docx(template_path)
+        return result
 
     raise ValueError(f"Unsupported template type: {ext}")
 
@@ -992,6 +1683,10 @@ def _analyze_pdf_template(template_path: str) -> Dict[str, Any]:
         # Analyze it exactly as if it were a DOCX file
         result = _analyze_docx_template(converted_docx_path)
         result["template_type"] = "pdf"
+        result["authoring_rules"] = _analyze_authoring_rules_docx(
+            converted_docx_path,
+            note="Rules derived from PDF-to-DOCX conversion.",
+        )
         
         return result
     except Exception as e:
