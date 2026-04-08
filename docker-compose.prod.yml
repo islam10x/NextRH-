@@ -54,8 +54,10 @@ services:
     container_name: cv-ai-service
     environment:
       - DATABASE_URL=postgresql+psycopg://postgres:${DB_PASSWORD}@postgres:5432/cv_management
-      - OLLAMA_URL=http://ollama:11434
-      - RAG_CHAT_MODEL=${RAG_CHAT_MODEL:-qwen2.5:1.5b-instruct}
+      - OLLAMA_URL=${OLLAMA_URL}
+      - RAG_CHAT_MODEL=${RAG_CHAT_MODEL:-qwen2.5:32b}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+      - TRANSLATION_MODEL=${TRANSLATION_MODEL:-qwen2.5:32b}
       - RAG_CHAT_TIMEOUT_SECONDS=${RAG_CHAT_TIMEOUT_SECONDS:-30}
     volumes:
       - ./file-storage:/app/file-storage
