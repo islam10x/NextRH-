@@ -76,10 +76,20 @@ export class CvService {
         const metaData = await this.fileStorageService.getEmployeeMetadata(userId);
         const rawMeta = await this.fileStorageService.getRawMetadata(userId);
         const phone = rawMeta?.structured_data?.phone || null;
+        // Prefer email from parsed CV (structured_data.email) over the NextRH system account email
+        const structuredEmail: string | null =
+            typeof rawMeta?.structured_data?.email === 'string' &&
+            rawMeta.structured_data.email.includes('@')
+                ? rawMeta.structured_data.email.trim()
+                : null;
         // Address often has trailing parser artifacts — cut at common section headers
         const rawAddress: string = rawMeta?.structured_data?.address || '';
         const address = rawAddress
-            ? rawAddress.split(/\s+(?:Exp[eé]rience|Formation|Certif|Comp[eé]tence|Skills|Education|Project)/i)[0].trim() || null
+            ? rawAddress
+                  .split(
+                      /\s+(?:Exp[eé]riences?|Formation|Certif|Comp[eé]tences?|Skills|Education|Projects?|P[eé]riode|Organisme|Fonction\s+occup)/i,
+                  )[0]
+                  .trim() || null
             : null;
         const cvFilename = rawMeta?.filename || null;
         const fallbackCertifications = this.extractCertificationsFromMetadata(rawMeta);
@@ -103,7 +113,7 @@ export class CvService {
         if (!profile) {
             return {
                 name: fullName,
-                email: user.email,
+                email: structuredEmail || user.email,
                 phone,
                 address,
                 cvFilename,
@@ -164,7 +174,7 @@ export class CvService {
 
         return {
             name: fullName,
-            email: user.email,
+            email: structuredEmail || user.email,
             phone,
             address,
             cvFilename,
@@ -744,5 +754,177 @@ export class CvService {
         const totalMs = merged.reduce((sum, interval) => sum + (interval.end - interval.start), 0);
         const years = Math.floor(totalMs / (1000 * 60 * 60 * 24 * 365.25));
         return Math.max(0, years);
+    }
+
+    /**
+     * Generate a CV from a template file and employee profile data.
+     * Sends the template + employee data to the AI service which replaces
+     * personal fields while preserving the original template formatting.
+     */
+    async generateCv(
+        employeeId: string,
+        templateFile: Express.Multer.File,
+        outputFormat: 'docx' | 'pdf' = 'docx',
+    ): Promise<{ buffer: Buffer; filename: string; mimeType: string }> {
+        // 1. Load employee profile data
+        const profileData = await this.getMyProfile(employeeId);
+
+        if (!profileData.name || profileData.name.trim().length < 2) {
+            throw new NotFoundException(
+                `Employee ${employeeId} has no usable name in their profile. ` +
+                'Please ensure the employee has a first and last name set.',
+            );
+        }
+
+        // Build the employee_data payload expected by the AI service
+        const employeePayload = {
+            name: profileData.name,
+            title: profileData.currentPosition || '',
+            email: profileData.email || '',
+            phone: profileData.phone || '',
+            address: profileData.address || '',
+            summary: profileData.professionalSummary || '',
+            skills: profileData.skills || [],
+            experience: (profileData.workExperiences || [])
+                .filter((exp: any) => exp.jobTitle && exp.companyName)
+                .map((exp: any) => ({
+                    title: exp.jobTitle,
+                    company: exp.companyName,
+                    dates: [exp.startDate, exp.isCurrent ? 'Present' : exp.endDate]
+                        .filter(Boolean)
+                        .join(' - '),
+                    description: exp.description || '',
+                })),
+            education: (profileData.educations || []).map((edu: any) => ({
+                degree: edu.degree,
+                institution: edu.institution,
+                dates: edu.endDate || '',
+            })),
+            languages: [],
+            certifications: (profileData.certifications || []).map(
+                (c: any) => c.name || '',
+            ),
+            projects: (profileData.projects || []).map((p: any) => {
+                const rawName = (p.name || '').trim();
+                const isUnknown = !rawName || rawName.toLowerCase() === 'unknown project';
+                return {
+                    name: isUnknown ? (p.generatedTitle || '') : rawName,
+                    description: p.description || '',
+                    role: p.role || '',
+                    skills: p.skills || [],
+                    client: p.client || '',
+                    startDate: p.startDate || '',
+                    endDate: p.endDate || '',
+                };
+            }),
+        };
+
+        // 2. Call AI service /generation/cv
+        const formData = new FormData();
+        const blob = new Blob([templateFile.buffer as any], { type: templateFile.mimetype });
+        formData.append('template', blob, templateFile.originalname);
+        formData.append('employee_data', JSON.stringify(employeePayload));
+        formData.append('output_format', outputFormat);
+
+        const aiUrl = `${this.aiServiceBaseUrl}/api/v1/generation/cv`;
+        this.logger.log(`Calling AI generation service: ${aiUrl} (format: ${outputFormat})`);
+
+        // 180s timeout: complex templates with Groq calls can take up to ~30s,
+        // but LibreOffice PDF conversion can take longer on cold start.
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 180_000);
+
+        let aiResponse: globalThis.Response;
+        try {
+            aiResponse = await fetch(aiUrl, {
+                method: 'POST',
+                body: formData,
+                signal: controller.signal,
+            });
+        } catch (err: any) {
+            if (err.name === 'AbortError') {
+                throw new Error('CV generation timed out (180s). The template may be too complex.');
+            }
+            throw new Error(`AI service unreachable: ${err.message}`);
+        } finally {
+            clearTimeout(timeout);
+        }
+
+        if (!aiResponse.ok) {
+            const errorText = await aiResponse.text().catch(() => 'Unknown error');
+            this.logger.error(`AI generation failed (${aiResponse.status}): ${errorText}`);
+            if (aiResponse.status === 400) {
+                throw new Error(`Invalid input: ${errorText}`);
+            }
+            throw new Error(`CV generation failed: ${errorText}`);
+        }
+
+        const arrayBuffer = await aiResponse.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+
+        // Derive filename from Content-Disposition or build one
+        const contentDisposition = aiResponse.headers.get('content-disposition') || '';
+        const ext = outputFormat === 'pdf' ? '.pdf' : '.docx';
+        let filename = `${profileData.name.replace(/\s+/g, '_')}_CV${ext}`;
+        const filenameMatch = contentDisposition.match(/filename="?([^";\n]+)"?/);
+        if (filenameMatch) {
+            filename = filenameMatch[1];
+        }
+
+        const mimeType =
+            outputFormat === 'pdf'
+                ? 'application/pdf'
+                : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+        return { buffer, filename, mimeType };
+    }
+
+    /**
+     * Generate a CV using the employee's own uploaded CV as the template.
+     * Finds the stored CV file and uses it as the template.
+     */
+    async generateCvFromStoredTemplate(
+        employeeId: string,
+        targetEmployeeId: string,
+        outputFormat: 'docx' | 'pdf' = 'docx',
+    ): Promise<{ buffer: Buffer; filename: string; mimeType: string }> {
+        // Find the template employee's stored CV
+        const baseDir = await this.fileStorageService.findBaseDirByOwner(employeeId);
+        if (!baseDir) {
+            throw new NotFoundException(`No stored CV found for employee ${employeeId}`);
+        }
+
+        // Look for CV file - only .docx is supported for reliable processing
+        const possibleFiles = ['CV.docx'];
+        let cvFilePath: string | null = null;
+        for (const fname of possibleFiles) {
+            const fullPath = require('path').join(baseDir, fname);
+            if (require('fs').existsSync(fullPath)) {
+                cvFilePath = fullPath;
+                break;
+            }
+        }
+
+        if (!cvFilePath) {
+            throw new NotFoundException(`No DOCX CV file found for employee ${employeeId}`);
+        }
+
+        // Read the file into a buffer and create a mock Multer file
+        const fileBuffer = await require('fs/promises').readFile(cvFilePath);
+
+        const mockFile: Express.Multer.File = {
+            fieldname: 'template',
+            originalname: require('path').basename(cvFilePath),
+            encoding: '7bit',
+            mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            buffer: fileBuffer,
+            size: fileBuffer.length,
+            stream: null as any,
+            destination: '',
+            filename: '',
+            path: '',
+        };
+
+        return this.generateCv(targetEmployeeId, mockFile, outputFormat);
     }
 }

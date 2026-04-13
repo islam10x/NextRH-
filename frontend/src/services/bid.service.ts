@@ -41,4 +41,42 @@ export const bidService = {
     const res = await api.post('/rag/chat', { message, session_id: sessionId });
     return res.data as RagChatResponse;
   },
+
+  /**
+   * Generate a CV by uploading a template and specifying an employee.
+   * @param format - 'docx' for download, 'pdf' for preview
+   * Returns the generated file as a Blob.
+   */
+  async generateCv(
+    employeeId: string,
+    templateFile: File,
+    format: 'docx' | 'pdf' = 'docx',
+  ): Promise<Blob> {
+    const formData = new FormData();
+    formData.append('template', templateFile);
+    formData.append('employeeId', employeeId);
+
+    const res = await api.post(`/cv/generate?format=${format}`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      responseType: 'blob',
+    });
+    return res.data as Blob;
+  },
+
+  /**
+   * Generate a CV using another employee's stored CV as the template.
+   * @param format - 'docx' for download, 'pdf' for preview
+   */
+  async generateCvFromStored(
+    templateEmployeeId: string,
+    targetEmployeeId: string,
+    format: 'docx' | 'pdf' = 'docx',
+  ): Promise<Blob> {
+    const res = await api.post(
+      `/cv/generate-from-stored?format=${format}`,
+      { templateEmployeeId, targetEmployeeId },
+      { responseType: 'blob' },
+    );
+    return res.data as Blob;
+  },
 };

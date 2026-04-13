@@ -17,6 +17,11 @@ env/
 uploads/
 templates/
 backend/file-storage/
+!backend/file-storage/cv-generations/
+backend/file-storage/cv-generations/**/*.docx
+backend/file-storage/cv-generations/**/*.pdf
+!backend/file-storage/cv-generations/.gitkeep
+!backend/file-storage/cv-generations/README.md
 file-storage/
 qdrant_local/
 ai-service/qdrant_local/
@@ -49,6 +54,12 @@ logs/
 # Diagrams
 Docs/UseCaseDiagrams.puml
 Docs/SequenceDiagrams.puml
+Docs/diagrams/
 # Local Vector DB
 qdrant_local/
 ai-service/qdrant_local/
+
+# Test templates (large binary files, local use only)
+ai-service/test_templates/
+ai-service/test_outputs/
+ai-service/tests/test_outputs/

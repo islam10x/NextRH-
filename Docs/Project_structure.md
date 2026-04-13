@@ -242,7 +242,6 @@ cv-management-system/
 │   ├── Dockerfile
 │   ├── .dockerignore
 │   ├── requirements.txt
-│   ├── setup.py
 │   │
 │   ├── app/
 │   │   ├── __init__.py

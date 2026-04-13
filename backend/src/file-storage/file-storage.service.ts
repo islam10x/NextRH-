@@ -159,7 +159,7 @@ export class FileStorageService {
     }
 
 
-    private async findBaseDirByOwner(userId: string): Promise<string | null> {
+    async findBaseDirByOwner(userId: string): Promise<string | null> {
         const rootDir = this.getStorageRoot();
         if (!existsSync(rootDir)) return null;
 
