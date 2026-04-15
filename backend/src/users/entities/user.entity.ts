@@ -40,10 +40,10 @@ export class User {
     })
     status: UserStatus;
 
-    @Column({ name: 'first_name', nullable: true })
+    @Column({ name: 'first_name', type: 'text', nullable: true })
     firstName: string;
 
-    @Column({ name: 'last_name', nullable: true })
+    @Column({ name: 'last_name', type: 'text', nullable: true })
     lastName: string;
 
     @Column({ nullable: true })

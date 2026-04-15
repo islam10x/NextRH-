@@ -1,4 +1,4 @@
-﻿export type DateBoundary = 'start' | 'end';
+export type DateBoundary = 'start' | 'end';
 
 export interface ParsedDateRange {
     startDate: Date | null;
@@ -7,10 +7,10 @@ export interface ParsedDateRange {
 }
 
 const PRESENT_PATTERN =
-    /^(present|current|ongoing|now|today|aujourd'hui|aujourdhui|actuel|actuelle|en cours)$/i;
+    /^(present|current|ongoing|now|today|aujourd['’]hui|aujourdhui|actuel|actuelle|en cours)$/i;
 const SINCE_PATTERN = /^(?:since|depuis)\s+(.+)$/i;
 const COMPACT_RANGE_PATTERN =
-    /^([A-Za-z\u00c0-\u017f]+\s+\d{4}|\d{1,2}[\/-]\d{4}|\d{4})\s*[-\u2013\u2014]\s*([A-Za-z\u00c0-\u017f]+\s+\d{4}|\d{1,2}[\/-]\d{4}|\d{4}|present|current|ongoing|aujourd'hui|aujourdhui)$/i;
+    /^([A-Za-z\u00c0-\u017f]+\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{4}|\d{1,2}[\/-]\d{4}|\d{4})\s*[-\u2013\u2014]\s*([A-Za-z\u00c0-\u017f]+\s+\d{4}|\d{1,2}[\/-]\d{1,2}[\/-]\d{4}|\d{1,2}[\/-]\d{4}|\d{4}|present|current|ongoing|aujourd['’]hui|aujourdhui|en cours)$/i;
 
 const MONTHS: Record<string, number> = {
     jan: 1,
@@ -120,10 +120,15 @@ function parseAtomicDate(rawValue: unknown, boundary: DateBoundary): Date | null
         return new Date(rawValue.getTime());
     }
 
-    const normalizedRaw = normalizeText(String(rawValue));
+    let normalizedRaw = normalizeText(String(rawValue));
     if (!normalizedRaw || isPresentToken(normalizedRaw)) {
         return null;
     }
+
+    // Strip leading 'depuis' or 'since' in case it was passed down from a dashed range split
+    normalizedRaw = normalizedRaw.replace(/^(?:depuis|since)\s+/i, '');
+    // Also strip common French leading prepositions used in ranges, e.g. "De 27/07/2023"
+    normalizedRaw = normalizedRaw.replace(/^(?:de|du|des|d['’])\s+/i, '');
 
     // YYYY-MM-DD / YYYY/MM/DD
     const iso = normalizedRaw.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
@@ -217,17 +222,12 @@ function splitDateRange(value: string): [string, string] | null {
         return null;
     }
 
-    const since = normalized.match(SINCE_PATTERN);
-    if (since) {
-        return [normalizeText(since[1]), 'present'];
-    }
-
     const compact = normalized.match(COMPACT_RANGE_PATTERN);
     if (compact) {
         return [normalizeText(compact[1]), normalizeText(compact[2])];
     }
 
-    const textual = normalized.match(/^(.+?)\s+(?:to|au|a|\u00e0)\s+(.+)$/i);
+    const textual = normalized.match(/^(.+?)\s+(?:to|au|a|\u00e0|jusqu['\u2019]?\s*[a\u00e0\ufffd]?)\s+(.+)$/i);
     if (textual) {
         return [normalizeText(textual[1]), normalizeText(textual[2])];
     }
@@ -235,6 +235,11 @@ function splitDateRange(value: string): [string, string] | null {
     const dashed = normalized.match(/^(.+?)\s[-\u2013\u2014]\s(.+)$/);
     if (dashed) {
         return [normalizeText(dashed[1]), normalizeText(dashed[2])];
+    }
+
+    const since = normalized.match(SINCE_PATTERN);
+    if (since) {
+        return [normalizeText(since[1]), 'present'];
     }
 
     return null;

@@ -19,10 +19,10 @@ export class Project {
     @OneToMany(() => ProjectParticipant, (participant) => participant.project)
     participants: ProjectParticipant[];
 
-    @Column({ name: 'project_name', length: 255 })
+    @Column({ name: 'project_name', type: 'text' })
     projectName: string;
 
-    @Column({ name: 'client_name', length: 255, nullable: true })
+    @Column({ name: 'client_name', type: 'text', nullable: true })
     clientName: string;
 
     @Column({ name: 'project_description', type: 'text', nullable: true })

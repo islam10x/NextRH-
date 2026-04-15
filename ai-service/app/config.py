@@ -43,7 +43,8 @@ class Settings(BaseSettings):
     TRANSLATION_TIMEOUT_SECONDS: float = 25.0
     TRANSLATION_ENABLED: bool = True
     # Comma-separated candidate roots for employee metadata.json files.
-    RAG_METADATA_ROOTS: str = "backend/local-storage,backend/file-storage/CV_Database"
+    # In Docker, file-storage is mounted at /app/file-storage.
+    RAG_METADATA_ROOTS: str = "/app/file-storage/CV_Database,backend/local-storage,backend/file-storage/CV_Database"
 
     @model_validator(mode="before")
     def coerce_debug(cls, data):

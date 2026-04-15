@@ -15,7 +15,7 @@ export class ProjectParticipant {
     @JoinColumn({ name: 'profile_id' })
     profile: EmployeeProfile;
 
-    @Column({ nullable: true })
+    @Column({ type: 'text', nullable: true })
     role: string;
 
     @Column({ type: 'text' })
