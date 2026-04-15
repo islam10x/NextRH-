@@ -10,6 +10,7 @@ tika
 pytesseract
 easyocr
 docxtpl
+groq
 pdfkit
 pydantic
 pytest

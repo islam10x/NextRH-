@@ -7,11 +7,13 @@ import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { FileOutput, Download, Loader2, Check, Search, Eye } from 'lucide-react';
 import api from '@/services/api';
+import { bidService } from '@/services/bid.service';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 
 type TemplateType = 'standard' | 'canadian' | 'eu' | 'client_specific';
+type EngineMode = 'primary' | 'fallback';
 
 interface CvTemplate {
   id: string;
@@ -64,6 +66,15 @@ const CVGenerationPage: React.FC = () => {
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<any>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadedTemplateFile, setUploadedTemplateFile] = useState<File | null>(null);
+  const [uploadedEngine, setUploadedEngine] = useState<EngineMode>('primary');
+  const [uploadedEngineUsed, setUploadedEngineUsed] = useState<EngineMode | null>(null);
+  const [uploadedGenerating, setUploadedGenerating] = useState(false);
+  const [uploadedDocxBlob, setUploadedDocxBlob] = useState<Blob | null>(null);
+  const [uploadedPdfBlob, setUploadedPdfBlob] = useState<Blob | null>(null);
+  const [uploadedPreviewOpen, setUploadedPreviewOpen] = useState(false);
+  const [uploadedPreviewLoading, setUploadedPreviewLoading] = useState(false);
+  const uploadedPreviewContainerRef = useRef<HTMLDivElement>(null);
 
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -94,6 +105,29 @@ const CVGenerationPage: React.FC = () => {
       }, 50);
     }
   }, [previewOpen, downloadLinks.docx]);
+
+  useEffect(() => {
+    if (uploadedPreviewOpen && uploadedDocxBlob) {
+      setUploadedPreviewLoading(true);
+      setTimeout(() => {
+        import('docx-preview')
+          .then(({ renderAsync }) => {
+            if (uploadedPreviewContainerRef.current) {
+              uploadedPreviewContainerRef.current.innerHTML = '';
+              renderAsync(uploadedDocxBlob, uploadedPreviewContainerRef.current).finally(() =>
+                setUploadedPreviewLoading(false),
+              );
+            } else {
+              setUploadedPreviewLoading(false);
+            }
+          })
+          .catch(() => {
+            toast.error('Preview failed to load');
+            setUploadedPreviewLoading(false);
+          });
+      }, 50);
+    }
+  }, [uploadedPreviewOpen, uploadedDocxBlob]);
 
   useEffect(() => {
     const load = async () => {
@@ -184,6 +218,62 @@ const CVGenerationPage: React.FC = () => {
       URL.revokeObjectURL(blobUrl);
     } catch {
       toast.error('Download failed');
+    }
+  };
+
+  const handleBlobDownload = (blob: Blob, filename: string) => {
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(blobUrl);
+  };
+
+  const handleGenerateFromUploaded = async (engineOverride?: EngineMode) => {
+    if (!selectedEmployee || !uploadedTemplateFile) {
+      toast.error('Select an employee and upload a DOCX template first');
+      return;
+    }
+
+    const activeEngine = engineOverride || uploadedEngine;
+    setUploadedGenerating(true);
+    setUploadedDocxBlob(null);
+    setUploadedPdfBlob(null);
+
+    try {
+      const [docxRes, pdfRes] = await Promise.allSettled([
+        bidService.generateCv(selectedEmployee, uploadedTemplateFile, 'docx', activeEngine),
+        bidService.generateCv(selectedEmployee, uploadedTemplateFile, 'pdf', activeEngine),
+      ]);
+
+      if (docxRes.status !== 'fulfilled') {
+        throw new Error('DOCX generation failed');
+      }
+
+      setUploadedDocxBlob(docxRes.value);
+      if (pdfRes.status === 'fulfilled' && pdfRes.value.type === 'application/pdf') {
+        setUploadedPdfBlob(pdfRes.value);
+      } else {
+        setUploadedPdfBlob(null);
+      }
+
+      setUploadedEngineUsed(activeEngine);
+      toast.success(
+        activeEngine === 'primary'
+          ? 'Primary engine generated CV successfully'
+          : 'Fallback engine generated CV successfully',
+      );
+    } catch {
+      toast.error(
+        activeEngine === 'primary'
+          ? 'Primary engine failed to generate CV'
+          : 'Fallback engine failed to generate CV',
+      );
+    } finally {
+      setUploadedGenerating(false);
     }
   };
 
@@ -470,6 +560,125 @@ const CVGenerationPage: React.FC = () => {
               </>
             )}
           </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Generate From Uploaded Template</CardTitle>
+          <CardDescription>
+            Run primary engine first, then trigger fallback engine if preview is not satisfactory
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label>Template File (.docx)</Label>
+            <Input
+              type="file"
+              accept=".docx"
+              onChange={(e) => setUploadedTemplateFile(e.target.files?.[0] || null)}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Engine</Label>
+            <Select
+              value={uploadedEngine}
+              onValueChange={(v) => setUploadedEngine(v as EngineMode)}
+            >
+              <SelectTrigger className="w-[220px]">
+                <SelectValue placeholder="Select engine" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="primary">Primary (Your Engine)</SelectItem>
+                <SelectItem value="fallback">Fallback (Rania Engine)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <Button
+            onClick={() => handleGenerateFromUploaded()}
+            disabled={!selectedEmployee || !uploadedTemplateFile || uploadedGenerating}
+            className="w-full"
+          >
+            {uploadedGenerating ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Generating...
+              </>
+            ) : (
+              <>
+                <FileOutput className="h-4 w-4 mr-2" />
+                Generate From Uploaded Template
+              </>
+            )}
+          </Button>
+
+          {uploadedDocxBlob && (
+            <div className="p-4 rounded-lg bg-success/10 border border-success/20">
+              <p className="text-sm font-medium text-success mb-2">
+                Generated using: {uploadedEngineUsed === 'fallback' ? 'Fallback' : 'Primary'} engine
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setUploadedPreviewOpen(true)}
+                  className="border border-primary/20 bg-primary/5 hover:bg-primary/10 text-primary"
+                >
+                  <Eye className="h-4 w-4 mr-1" />
+                  Live Preview
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleBlobDownload(uploadedDocxBlob, 'generated-cv.docx')}
+                >
+                  <Download className="h-4 w-4 mr-1" />
+                  Download DOCX
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={!uploadedPdfBlob}
+                  onClick={() => uploadedPdfBlob && handleBlobDownload(uploadedPdfBlob, 'generated-cv.pdf')}
+                >
+                  <Download className="h-4 w-4 mr-1" />
+                  Download PDF
+                </Button>
+                {uploadedEngineUsed === 'primary' && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleGenerateFromUploaded('fallback')}
+                    disabled={uploadedGenerating}
+                  >
+                    Try Fallback Engine
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+
+          <Dialog open={uploadedPreviewOpen} onOpenChange={setUploadedPreviewOpen}>
+            <DialogContent className="max-w-4xl w-[95vw] h-[85vh] flex flex-col p-4 sm:p-6 pb-2">
+              <DialogHeader className="mb-2">
+                <DialogTitle>Uploaded Template Result Preview</DialogTitle>
+                <DialogDescription className="sr-only">Interactive CV viewer</DialogDescription>
+              </DialogHeader>
+              <div className="relative flex-1 overflow-auto bg-[#e5e5e5] rounded-md border p-4 sm:p-8 flex justify-center custom-scrollbar">
+                {uploadedPreviewLoading && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-background/50 z-10 rounded-md">
+                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                  </div>
+                )}
+                <div
+                  ref={uploadedPreviewContainerRef}
+                  className="w-full max-w-[850px] min-h-full shadow-lg bg-white select-text"
+                  style={{ pointerEvents: uploadedPreviewLoading ? 'none' : 'auto' }}
+                />
+              </div>
+            </DialogContent>
+          </Dialog>
         </CardContent>
       </Card>
     </div>

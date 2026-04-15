@@ -52,11 +52,11 @@ export class EmailFallbackService {
             const pending = await this.notificationsRepo
                 .createQueryBuilder('n')
                 .leftJoinAndSelect('n.user', 'u')
-                .where('n.email_sent = false')
-                .andWhere('(n.scheduled_at IS NULL OR n.scheduled_at <= :now)', {
+                .where('n.emailSent = :sent', { sent: false })
+                .andWhere('(n.scheduledAt IS NULL OR n.scheduledAt <= :now)', {
                     now: new Date(),
                 })
-                .orderBy('n.created_at', 'ASC')
+                .orderBy('n.createdAt', 'ASC')
                 .take(200)
                 .getMany();
 

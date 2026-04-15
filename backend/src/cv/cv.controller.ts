@@ -10,7 +10,10 @@ import {
     ParseFilePipeBuilder,
     HttpStatus,
     Param,
+    Res,
+    Query,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -97,5 +100,106 @@ export class CvController {
     @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
     async getEmployeeProfile(@Param('employeeId') employeeId: string) {
         return this.cvService.getMyProfile(employeeId);
+    }
+
+    /**
+     * Generate a CV from an uploaded template file for a given employee.
+     * The template's layout is preserved and personal data is replaced.
+     * @param format - Output format: 'docx' (default) or 'pdf' (for preview)
+     */
+    @Post('generate')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.BID_MANAGER, UserRole.TEAM_MANAGER)
+    @UseInterceptors(
+        FileInterceptor('template', {
+            limits: { fileSize: MAX_UPLOAD_BYTES },
+            fileFilter: (_req, file, cb) => {
+                const allowed = [
+                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                ];
+                if (!allowed.includes((file.mimetype || '').toLowerCase())) {
+                    return cb(new BadRequestException('Template must be .docx format'), false);
+                }
+                return cb(null, true);
+            },
+        }),
+    )
+    async generateCv(
+        @UploadedFile() template: Express.Multer.File,
+        @Body('employeeId') employeeId: string,
+        @Query('format') format: string,
+        @Query('engine') engine: string,
+        @Res() res: Response,
+    ) {
+        if (!template) {
+            throw new BadRequestException('Template file is required');
+        }
+        if (!employeeId) {
+            throw new BadRequestException('employeeId is required');
+        }
+
+        // Basic UUID format check to catch obvious typos early
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (!uuidRegex.test(employeeId)) {
+            throw new BadRequestException('employeeId must be a valid UUID');
+        }
+
+        const outputFormat = format === 'pdf' ? 'pdf' : 'docx';
+        const selectedEngine = engine === 'fallback' ? 'fallback' : 'primary';
+        const result = await this.cvService.generateCv(
+            employeeId,
+            template,
+            outputFormat,
+            selectedEngine,
+        );
+
+        res.set({
+            'Content-Type': result.mimeType,
+            'Content-Disposition': `attachment; filename="${encodeURIComponent(result.filename)}"`,
+            'Content-Length': result.buffer.length,
+            'X-CV-Engine': result.engine,
+        });
+        res.send(result.buffer);
+    }
+
+    /**
+     * Generate a CV using another employee's stored CV as the template.
+     * Applies the target employee's data onto the template employee's CV layout.
+     * @param format - Output format: 'docx' (default) or 'pdf' (for preview)
+     */
+    @Post('generate-from-stored')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.BID_MANAGER, UserRole.TEAM_MANAGER)
+    async generateFromStored(
+        @Body() body: { templateEmployeeId: string; targetEmployeeId: string },
+        @Query('format') format: string,
+        @Query('engine') engine: string,
+        @Res() res: Response,
+    ) {
+        if (!body.templateEmployeeId || !body.targetEmployeeId) {
+            throw new BadRequestException('templateEmployeeId and targetEmployeeId are required');
+        }
+
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (!uuidRegex.test(body.templateEmployeeId) || !uuidRegex.test(body.targetEmployeeId)) {
+            throw new BadRequestException('templateEmployeeId and targetEmployeeId must be valid UUIDs');
+        }
+
+        const outputFormat = format === 'pdf' ? 'pdf' : 'docx';
+        const selectedEngine = engine === 'fallback' ? 'fallback' : 'primary';
+        const result = await this.cvService.generateCvFromStoredTemplate(
+            body.templateEmployeeId,
+            body.targetEmployeeId,
+            outputFormat,
+            selectedEngine,
+        );
+
+        res.set({
+            'Content-Type': result.mimeType,
+            'Content-Disposition': `attachment; filename="${encodeURIComponent(result.filename)}"`,
+            'Content-Length': result.buffer.length,
+            'X-CV-Engine': result.engine,
+        });
+        res.send(result.buffer);
     }
 }

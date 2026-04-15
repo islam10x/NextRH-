@@ -46,6 +46,16 @@ class Settings(BaseSettings):
     # In Docker, file-storage is mounted at /app/file-storage.
     RAG_METADATA_ROOTS: str = "/app/file-storage/CV_Database,backend/local-storage,backend/file-storage/CV_Database"
 
+    # Groq LLM for CV generation
+    GROQ_API_KEY: str = ""
+    GROQ_CV_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_TIMEOUT_SECONDS: float = 15.0  # per-request timeout for Groq API calls
+    GROQ_SUMMARY_TEMPERATURE: float = 0.3
+    GROQ_PAIRS_TEMPERATURE: float = 0.2
+
+    # APILayer Resume Parser — https://apilayer.com/marketplace/resume_parser-api
+    APILAYER_API_KEY: str = ""
+
     @model_validator(mode="before")
     def coerce_debug(cls, data):
         val = data.get("DEBUG")
