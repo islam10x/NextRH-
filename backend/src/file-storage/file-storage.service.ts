@@ -1,4 +1,4 @@
-﻿import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import * as path from 'path';
 import * as fs from 'fs/promises';
@@ -159,7 +159,7 @@ export class FileStorageService {
     }
 
 
-    private async findBaseDirByOwner(userId: string): Promise<string | null> {
+    async findBaseDirByOwner(userId: string): Promise<string | null> {
         const rootDir = this.getStorageRoot();
         if (!existsSync(rootDir)) return null;
 
@@ -561,12 +561,46 @@ export class FileStorageService {
         }
     }
 
+    public getWorkspaceRoot(): string {
+        // Honor injected environment variable for flexible VM deployments
+        if (process.env.PROJECT_ROOT) {
+            return path.resolve(process.env.PROJECT_ROOT);
+        }
+
+        // Find the NextRH- root by looking for common markers
+        let currentIdx = __dirname;
+        while (currentIdx !== path.parse(currentIdx).root) {
+            const potentialRoot = currentIdx;
+            if (existsSync(path.join(potentialRoot, 'backend')) && 
+                existsSync(path.join(potentialRoot, 'file-storage'))) {
+                return potentialRoot;
+            }
+            currentIdx = path.dirname(currentIdx);
+        }
+        // Fallback: assume we are in backend/src/file-storage
+        return path.resolve(__dirname, '..', '..', '..');
+    }
+
     private getStorageRoot() {
-        return path.resolve(process.cwd(), 'file-storage', 'CV_Database');
+        return path.resolve(this.getWorkspaceRoot(), 'file-storage', 'CV_Database');
     }
 
     private sanitizeFileName(name: string) {
         return name.replace(/[^a-zA-Z0-9.-]/g, '_');
+    }
+
+    public resolveFromWorkspace(filePath: string) {
+        if (!filePath) return '';
+        if (path.isAbsolute(filePath)) return filePath;
+        
+        // Backwards compatibility for old database entries that were saved
+        // relative to the "backend" folder (starting with ../)
+        let cleanedPath = filePath;
+        if (cleanedPath.startsWith('..\\')) cleanedPath = cleanedPath.substring(3);
+        if (cleanedPath.startsWith('../')) cleanedPath = cleanedPath.substring(3);
+        
+        // All relative paths in the DB should be resolved from the workspace root
+        return path.resolve(this.getWorkspaceRoot(), cleanedPath);
     }
 
     private buildSafeFolderName(name: string, userId: string) {
@@ -577,9 +611,7 @@ export class FileStorageService {
             .map((token) => token.charAt(0).toUpperCase() + token.slice(1).toLowerCase())
             .join('_');
 
-        // Extract first 8 characters of userId for brevity (e.g., "12345678-..." -> "12345678")
         const userIdShort = userId.replace(/-/g, '').substring(0, 8);
-
         return this.sanitizeFileName(`${normalized}_${userIdShort}`);
     }
 
@@ -593,5 +625,67 @@ export class FileStorageService {
 
     private currentDate() {
         return new Date().toISOString();
+    }
+
+    async ensureEmployeeBaseDir(userId: string): Promise<string> {
+        const user = await this.usersService.findById(userId);
+        const existingBaseDir = await this.findBaseDirByOwner(user.user_id);
+        if (existingBaseDir) {
+            return existingBaseDir;
+        }
+        const fallbackName = [user.firstName, user.lastName].filter(Boolean).join(' ').trim()
+            || user.email?.split('@')[0]
+            || 'employee';
+        return this.resolveEmployeeBaseDir(fallbackName, user.user_id, user.email);
+    }
+
+    async getGeneratedCvDir(userId: string): Promise<string> {
+        const baseDir = await this.ensureEmployeeBaseDir(userId);
+        const generatedDir = path.join(baseDir, 'generated-cvs');
+        await fs.mkdir(generatedDir, { recursive: true });
+        return generatedDir;
+    }
+
+    getTemplatesRootDir(): string {
+        return path.resolve(this.getWorkspaceRoot(), 'file-storage', 'templates');
+    }
+
+    async saveTemplateFile(file: Express.Multer.File, preferredName?: string) {
+        const rootDir = this.getTemplatesRootDir();
+        await fs.mkdir(rootDir, { recursive: true });
+
+        const originalName = file.originalname || 'template';
+        const preferredSafe = preferredName ? this.sanitizeFileName(preferredName) : '';
+        const preferredParsed = preferredSafe ? path.parse(preferredSafe) : null;
+        const originalParsed = path.parse(this.sanitizeFileName(originalName));
+        const ext = preferredParsed?.ext || originalParsed.ext || this.resolveExtension(file, originalName) || '.docx';
+        const safeBase = preferredParsed?.name || originalParsed.name || 'template';
+        const filename = `${safeBase}-${Date.now()}${ext}`;
+        const fullPath = path.join(rootDir, filename);
+        await fs.writeFile(fullPath, file.buffer);
+
+        return {
+            fullPath,
+            filename,
+            relativePath: path.relative(this.getWorkspaceRoot(), fullPath),
+        };
+    }
+
+    async replicateTemplateFile(existingPath: string, preferredName?: string) {
+        const absPath = this.resolveFromWorkspace(existingPath);
+        const rootDir = this.getTemplatesRootDir();
+        await fs.mkdir(rootDir, { recursive: true });
+
+        const parsed = path.parse(absPath);
+        const safeBase = this.sanitizeFileName(preferredName || parsed.name || 'template');
+        const filename = `${safeBase}-${Date.now()}${parsed.ext || '.docx'}`;
+        const fullPath = path.join(rootDir, filename);
+        await fs.copyFile(absPath, fullPath);
+
+        return {
+            fullPath,
+            filename,
+            relativePath: path.relative(this.getWorkspaceRoot(), fullPath),
+        };
     }
 }

@@ -38,8 +38,23 @@ class Settings(BaseSettings):
     # RAG chat LLM config (Ollama only).
     RAG_CHAT_MODEL: str = "qwen2.5:1.5b-instruct"
     RAG_CHAT_TIMEOUT_SECONDS: float = 30.0
+    # Translation (CV generation) — uses Ollama
+    TRANSLATION_MODEL: str | None = None
+    TRANSLATION_TIMEOUT_SECONDS: float = 25.0
+    TRANSLATION_ENABLED: bool = True
     # Comma-separated candidate roots for employee metadata.json files.
-    RAG_METADATA_ROOTS: str = "backend/local-storage,backend/file-storage/CV_Database"
+    # In Docker, file-storage is mounted at /app/file-storage.
+    RAG_METADATA_ROOTS: str = "/app/file-storage/CV_Database,backend/local-storage,backend/file-storage/CV_Database"
+
+    # Groq LLM for CV generation
+    GROQ_API_KEY: str = ""
+    GROQ_CV_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_TIMEOUT_SECONDS: float = 15.0  # per-request timeout for Groq API calls
+    GROQ_SUMMARY_TEMPERATURE: float = 0.3
+    GROQ_PAIRS_TEMPERATURE: float = 0.2
+
+    # APILayer Resume Parser — https://apilayer.com/marketplace/resume_parser-api
+    APILAYER_API_KEY: str = ""
 
     @model_validator(mode="before")
     def coerce_debug(cls, data):

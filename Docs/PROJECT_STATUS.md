@@ -3,7 +3,7 @@
 Generated: 2026-03-12 (local repo state)
 
 ## Scope
-- This document reflects the current code and configuration in `c:\Users\islam\Projects\NextRH`.
+- This document reflects the current code and configuration of the NextRH project.
 - It focuses on runtime workflows and pipelines, not file tree structure.
 - Key sources reviewed include `docker-compose.yml`, backend controllers/services, AI service modules, and the Docs/*.md references.
 

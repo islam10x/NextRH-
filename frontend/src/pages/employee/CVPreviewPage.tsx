@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -91,7 +91,7 @@ const CVPreviewPage: React.FC = () => {
       const margin = 20;
       const contentWidth = pageWidth - (2 * margin);
       let yPosition = margin;
-      
+
       // Helper function to add new page if needed
       const checkPageBreak = (additionalHeight: number = 10) => {
         if (yPosition + additionalHeight > pageHeight - margin) {
@@ -197,13 +197,13 @@ const CVPreviewPage: React.FC = () => {
 
         profile.workExperiences.forEach((exp, index) => {
           if (index > 0) checkPageBreak(25);
-          
+
           // Job title and company
           pdf.setFont('helvetica', 'bold');
           pdf.setFontSize(12);
           pdf.setTextColor(31, 41, 55);
           pdf.text(exp.jobTitle, margin, yPosition);
-          
+
           // Date range (right aligned)
           const dateText = formatDateRange(exp.startDate, exp.endDate);
           if (dateText) {
@@ -246,7 +246,7 @@ const CVPreviewPage: React.FC = () => {
 
         profile.projects.forEach((project, index) => {
           if (index > 0) checkPageBreak(25);
-          
+
           // Project title
           const hasInvalidName = !project.name || project.name.toLowerCase() === 'unknown project';
           let displayTitle: string;
@@ -320,7 +320,7 @@ const CVPreviewPage: React.FC = () => {
 
         profile.certifications.forEach((cert, index) => {
           if (index > 0) checkPageBreak(15);
-          
+
           // Certificate name
           pdf.setFont('helvetica', 'bold');
           pdf.setFontSize(11);
@@ -333,7 +333,7 @@ const CVPreviewPage: React.FC = () => {
           if (cert.issuingOrganization) certDetails.push(cert.issuingOrganization);
           if (cert.issueDate) certDetails.push(`Issued: ${fmtDate(cert.issueDate)}`);
           if (cert.expirationDate) certDetails.push(`Expires: ${fmtDate(cert.expirationDate)}`);
-          
+
           if (certDetails.length > 0) {
             pdf.setFont('helvetica', 'normal');
             pdf.setFontSize(10);
@@ -363,7 +363,7 @@ const CVPreviewPage: React.FC = () => {
 
         profile.educations.forEach((edu, index) => {
           if (index > 0) checkPageBreak(15);
-          
+
           // Degree
           pdf.setFont('helvetica', 'bold');
           pdf.setFontSize(11);
@@ -376,7 +376,7 @@ const CVPreviewPage: React.FC = () => {
           const eduDetails = [];
           if (edu.institution) eduDetails.push(edu.institution);
           if (edu.endDate) eduDetails.push(`Graduated: ${fmtDate(edu.endDate)}`);
-          
+
           if (eduDetails.length > 0) {
             pdf.setFont('helvetica', 'normal');
             pdf.setFontSize(10);
@@ -399,14 +399,14 @@ const CVPreviewPage: React.FC = () => {
 
     } catch (error) {
       console.error('Error generating PDF:', error);
-      
+
       // Reset button state on error
       const button = document.querySelector('button:has(.lucide-download)') as HTMLButtonElement;
       if (button) {
         button.disabled = false;
         button.innerHTML = '<svg class="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v10a2 2 0 01-2-2z"></path></svg>Download PDF';
       }
-      
+
       alert('Failed to generate PDF. Please try again.');
     }
   };
@@ -428,18 +428,33 @@ const CVPreviewPage: React.FC = () => {
       profile.skills.length === 0 &&
       !profile.professionalSummary);
 
+  const isManagerView = Boolean(targetUserId);
+  const managerErrorTitle = 'Unable to load this CV profile.';
+  const managerErrorBody = 'Please refresh the page and try again.';
+  const managerEmptyTitle = 'This employee has not uploaded a CV yet.';
+  const managerEmptyBody = 'Ask them to upload their CV to view the profile.';
+  const employeeErrorTitle = 'Failed to load CV profile. Please try again.';
+  const employeeErrorBody = 'Please refresh the page or try uploading your CV again.';
+  const employeeEmptyTitle = 'You have not uploaded a CV yet.';
+  const employeeEmptyBody = 'Upload your CV to generate your profile here.';
+
   if (error || isEmpty) {
+    const title = error
+      ? (isManagerView ? managerErrorTitle : employeeErrorTitle)
+      : (isManagerView ? managerEmptyTitle : employeeEmptyTitle);
+    const body = error
+      ? (isManagerView ? managerErrorBody : employeeErrorBody)
+      : (isManagerView ? managerEmptyBody : employeeEmptyBody);
+
     return (
       <Card>
         <CardContent className="py-16 text-center space-y-4">
           <FileText className="h-12 w-12 mx-auto text-muted-foreground/50" />
           <h3 className="font-medium text-lg">
-            {error ?? 'No CV data available'}
+            {title}
           </h3>
-          <p className="text-muted-foreground text-sm">
-            {error
-              ? 'Please refresh the page or try uploading your CV again.'
-              : 'Upload your CV to see your parsed profile here.'}
+          <p className="text-muted-foreground text-base">
+            {body}
           </p>
           {!error && !targetUserId && (
             <Button size="sm" onClick={() => navigate('/employee/cv-upload')}>
@@ -457,13 +472,13 @@ const CVPreviewPage: React.FC = () => {
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">CV Preview</h1>
-          <div className="flex flex-wrap items-center gap-3 text-muted-foreground text-sm mt-1">
+          <div className="flex flex-wrap items-center gap-4 text-muted-foreground text-sm mt-2">
             {profile.lastUpdate && (
               <span>Last updated {fmtDate(profile.lastUpdate)}</span>
             )}
             {profile.cvFilename && (
-              <span className="flex items-center gap-1">
-                <FileUp className="h-3.5 w-3.5" />
+              <span className="flex items-center gap-2">
+                <FileUp className="h-4 w-4" />
                 {profile.cvFilename}
               </span>
             )}
@@ -495,20 +510,20 @@ const CVPreviewPage: React.FC = () => {
             {profile.currentPosition && (
               <p className="position text-xl text-primary font-medium mb-3">{profile.currentPosition}</p>
             )}
-            <div className="contact-info flex flex-wrap items-center justify-center gap-4 text-sm text-muted-foreground">
-              <span className="flex items-center gap-1.5">
-                <Mail className="h-4 w-4" />
+            <div className="contact-info flex flex-wrap items-center justify-center gap-4 text-base text-muted-foreground">
+              <span className="flex items-center gap-2">
+                <Mail className="h-5 w-5" />
                 {profile.email}
               </span>
               {profile.phone && (
-                <span className="flex items-center gap-1.5">
-                  <Phone className="h-4 w-4" />
+                <span className="flex items-center gap-2">
+                  <Phone className="h-5 w-5" />
                   {profile.phone}
                 </span>
               )}
               {profile.totalExperienceYears != null && (
-                <span className="flex items-center gap-1.5">
-                  <Briefcase className="h-4 w-4" />
+                <span className="flex items-center gap-2">
+                  <Briefcase className="h-5 w-5" />
                   {profile.totalExperienceYears} year{profile.totalExperienceYears !== 1 ? 's' : ''} of experience
                 </span>
               )}
@@ -563,14 +578,14 @@ const CVPreviewPage: React.FC = () => {
                         <p className="item-company text-sm text-primary">{exp.companyName}</p>
                       </div>
                       {formatDateRange(exp.startDate, exp.endDate) && (
-                        <span className="item-date text-xs text-muted-foreground flex items-center gap-1 shrink-0">
-                          <CalendarDays className="h-3.5 w-3.5" />
+                        <span className="item-date text-sm text-muted-foreground flex items-center gap-1.5 shrink-0">
+                          <CalendarDays className="h-4 w-4" />
                           {formatDateRange(exp.startDate, exp.endDate)}
                         </span>
                       )}
                     </div>
                     {exp.description && (
-                      <p className="mt-2 text-sm text-muted-foreground whitespace-pre-line">{exp.description}</p>
+                      <p className="mt-3 text-base text-muted-foreground whitespace-pre-line leading-relaxed">{exp.description}</p>
                     )}
                   </div>
                 ))}
@@ -609,7 +624,7 @@ const CVPreviewPage: React.FC = () => {
                         {cert.issuingOrganization && (
                           <p className="cert-org text-sm text-primary font-medium mb-2">{cert.issuingOrganization}</p>
                         )}
-                        <div className="cert-dates flex flex-wrap gap-4 text-sm text-muted-foreground">
+                        <div className="cert-dates flex flex-wrap gap-4 text-base text-muted-foreground">
                           {cert.issueDate && <span>Issued: {fmtDate(cert.issueDate)}</span>}
                           {cert.expirationDate && <span>Expires: {fmtDate(cert.expirationDate)}</span>}
                         </div>
@@ -639,7 +654,7 @@ const CVPreviewPage: React.FC = () => {
                         <p className="text-sm text-primary font-medium mb-1">{edu.institution}</p>
                       )}
                       {edu.endDate && (
-                        <p className="text-sm text-muted-foreground">Graduated: {fmtDate(edu.endDate)}</p>
+                        <p className="text-base text-muted-foreground mt-1">Graduated: {fmtDate(edu.endDate)}</p>
                       )}
                     </div>
                   </div>

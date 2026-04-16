@@ -53,6 +53,8 @@ services:
     build: ./ai-service
     container_name: cv-ai-service
     environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - APILAYER_API_KEY=${APILAYER_API_KEY}
       - DATABASE_URL=postgresql+psycopg://postgres:${DB_PASSWORD}@postgres:5432/cv_management
       - OLLAMA_URL=${OLLAMA_URL}
       - RAG_CHAT_MODEL=${RAG_CHAT_MODEL:-qwen2.5:32b}

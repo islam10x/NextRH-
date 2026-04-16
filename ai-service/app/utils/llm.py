@@ -99,15 +99,37 @@ def build_rag_chat_llm(temperature: float = 0.0, timeout: float | None = None):
     return llm, model_name, "ollama"
 
 def parse_json_object(raw_text: str) -> Optional[Dict[str, Any]]:
-    """Robustly parse a JSON object from text, finding the first valid {} block."""
+    """Robustly parse a JSON object from text, finding the first valid {} block.
+
+    Also handles:
+    - Markdown code fences (```json ... ```)
+    - Array-of-objects responses (flattened into a single dict)
+    """
     text = str(raw_text or "").strip()
     if not text:
         return None
-        
+
+    # Strip markdown code fences if present.
+    text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+    text = re.sub(r"\n?```\s*$", "", text)
+    text = text.strip()
+
+    # Small models frequently inject invalid trailing commas at the end of arrays/objects.
+    # Standard python json.loads crashes if it sees `[1, 2, ]`. Let's strip them!
+    text = re.sub(r',\s*([\]}])', r'\1', text)
+
     try:
         data = json.loads(text)
         if isinstance(data, dict):
             return data
+        # Handle array-of-objects: merge all dicts into one.
+        if isinstance(data, list):
+            merged = {}
+            for item in data:
+                if isinstance(item, dict):
+                    merged.update(item)
+            if merged:
+                return merged
     except Exception:
         pass
 
@@ -121,3 +143,4 @@ def parse_json_object(raw_text: str) -> Optional[Dict[str, Any]]:
         except Exception:
             return None
     return None
+

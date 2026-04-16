@@ -23,10 +23,10 @@ export class Certification {
     @JoinColumn({ name: 'profile_id' })
     profile: EmployeeProfile;
 
-    @Column({ name: 'certification_name' })
+    @Column({ name: 'certification_name', type: 'text' })
     certificationName: string;
 
-    @Column({ name: 'issuing_organization', nullable: true })
+    @Column({ name: 'issuing_organization', type: 'text', nullable: true })
     issuingOrganization: string;
 
     @Column({ name: 'issue_date', type: 'date', nullable: true })
