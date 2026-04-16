@@ -39,6 +39,7 @@ services:
       CLAMAV_TIMEOUT: 60000
       N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://n8n:5678/webhook/nextrh-notification}
       N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET}
+      PROJECT_ROOT: /app
     volumes:
       - ./file-storage:/app/file-storage
     depends_on:
