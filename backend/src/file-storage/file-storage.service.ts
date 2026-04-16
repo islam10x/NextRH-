@@ -562,12 +562,18 @@ export class FileStorageService {
     }
 
     public getWorkspaceRoot(): string {
-        // Honor injected environment variable for flexible VM deployments
+        // 1. Honor injected environment variable (highest priority)
         if (process.env.PROJECT_ROOT) {
             return path.resolve(process.env.PROJECT_ROOT);
         }
 
-        // Find the NextRH- root by looking for common markers
+        // 2. Production container heuristic: in Docker, WORKDIR is often /app
+        // We look for the main markers directly at /app if they aren't found relative to __dirname
+        if (existsSync('/app/package.json') && existsSync('/app/file-storage')) {
+            return '/app';
+        }
+
+        // 3. Recursive directory search (standard for local dev)
         let currentIdx = __dirname;
         while (currentIdx !== path.parse(currentIdx).root) {
             const potentialRoot = currentIdx;
@@ -577,7 +583,8 @@ export class FileStorageService {
             }
             currentIdx = path.dirname(currentIdx);
         }
-        // Fallback: assume we are in backend/src/file-storage
+
+        // 4. Fallback: resolve based on typical NestJS build output depth (dist/src/...)
         return path.resolve(__dirname, '..', '..', '..');
     }
 
@@ -593,11 +600,19 @@ export class FileStorageService {
         if (!filePath) return '';
         if (path.isAbsolute(filePath)) return filePath;
         
+        let cleanedPath = filePath;
+
         // Backwards compatibility for old database entries that were saved
         // relative to the "backend" folder (starting with ../)
-        let cleanedPath = filePath;
         if (cleanedPath.startsWith('..\\')) cleanedPath = cleanedPath.substring(3);
         if (cleanedPath.startsWith('../')) cleanedPath = cleanedPath.substring(3);
+
+        // EXTRA SAFETY FOR CONTAINERS: 
+        // If the path starts with 'app/' or 'app\', it likely suffered from the 
+        // root-detection bug where the root resolved to '/' instead of '/app'.
+        if (cleanedPath.startsWith('app/') || cleanedPath.startsWith('app\\')) {
+            cleanedPath = cleanedPath.substring(4);
+        }
         
         // All relative paths in the DB should be resolved from the workspace root
         return path.resolve(this.getWorkspaceRoot(), cleanedPath);
