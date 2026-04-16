@@ -1,178 +1,92 @@
-import React, { useEffect, useMemo, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
-import { Switch } from '@/components/ui/switch';
-import { FileOutput, Download, Loader2, Check, Search, Eye } from 'lucide-react';
+import { FileOutput, Download, Loader2, Check, Eye, Settings2 } from 'lucide-react';
 import api from '@/services/api';
 import { bidService } from '@/services/bid.service';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { cn } from '@/lib/utils';
-
-type TemplateType = 'standard' | 'canadian' | 'eu' | 'client_specific';
-type EngineMode = 'primary' | 'fallback';
-
-interface CvTemplate {
-  id: string;
-  templateName: string;
-  templateType: TemplateType;
-  language?: string | null;
-  createdAt?: string;
-}
-
-interface UserListItem {
-  user_id: string;
-  firstName?: string;
-  lastName?: string;
-  email: string;
-  role: string;
-}
-
-interface GenerateResponse {
-  id: string;
-  downloadDocxUrl: string;
-  downloadPdfUrl?: string | null;
-}
-
-const templateTypeLabels: Record<TemplateType, string> = {
-  standard: 'Standard',
-  canadian: 'Canadian',
-  eu: 'EU Europass',
-  client_specific: 'Client Specific',
-};
-
-const templateTypeOptions: { value: TemplateType; label: string; desc: string }[] = [
-  { value: 'standard', label: 'Standard', desc: 'Default professional format' },
-  { value: 'canadian', label: 'Canadian', desc: 'Canadian government format' },
-  { value: 'eu', label: 'EU Europass', desc: 'European standard format' },
-  { value: 'client_specific', label: 'Client Specific', desc: 'Custom client template' },
-];
+import { CVTemplateSelector, CvTemplate, TemplateType, EngineMode } from '@/components/cv/CVTemplateSelector';
 
 const CVGenerationPage: React.FC = () => {
-  const [employees, setEmployees] = useState<UserListItem[]>([]);
+  const [employees, setEmployees] = useState<any[]>([]);
   const [templates, setTemplates] = useState<CvTemplate[]>([]);
   const [selectedEmployee, setSelectedEmployee] = useState('');
+  
+  // Selector states
   const [selectedTemplate, setSelectedTemplate] = useState('');
-  const [selectedTemplateType, setSelectedTemplateType] = useState<TemplateType>('standard');
-  const [selectedLanguage, setSelectedLanguage] = useState('');
+  const [selectedType, setSelectedType] = useState<TemplateType>('standard');
+  const [language, setLanguage] = useState('');
   const [translateEnabled, setTranslateEnabled] = useState(true);
+  const [engine, setEngine] = useState<EngineMode>('primary');
+  
   const [isGenerating, setIsGenerating] = useState(false);
   const [isGenerated, setIsGenerated] = useState(false);
   const [downloadLinks, setDownloadLinks] = useState<{ docx?: string; pdf?: string }>({});
-  const [generationPurpose, setGenerationPurpose] = useState('');
-  const [analyzing, setAnalyzing] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState<any>(null);
+  
   const [uploading, setUploading] = useState(false);
-  const [uploadedTemplateFile, setUploadedTemplateFile] = useState<File | null>(null);
-  const [uploadedEngine, setUploadedEngine] = useState<EngineMode>('primary');
-  const [uploadedEngineUsed, setUploadedEngineUsed] = useState<EngineMode | null>(null);
-  const [uploadedGenerating, setUploadedGenerating] = useState(false);
-  const [uploadedDocxBlob, setUploadedDocxBlob] = useState<Blob | null>(null);
-  const [uploadedPdfBlob, setUploadedPdfBlob] = useState<Blob | null>(null);
-  const [uploadedPreviewOpen, setUploadedPreviewOpen] = useState(false);
-  const [uploadedPreviewLoading, setUploadedPreviewLoading] = useState(false);
-  const uploadedPreviewContainerRef = useRef<HTMLDivElement>(null);
-
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const previewContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (previewOpen && downloadLinks.docx) {
-      setPreviewLoading(true);
-      setTimeout(() => {
-        api
-          .get(downloadLinks.docx!, { responseType: 'blob' })
-          .then((res) => {
-            import('docx-preview')
-              .then(({ renderAsync }) => {
-                if (previewContainerRef.current) {
-                  previewContainerRef.current.innerHTML = '';
-                  renderAsync(res.data, previewContainerRef.current).finally(() => setPreviewLoading(false));
-                } else {
-                  setPreviewLoading(false);
-                }
-              })
-              .catch(() => setPreviewLoading(false));
-          })
-          .catch(() => {
-            toast.error('Preview failed to load');
-            setPreviewLoading(false);
-          });
-      }, 50);
-    }
-  }, [previewOpen, downloadLinks.docx]);
-
-  useEffect(() => {
-    if (uploadedPreviewOpen && uploadedDocxBlob) {
-      setUploadedPreviewLoading(true);
-      setTimeout(() => {
-        import('docx-preview')
-          .then(({ renderAsync }) => {
-            if (uploadedPreviewContainerRef.current) {
-              uploadedPreviewContainerRef.current.innerHTML = '';
-              renderAsync(uploadedDocxBlob, uploadedPreviewContainerRef.current).finally(() =>
-                setUploadedPreviewLoading(false),
-              );
-            } else {
-              setUploadedPreviewLoading(false);
-            }
-          })
-          .catch(() => {
-            toast.error('Preview failed to load');
-            setUploadedPreviewLoading(false);
-          });
-      }, 50);
-    }
-  }, [uploadedPreviewOpen, uploadedDocxBlob]);
-
-  useEffect(() => {
-    const load = async () => {
+    const loadData = async () => {
       try {
         const [usersRes, templatesRes] = await Promise.all([api.get('/users'), api.get('/cv-templates')]);
-        const users = (usersRes.data as UserListItem[]).filter((u) => u.role === 'employee');
-        setEmployees(users);
-        setTemplates(templatesRes.data as CvTemplate[]);
+        setEmployees(usersRes.data.filter((u: any) => u.role === 'employee'));
+        setTemplates(templatesRes.data);
       } catch (err) {
-        toast.error('Failed to load templates or employees');
+        toast.error('Failed to load initial data');
       }
     };
-    load();
+    loadData();
   }, []);
 
-  useEffect(() => {
-    const template = templates.find((t) => t.id === selectedTemplate);
-    if (template?.language) {
-      setSelectedLanguage(template.language);
+  const handleGenerate = async () => {
+    if (!selectedEmployee || !selectedTemplate) return;
+    setIsGenerating(true);
+    setIsGenerated(false);
+    try {
+      if (engine === 'primary') {
+        const res = await api.post('/cv-generation', {
+          employeeId: selectedEmployee,
+          templateId: selectedTemplate,
+          language: language || undefined,
+          translate: translateEnabled,
+          outputFormats: ['docx', 'pdf'],
+        });
+        setDownloadLinks({
+          docx: res.data.downloadDocxUrl,
+          pdf: res.data.downloadPdfUrl,
+        });
+      } else {
+        // Fallback engine path (returns blobs)
+        const [docxBlob, pdfBlob] = await Promise.all([
+          bidService.generateCvFromStored(selectedTemplate, selectedEmployee, 'docx', 'fallback'),
+          bidService.generateCvFromStored(selectedTemplate, selectedEmployee, 'pdf', 'fallback'),
+        ]);
+        
+        // Convert blobs to local URLs for this session
+        const docxUrl = URL.createObjectURL(docxBlob);
+        const pdfUrl = URL.createObjectURL(pdfBlob);
+        
+        setDownloadLinks({
+          docx: docxUrl,
+          pdf: pdfUrl,
+        });
+      }
+      
+      setIsGenerated(true);
+      toast.success(engine === 'primary' ? 'Standard engine generated CV' : 'Advanced AI engine generated CV successfully');
+    } catch {
+      toast.error('Generation failed');
+    } finally {
+      setIsGenerating(false);
     }
-  }, [selectedTemplate, templates]);
-
-  const filteredTemplates = useMemo(() => {
-    const byType = templates.filter((t) => t.templateType === selectedTemplateType);
-    if (byType.length > 0) {
-      return { list: byType, showingAll: false };
-    }
-    return { list: templates, showingAll: true };
-  }, [templates, selectedTemplateType]);
-
-  useEffect(() => {
-    if (!selectedTemplate) return;
-    const template = templates.find((t) => t.id === selectedTemplate);
-    if (!template) return;
-    const typeTemplates = templates.filter((t) => t.templateType === selectedTemplateType);
-    if (typeTemplates.length > 0 && template.templateType !== selectedTemplateType) {
-      setSelectedTemplate('');
-    }
-  }, [selectedTemplateType, selectedTemplate, templates]);
-
-  const selectedTemplateLabel = useMemo(() => {
-    const template = templates.find((t) => t.id === selectedTemplate);
-    if (!template) return '';
-    return `${template.templateName} - ${templateTypeLabels[template.templateType]}`;
-  }, [selectedTemplate, templates]);
+  };
 
   const handleTemplateUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.[0]) return;
@@ -182,505 +96,204 @@ const CVGenerationPage: React.FC = () => {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('templateName', file.name.replace(/\.(docx|pdf)$/i, ''));
-      formData.append('templateType', selectedTemplateType);
-      if (selectedLanguage) {
-        formData.append('language', selectedLanguage);
-      }
+      formData.append('templateType', selectedType);
+      
       const res = await api.post('/cv-templates', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setTemplates((prev) => [res.data as CvTemplate, ...prev]);
-      toast.success('Template uploaded');
+      toast.success('Template added to system');
     } catch {
-      toast.error('Template upload failed');
+      toast.error('Failed to upload template');
     } finally {
       setUploading(false);
       e.target.value = '';
     }
   };
 
-  const handleDownload = async (url: string, fallbackFilename: string) => {
-    try {
-      const res = await api.get(url, { responseType: 'blob' });
-      const disposition = res.headers['content-disposition'];
-      let filename = fallbackFilename;
-      if (disposition) {
-        const match = disposition.match(/filename="?([^"]+)"?/);
-        if (match?.[1]) filename = match[1];
-      }
-      const blobUrl = URL.createObjectURL(res.data);
+  const handleDownload = (type: 'docx' | 'pdf') => {
+    const url = type === 'pdf' ? downloadLinks.pdf : downloadLinks.docx;
+    if (!url) return;
+    
+    if (engine === 'fallback') {
+      // Fallback URLs are local blobs
       const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = filename;
-      document.body.appendChild(a);
+      a.href = url;
+      a.download = `cv_${selectedEmployee}.${type}`;
       a.click();
-      a.remove();
-      URL.revokeObjectURL(blobUrl);
-    } catch {
-      toast.error('Download failed');
+    } else {
+      // Primary URLs are backend endpoints
+      window.open(`${api.defaults.baseURL}${url}`);
     }
   };
 
-  const handleBlobDownload = (blob: Blob, filename: string) => {
-    const blobUrl = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = blobUrl;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(blobUrl);
-  };
+  useEffect(() => {
+    if (previewOpen && downloadLinks.docx) {
+      setPreviewLoading(true);
+      const url = engine === 'primary' ? `${api.defaults.baseURL}${downloadLinks.docx}` : downloadLinks.docx;
+      
+      const fetchBlob = engine === 'primary' 
+        ? api.get(downloadLinks.docx, { responseType: 'blob' }).then(res => res.data)
+        : fetch(downloadLinks.docx).then(res => res.blob());
 
-  const handleGenerateFromUploaded = async (engineOverride?: EngineMode) => {
-    if (!selectedEmployee || !uploadedTemplateFile) {
-      toast.error('Select an employee and upload a DOCX template first');
-      return;
-    }
-
-    const activeEngine = engineOverride || uploadedEngine;
-    setUploadedGenerating(true);
-    setUploadedDocxBlob(null);
-    setUploadedPdfBlob(null);
-
-    try {
-      const [docxRes, pdfRes] = await Promise.allSettled([
-        bidService.generateCv(selectedEmployee, uploadedTemplateFile, 'docx', activeEngine),
-        bidService.generateCv(selectedEmployee, uploadedTemplateFile, 'pdf', activeEngine),
-      ]);
-
-      if (docxRes.status !== 'fulfilled') {
-        throw new Error('DOCX generation failed');
-      }
-
-      setUploadedDocxBlob(docxRes.value);
-      if (pdfRes.status === 'fulfilled' && pdfRes.value.type === 'application/pdf') {
-        setUploadedPdfBlob(pdfRes.value);
-      } else {
-        setUploadedPdfBlob(null);
-      }
-
-      setUploadedEngineUsed(activeEngine);
-      toast.success(
-        activeEngine === 'primary'
-          ? 'Primary engine generated CV successfully'
-          : 'Fallback engine generated CV successfully',
-      );
-    } catch {
-      toast.error(
-        activeEngine === 'primary'
-          ? 'Primary engine failed to generate CV'
-          : 'Fallback engine failed to generate CV',
-      );
-    } finally {
-      setUploadedGenerating(false);
-    }
-  };
-
-  const handleGenerate = async () => {
-    if (!selectedEmployee || !selectedTemplate) return;
-    setIsGenerating(true);
-    setIsGenerated(false);
-    setDownloadLinks({});
-    try {
-      const res = await api.post<GenerateResponse>('/cv-generation', {
-        employeeId: selectedEmployee,
-        templateId: selectedTemplate,
-        language: selectedLanguage || undefined,
-        translate: translateEnabled,
-        outputFormats: ['docx', 'pdf'],
-        generationPurpose: generationPurpose || undefined,
+      fetchBlob.then(blob => {
+        import('docx-preview').then(({ renderAsync }) => {
+          if (previewContainerRef.current) {
+            previewContainerRef.current.innerHTML = '';
+            renderAsync(blob, previewContainerRef.current).finally(() => setPreviewLoading(false));
+          }
+        });
       });
-      const data = res.data;
-      setDownloadLinks({
-        docx: data.downloadDocxUrl || undefined,
-        pdf: data.downloadPdfUrl || undefined,
-      });
-      setIsGenerated(true);
-      toast.success('CV generated successfully');
-    } catch {
-      toast.error('CV generation failed');
-    } finally {
-      setIsGenerating(false);
     }
-  };
-
-  const handleAnalyzeTemplate = async () => {
-    if (!selectedTemplate) return;
-    setAnalyzing(true);
-    setAnalysisResult(null);
-    try {
-      const res = await api.post(`/cv-templates/${selectedTemplate}/analyze`);
-      setAnalysisResult(res.data);
-      toast.success(`Template analyzed: ${res.data.total_count} fields found, ${res.data.unmapped_count} unmapped`);
-    } catch {
-      toast.error('Template analysis failed');
-    } finally {
-      setAnalyzing(false);
-    }
-  };
-
-  const handleReplicateTemplate = async () => {
-    if (!selectedTemplate) return;
-    const template = templates.find((t) => t.id === selectedTemplate);
-    if (!template) return;
-    try {
-      const res = await api.post(`/cv-templates/${template.id}/replicate`, {
-        templateName: `${template.templateName} Copy`,
-        templateType: template.templateType,
-        language: template.language || undefined,
-      });
-      setTemplates((prev) => [res.data as CvTemplate, ...prev]);
-      toast.success('Template replicated');
-    } catch {
-      toast.error('Template replication failed');
-    }
-  };
+  }, [previewOpen, downloadLinks.docx, engine]);
 
   return (
-    <div className="space-y-6 max-w-3xl mx-auto">
-      <div>
-        <h1 className="text-2xl font-bold">Generate CV</h1>
-        <p className="text-muted-foreground">Create formatted CVs for bids and proposals</p>
+    <div className="space-y-8 max-w-5xl mx-auto pb-20">
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-extrabold tracking-tight">CV Generation Center</h1>
+          <p className="text-muted-foreground mt-1 text-sm">Select an employee and a template to generate a professional resume.</p>
+        </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>CV Configuration</CardTitle>
-          <CardDescription>Select employee, template, and generation options</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="space-y-2">
-            <Label>Select Employee</Label>
-            <Select value={selectedEmployee} onValueChange={setSelectedEmployee}>
-              <SelectTrigger>
-                <SelectValue placeholder="Choose an employee" />
-              </SelectTrigger>
-              <SelectContent>
-                {employees.map((emp) => (
-                  <SelectItem key={emp.user_id} value={emp.user_id}>
-                    {`${emp.firstName || ''} ${emp.lastName || ''}`.trim() || emp.email}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-2">
-            <Label>Template Type</Label>
-            <div className="grid grid-cols-2 gap-3">
-              {templateTypeOptions.map((option) => (
-                <div
-                  key={option.value}
-                  className={cn(
-                    'p-4 rounded-lg border-2 cursor-pointer transition-all',
-                    selectedTemplateType === option.value
-                      ? 'border-primary bg-primary/5'
-                      : 'border-muted hover:border-primary/50'
-                  )}
-                  onClick={() => setSelectedTemplateType(option.value)}
-                >
-                  <p className="font-medium">{option.label}</p>
-                  <p className="text-xs text-muted-foreground">{option.desc}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label>Template</Label>
-            <Select value={selectedTemplate} onValueChange={setSelectedTemplate}>
-              <SelectTrigger>
-                <SelectValue placeholder="Choose a template" />
-              </SelectTrigger>
-              <SelectContent>
-                {filteredTemplates.list.map((tpl) => (
-                  <SelectItem key={tpl.id} value={tpl.id}>
-                    {tpl.templateName} - {templateTypeLabels[tpl.templateType]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {selectedTemplateLabel && (
-              <p className="text-xs text-muted-foreground">Selected: {selectedTemplateLabel}</p>
-            )}
-            {filteredTemplates.showingAll && (
-              <p className="text-xs text-muted-foreground">
-                No templates found for {templateTypeLabels[selectedTemplateType]}; showing all templates.
-              </p>
-            )}
-            <div className="flex gap-2">
-              <Button type="button" variant="outline" size="sm" disabled={!selectedTemplate} onClick={handleReplicateTemplate}>
-                Duplicate Template
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={!selectedTemplate || analyzing}
-                onClick={handleAnalyzeTemplate}
-              >
-                {analyzing ? (
-                  <>
-                    <Loader2 className="h-3 w-3 mr-1 animate-spin" />Analyzing...
-                  </>
-                ) : (
-                  <>
-                    <Search className="h-3 w-3 mr-1" />Analyze Fields
-                  </>
-                )}
-              </Button>
-            </div>
-          </div>
-
-          {analysisResult && (
-            <div className="p-3 rounded-lg bg-muted border text-sm">
-              <p className="font-medium mb-2">Template Analysis: {analysisResult.total_count} fields found</p>
-              <div className="grid grid-cols-1 gap-1 max-h-40 overflow-y-auto">
-                {analysisResult.fields?.map((f: any, i: number) => (
-                  <div key={i} className="flex items-center gap-2 text-xs">
-                    <span
-                      className={`inline-block w-2 h-2 rounded-full ${f.mapped_to ? 'bg-green-500' : 'bg-red-400'}`}
-                    />
-                    <span className="font-mono">{f.name}</span>
-                    <span className="text-muted-foreground">-&gt; {f.mapped_to || 'unmapped'}</span>
-                    <span className="text-muted-foreground/60">({f.source})</span>
-                  </div>
-                ))}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+        <div className="lg:col-span-8 space-y-6">
+          <Card className="shadow-lg border-primary/10">
+            <CardHeader className="bg-muted/30 border-b">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Settings2 className="h-5 w-5 text-primary" />
+                Configuration
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-6 space-y-6">
+              <div className="space-y-3">
+                <Label className="text-base font-bold">Target Employee</Label>
+                <Select value={selectedEmployee} onValueChange={setSelectedEmployee}>
+                  <SelectTrigger className="h-12 border-primary/20 bg-background transition-all hover:border-primary/40 text-sm">
+                    <SelectValue placeholder="Select a team member" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {employees.map((emp) => (
+                      <SelectItem key={emp.user_id} value={emp.user_id} className="text-sm">
+                        {`${emp.firstName || ''} ${emp.lastName || ''}`.trim() || emp.email}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
-              {analysisResult.unmapped_count > 0 && (
-                <p className="text-xs text-amber-500 mt-2">
-                  {analysisResult.unmapped_count} fields could not be mapped automatically
-                </p>
-              )}
-            </div>
-          )}
 
-          <div className="space-y-2">
-            <Label>Template Upload (DOCX or Fillable PDF)</Label>
-            <Input type="file" accept=".docx,.pdf" onChange={handleTemplateUpload} disabled={uploading} />
-            <p className="text-xs text-muted-foreground">
-              DOCX templates support rich layouts. PDF templates must include form fields.
-            </p>
-          </div>
-
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Generation Purpose (optional)</Label>
-              <Input
-                placeholder="e.g., Bid proposal, Client submission"
-                value={generationPurpose}
-                onChange={(e) => setGenerationPurpose(e.target.value)}
+              <CVTemplateSelector 
+                templates={templates}
+                selectedTemplate={selectedTemplate}
+                onTemplateChange={setSelectedTemplate}
+                selectedType={selectedType}
+                onTypeChange={setSelectedType}
+                language={language}
+                onLanguageChange={setLanguage}
+                translateEnabled={translateEnabled}
+                onTranslateChange={setTranslateEnabled}
+                engine={engine}
+                onEngineChange={setEngine}
+                onGenerate={handleGenerate}
+                isGenerating={isGenerating}
               />
-            </div>
-            <div className="space-y-2">
-              <Label>Target Language</Label>
-              <Select value={selectedLanguage || 'none'} onValueChange={(val) => setSelectedLanguage(val === 'none' ? '' : val)}>
-                <SelectTrigger className="w-[220px]">
-                  <SelectValue placeholder="Keep Original Language" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Keep Original Language</SelectItem>
-                  <SelectItem value="en">English</SelectItem>
-                  <SelectItem value="fr">French</SelectItem>
-                  <SelectItem value="es">Spanish</SelectItem>
-                  <SelectItem value="de">German</SelectItem>
-                  <SelectItem value="nl">Dutch</SelectItem>
-                  <SelectItem value="it">Italian</SelectItem>
-                  <SelectItem value="ar">Arabic</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex items-center justify-between">
-              <Label>Translate content</Label>
-              <Switch checked={translateEnabled} onCheckedChange={setTranslateEnabled} />
-            </div>
-          </div>
+            </CardContent>
+          </Card>
 
           {isGenerated && (
-            <div className="p-4 rounded-lg bg-success/10 border border-success/20">
-              <div className="flex items-center gap-3 mb-3">
-                <Check className="h-5 w-5 text-success" />
-                <p className="font-medium text-success">CV Generated Successfully</p>
-              </div>
-              <div className="flex gap-2 mt-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={!downloadLinks.docx}
-                  onClick={() => setPreviewOpen(true)}
-                  className="mr-auto border border-primary/20 bg-primary/5 hover:bg-primary/10 text-primary"
-                >
-                  <Eye className="h-4 w-4 mr-1" /> Live Preview
-                </Button>
-                <Button size="sm" disabled={!downloadLinks.pdf} onClick={() => downloadLinks.pdf && handleDownload(downloadLinks.pdf, 'cv.pdf')}>
-                  <Download className="h-4 w-4 mr-1" />Download PDF
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={!downloadLinks.docx}
-                  onClick={() => downloadLinks.docx && handleDownload(downloadLinks.docx, 'cv.docx')}
-                >
-                  <Download className="h-4 w-4 mr-1" />Download DOCX
-                </Button>
-              </div>
-            </div>
-          )}
-
-          <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-            <DialogContent className="max-w-4xl w-[95vw] h-[85vh] flex flex-col p-4 sm:p-6 pb-2">
-              <DialogHeader className="mb-2">
-                <DialogTitle>CV Preview Document</DialogTitle>
-                <DialogDescription className="sr-only">Interactive CV viewer</DialogDescription>
-              </DialogHeader>
-              <div className="relative flex-1 overflow-auto bg-[#e5e5e5] rounded-md border p-4 sm:p-8 flex justify-center custom-scrollbar">
-                {previewLoading && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-background/50 z-10 rounded-md">
-                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <Card className="border-success/30 bg-success/5 animate-in slide-in-from-top-4 duration-500">
+               <CardContent className="pt-6 space-y-4">
+                  <div className="flex items-center gap-3 text-success">
+                    <div className="w-10 h-10 rounded-full bg-success/20 flex items-center justify-center">
+                      <Check className="h-6 w-6" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-base">Document Ready</p>
+                      <p className="text-[10px] text-success/80">
+                        Generated using {engine === 'fallback' ? 'Advanced AI Engine (Fallback)' : 'Standard Engine'}.
+                      </p>
+                    </div>
                   </div>
-                )}
-                <div
-                  ref={previewContainerRef}
-                  className="w-full max-w-[850px] min-h-full shadow-lg bg-white select-text"
-                  style={{ pointerEvents: previewLoading ? 'none' : 'auto' }}
-                />
+                  <div className="flex flex-wrap gap-2 pt-2">
+                    <Button variant="outline" size="sm" onClick={() => setPreviewOpen(true)} className="bg-background shadow-sm h-10 px-4">
+                      <Eye className="h-4 w-4 mr-2" /> Live Preview
+                    </Button>
+                    {downloadLinks.pdf && (
+                      <Button size="sm" onClick={() => handleDownload('pdf')} className="h-10 px-4 shadow-lg shadow-primary/20">
+                        <Download className="h-4 w-4 mr-2" /> Download PDF
+                      </Button>
+                    )}
+                    {downloadLinks.docx && (
+                      <Button variant="secondary" size="sm" onClick={() => handleDownload('docx')} className="h-10 px-4">
+                        <Download className="h-4 w-4 mr-2" /> Download DOCX
+                      </Button>
+                    )}
+                  </div>
+               </CardContent>
+            </Card>
+          )}
+        </div>
+
+        <div className="lg:col-span-4 space-y-6 lg:sticky lg:top-8">
+          <Card className="border-dashed border-2 bg-muted/20">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-xs font-bold uppercase tracking-widest text-muted-foreground text-center">Admin Controls</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label className="text-xs font-bold uppercase">Upload Template (.docx, .pdf)</Label>
+                <Input type="file" accept=".docx,.pdf" onChange={handleTemplateUpload} disabled={uploading} className="h-10 text-sm border-primary/10 file:text-xs file:font-bold" />
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  New DOCX or PDF templates will appear in the "Specific Design" dropdown.
+                </p>
               </div>
-            </DialogContent>
-          </Dialog>
+              <div className="pt-4 border-t space-y-3">
+                 <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Quick Guidelines</h4>
+                 <ul className="space-y-2">
+                   <li className="flex gap-2 text-sm text-muted-foreground items-start">
+                     <div className="w-1.5 h-1.5 rounded-full bg-primary mt-2 shrink-0" />
+                     Verify employee data in Directory before generating.
+                   </li>
+                   <li className="flex gap-2 text-sm text-muted-foreground items-start">
+                     <div className="w-1.5 h-1.5 rounded-full bg-primary mt-2 shrink-0" />
+                     Fallback engine (AI) is optimized for RPF compliance.
+                   </li>
+                 </ul>
+              </div>
+            </CardContent>
+          </Card>
 
-          <Button onClick={handleGenerate} disabled={!selectedEmployee || !selectedTemplate || isGenerating} className="w-full">
-            {isGenerating ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating...
-              </>
-            ) : (
-              <>
-                <FileOutput className="h-4 w-4 mr-2" />Generate CV
-              </>
+          <div className="p-5 rounded-2xl bg-gradient-to-br from-primary/10 to-primary/5 border border-primary/20 space-y-2">
+            <h4 className="font-bold text-sm text-primary flex items-center gap-2">
+              <Settings2 className="h-4 w-4" />
+              Batch Production
+            </h4>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              For mass production of CVs for a specific bid, ensure you have verified the "Format Style" requirements first.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+        <DialogContent className="max-w-4xl w-[95vw] h-[85vh] flex flex-col p-4 sm:p-6 pb-2">
+          <DialogHeader className="mb-2">
+            <DialogTitle>Live CV Preview</DialogTitle>
+            <DialogDescription className="sr-only">Interactive CV previewer</DialogDescription>
+          </DialogHeader>
+          <div className="relative flex-1 overflow-auto bg-[#e5e5e5] rounded-md border p-6 flex justify-center custom-scrollbar">
+            {previewLoading && (
+              <div className="absolute inset-0 flex items-center justify-center bg-background/50 z-10 rounded-md">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              </div>
             )}
-          </Button>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Generate From Uploaded Template</CardTitle>
-          <CardDescription>
-            Run primary engine first, then trigger fallback engine if preview is not satisfactory
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label>Template File (.docx)</Label>
-            <Input
-              type="file"
-              accept=".docx"
-              onChange={(e) => setUploadedTemplateFile(e.target.files?.[0] || null)}
+            <div
+              ref={previewContainerRef}
+              className="w-full max-w-[850px] min-h-full shadow-2xl bg-white select-text h-fit"
             />
           </div>
-
-          <div className="space-y-2">
-            <Label>Engine</Label>
-            <Select
-              value={uploadedEngine}
-              onValueChange={(v) => setUploadedEngine(v as EngineMode)}
-            >
-              <SelectTrigger className="w-[220px]">
-                <SelectValue placeholder="Select engine" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="primary">Primary (Your Engine)</SelectItem>
-                <SelectItem value="fallback">Fallback (Rania Engine)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <Button
-            onClick={() => handleGenerateFromUploaded()}
-            disabled={!selectedEmployee || !uploadedTemplateFile || uploadedGenerating}
-            className="w-full"
-          >
-            {uploadedGenerating ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Generating...
-              </>
-            ) : (
-              <>
-                <FileOutput className="h-4 w-4 mr-2" />
-                Generate From Uploaded Template
-              </>
-            )}
-          </Button>
-
-          {uploadedDocxBlob && (
-            <div className="p-4 rounded-lg bg-success/10 border border-success/20">
-              <p className="text-sm font-medium text-success mb-2">
-                Generated using: {uploadedEngineUsed === 'fallback' ? 'Fallback' : 'Primary'} engine
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => setUploadedPreviewOpen(true)}
-                  className="border border-primary/20 bg-primary/5 hover:bg-primary/10 text-primary"
-                >
-                  <Eye className="h-4 w-4 mr-1" />
-                  Live Preview
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => handleBlobDownload(uploadedDocxBlob, 'generated-cv.docx')}
-                >
-                  <Download className="h-4 w-4 mr-1" />
-                  Download DOCX
-                </Button>
-                <Button
-                  size="sm"
-                  disabled={!uploadedPdfBlob}
-                  onClick={() => uploadedPdfBlob && handleBlobDownload(uploadedPdfBlob, 'generated-cv.pdf')}
-                >
-                  <Download className="h-4 w-4 mr-1" />
-                  Download PDF
-                </Button>
-                {uploadedEngineUsed === 'primary' && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleGenerateFromUploaded('fallback')}
-                    disabled={uploadedGenerating}
-                  >
-                    Try Fallback Engine
-                  </Button>
-                )}
-              </div>
-            </div>
-          )}
-
-          <Dialog open={uploadedPreviewOpen} onOpenChange={setUploadedPreviewOpen}>
-            <DialogContent className="max-w-4xl w-[95vw] h-[85vh] flex flex-col p-4 sm:p-6 pb-2">
-              <DialogHeader className="mb-2">
-                <DialogTitle>Uploaded Template Result Preview</DialogTitle>
-                <DialogDescription className="sr-only">Interactive CV viewer</DialogDescription>
-              </DialogHeader>
-              <div className="relative flex-1 overflow-auto bg-[#e5e5e5] rounded-md border p-4 sm:p-8 flex justify-center custom-scrollbar">
-                {uploadedPreviewLoading && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-background/50 z-10 rounded-md">
-                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                  </div>
-                )}
-                <div
-                  ref={uploadedPreviewContainerRef}
-                  className="w-full max-w-[850px] min-h-full shadow-lg bg-white select-text"
-                  style={{ pointerEvents: uploadedPreviewLoading ? 'none' : 'auto' }}
-                />
-              </div>
-            </DialogContent>
-          </Dialog>
-        </CardContent>
-      </Card>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

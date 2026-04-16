@@ -100,8 +100,8 @@ TEMPLATES = [
         "must_not_delete": [],
     },
     {
-        "name": "Rania Ammar (standard)",
-        "file": "Resume-RaniaAmmar (1).docx",
+        "name": "Jane Doe (standard)",
+        "file": "Resume-JaneDoe.docx",
         "expect_sections": {"summary", "experience", "education", "skills", "projects"},
         "must_not_delete": ["Certifications & Hackathons"],
     },

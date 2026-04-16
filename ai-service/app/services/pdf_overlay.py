@@ -243,9 +243,8 @@ def apply_pdf_overlay(
     with fitz.open(template_path) as doc:
         for field in mapping.get("fields", []):
             key = field.get("key")
-            value = context.get(key) if key else None
-            if not value:
-                continue
+            value = str(context.get(key)) if key and context.get(key) is not None else "N/A"
+
             page_index = int(field.get("page", 0))
             if page_index < 0 or page_index >= doc.page_count:
                 continue
@@ -298,7 +297,8 @@ def apply_pdf_overlay(
                         key = col.get("key")
                         value = item.get(key) if key else ""
                     if not value:
-                        continue
+                        value = "N/A"
+
                     page.insert_text((x, y), str(value), fontsize=font_size)
 
         doc.save(output_path)

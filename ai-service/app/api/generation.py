@@ -13,7 +13,11 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.services.cv_errors import CVGenerationError, CVTemplateError, CVValidationError
-from app.services.cv_generator import analyze_template, generate_cv_document
+from app.services.cv_generator import (
+    analyze_template,
+    generate_cv_document,
+    standardize_template,
+)
 from app.services.cv_generator_fallback import (
     convert_docx_to_pdf as convert_docx_to_pdf_fallback,
 )
@@ -230,10 +234,10 @@ async def generate_cv(
         raise HTTPException(status_code=400, detail="engine must be 'primary' or 'fallback'")
 
     file_ext = os.path.splitext(template.filename or "")[1].lower()
-    if file_ext != ".docx":
+    if file_ext not in (".docx", ".pdf"):
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported template format: {file_ext}. Please upload a .docx file.",
+            detail=f"Unsupported template format: {file_ext}. Please upload a .docx or .pdf file.",
         )
 
     try:
@@ -297,6 +301,28 @@ async def generate_cv(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         formats = _normalize_formats(output_format=output_format)
+
+        # Standardize template (conversion, OCR, etc.) for engines that expect DOCX
+        std_result = standardize_template(
+            template_path, temp_dir, profile, formats
+        )
+        if std_result["response"]:
+            r = std_result["response"]
+            if output_format == "pdf" and r.get("pdf_path"):
+                 return FileResponse(
+                    path=r["pdf_path"],
+                    filename=os.path.basename(r["pdf_path"]),
+                    media_type="application/pdf",
+                    headers={"X-CV-Format": "pdf", "X-CV-Engine": engine_mode},
+                )
+            # If we already have a response (e.g. from overlay mode), we could return it
+            # but usually we want to proceed to return the file. 
+            # For now, if response exists but isn't what we wanted, we proceed with the path.
+
+        template_path = std_result["template_path"]
+        # If it was converted, update the file_ext for correct engine logic
+        if template_path.endswith(".docx"):
+            file_ext = ".docx"
 
         if engine_mode == "fallback":
             result = _run_fallback_generation(

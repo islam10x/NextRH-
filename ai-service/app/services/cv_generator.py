@@ -204,16 +204,16 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
         exp["description_lines"] = _normalize_lines(lines)
 
     return {
-        "full_name": profile.get("name") or "",
-        "email": profile.get("email") or "",
-        "phone": profile.get("phone") or "",
-        "address": profile.get("address") or "",
-        "birth_date": profile.get("birthDate") or profile.get("birth_date") or "",
-        "marital_status": profile.get("maritalStatus") or profile.get("marital_status") or "",
-        "hire_date": profile.get("hireDate") or profile.get("hire_date") or "",
-        "current_position": profile.get("currentPosition") or "",
-        "professional_summary": profile.get("professionalSummary") or "",
-        "total_experience_years": profile.get("totalExperienceYears") or "",
+        "full_name": profile.get("name") or "Employee",
+        "email": _safe_text(profile.get("email")),
+        "phone": _safe_text(profile.get("phone")),
+        "address": _safe_text(profile.get("address")),
+        "birth_date": _safe_text(profile.get("birthDate") or profile.get("birth_date")),
+        "marital_status": _safe_text(profile.get("maritalStatus") or profile.get("marital_status")),
+        "hire_date": _safe_text(profile.get("hireDate") or profile.get("hire_date")),
+        "current_position": _safe_text(profile.get("currentPosition")),
+        "professional_summary": _safe_text(profile.get("professionalSummary")),
+        "total_experience_years": _safe_text(profile.get("totalExperienceYears")),
         "skills": profile.get("skills") or [],
         "work_experiences": work_experiences,
         "educations": profile.get("educations") or [],
@@ -221,7 +221,7 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
         "projects": projects,
         "languages": profile.get("languages") or [],
         "awards": profile.get("awards") or profile.get("distinctions") or [],
-        "last_update": profile.get("lastUpdate") or "",
+        "last_update": _safe_text(profile.get("lastUpdate")),
         "last_degree": "",
         "last_degree_year": "",
         "open_end_label": "Present",
@@ -651,7 +651,7 @@ def _docx_contains_jinja(doc: DocxDocument) -> bool:
 
 
 def _fill_common_placeholders(doc: DocxDocument, context: Dict[str, Any]) -> None:
-    placeholder_re = re.compile(r"^[\\.·•…\\s]{3,}$")
+    placeholder_re = re.compile(r"^[\\.·•…\\s]{2,}$")
     placeholder_count = 0
 
     def _replace_contact_line(text: str) -> Optional[str]:
@@ -666,20 +666,48 @@ def _fill_common_placeholders(doc: DocxDocument, context: Dict[str, Any]) -> Non
             return f"Nom et Prénom : {context.get('full_name') or 'N/A'}"
         return None
 
-    for para in doc.paragraphs:
-        text = (para.text or "").strip()
-        if not text:
-            continue
-        replacement = _replace_contact_line(text)
-        if replacement:
-            para.text = replacement
-            continue
-        if placeholder_re.match(text):
-            placeholder_count += 1
-            if placeholder_count == 1:
-                para.text = _safe_text(context.get("full_name"))
-            elif placeholder_count == 2:
-                para.text = _safe_text(context.get("current_position"))
+    def _process_paragraphs(paragraphs):
+        nonlocal placeholder_count
+        for para in paragraphs:
+            text = (para.text or "").strip()
+            if not text:
+                continue
+            replacement = _replace_contact_line(text)
+            if replacement:
+                para.text = replacement
+                continue
+            if placeholder_re.match(text):
+                placeholder_count += 1
+                if placeholder_count == 1:
+                    para.text = _safe_text(context.get("full_name"))
+                elif placeholder_count == 2:
+                    para.text = _safe_text(context.get("current_position"))
+                else:
+                    # Treat additional dotted lines as N/A per user request
+                    para.text = "N/A"
+
+    def _process_tables(tables):
+        for table in tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    _process_paragraphs(cell.paragraphs)
+
+    # Process document body
+    _process_paragraphs(doc.paragraphs)
+    _process_tables(doc.tables)
+
+    # Process headers and footers across all sections
+    for section in doc.sections:
+        # Standard, first-page, and even-page headers
+        for header in [section.header, section.first_page_header, section.even_page_header]:
+            if header:
+                _process_paragraphs(header.paragraphs)
+                _process_tables(header.tables)
+        # Standard, first-page, and even-page footers
+        for footer in [section.footer, section.first_page_footer, section.even_page_footer]:
+            if footer:
+                _process_paragraphs(footer.paragraphs)
+                _process_tables(footer.tables)
 
 
 def _resolve_rule_value(section: str, field: str, item: Dict[str, Any]) -> str:
@@ -904,95 +932,263 @@ def generate_cv_document(
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     base_name = f"{prefix}_{timestamp}"
 
+def standardize_template(
+    template_path: str,
+    output_dir: str,
+    context: Dict[str, Any],
+    output_formats: List[str],
+    cached_field_mapping: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """Standardize a template file. If PDF, convert to DOCX or handle overlay.
+    Returns a dict with updated template_path, template_ext, auto_template_used,
+    temp_dir, matched_template_path, and potentially a direct response.
+    """
     template_ext = Path(template_path).suffix.lower()
+    auto_template_used = False
+    temp_dir = None
+    matched_template_path = None
+
+    if template_ext != ".pdf":
+        return {
+            "template_path": template_path,
+            "template_ext": template_ext,
+            "auto_template_used": auto_template_used,
+            "temp_dir": temp_dir,
+            "matched_template_path": matched_template_path,
+            "response": None,
+        }
+
+    if "pdf" not in output_formats:
+        output_formats.append("pdf")
 
     # If the template is a PDF, convert it to DOCX so DocxTemplate can expand
     # Jinja tags and lists. For scanned PDFs, run OCR rebuild instead.
-    temp_dir = None
-    matched_template_path: Optional[str] = None
-    auto_template_used = False
-    if template_ext == ".pdf":
-        if "pdf" not in output_formats:
-            output_formats.append("pdf")
-        if is_pdf_scanned(template_path):
-            docx_template_path = None
-            if os.getenv("CV_TEMPLATE_DOCX_FROM_SCAN", "1") != "0":
-                docx_template_path = build_docx_template_from_scanned_pdf(
-                    template_path,
-                    output_dir=os.path.dirname(template_path),
-                )
+    if is_pdf_scanned(template_path):
+        docx_template_path = None
+        if os.getenv("CV_TEMPLATE_DOCX_FROM_SCAN", "1") != "0":
+            docx_template_path = build_docx_template_from_scanned_pdf(
+                template_path,
+                output_dir=os.path.dirname(template_path),
+            )
 
-            if docx_template_path:
-                logger.info(f"Using auto-generated DOCX template: {docx_template_path}")
-                template_path = docx_template_path
-                template_ext = ".docx"
-                auto_template_used = True
-            else:
-                if os.getenv("CV_TEMPLATE_RETRIEVE", "1") != "0":
+        if docx_template_path:
+            logger.info(f"Using auto-generated DOCX template: {docx_template_path}")
+            return {
+                "template_path": docx_template_path,
+                "template_ext": ".docx",
+                "auto_template_used": True,
+                "temp_dir": None,
+                "matched_template_path": None,
+                "response": None,
+            }
+        else:
+            if os.getenv("CV_TEMPLATE_RETRIEVE", "1") != "0":
+                min_score = 0.12
+                try:
+                    min_score = float(os.getenv("CV_TEMPLATE_RETRIEVE_MIN_SCORE", "0.12"))
+                except Exception:
                     min_score = 0.12
-                    try:
-                        min_score = float(os.getenv("CV_TEMPLATE_RETRIEVE_MIN_SCORE", "0.12"))
-                    except Exception:
-                        min_score = 0.12
-                    library_dir = os.getenv("CV_TEMPLATE_LIBRARY_DIR") or os.path.dirname(template_path)
-                    result = find_closest_template(
-                        template_path,
-                        templates_dir=library_dir,
-                        min_score=min_score,
-                        top_k=3,
-                    )
-                    match = result.get("best") if isinstance(result, dict) else None
-                    if match:
-                        matched_path, score = match
-                        logger.info(
-                            f"Using retrieved template (score={score:.3f}): {matched_path}"
-                        )
-                        template_path = matched_path
-                        template_ext = ".docx"
-                        matched_template_path = matched_path
+                library_dir = os.getenv("CV_TEMPLATE_LIBRARY_DIR") or os.path.dirname(template_path)
+                result = find_closest_template(
+                    template_path,
+                    templates_dir=library_dir,
+                    min_score=min_score,
+                    top_k=3,
+                )
+                match = result.get("best") if isinstance(result, dict) else None
+                if match:
+                    matched_path, _score = match
+                    logger.info(f"Using retrieved template: {matched_path}")
+                    return {
+                        "template_path": matched_path,
+                        "template_ext": ".docx",
+                        "auto_template_used": False,
+                        "temp_dir": None,
+                        "matched_template_path": matched_path,
+                        "response": None,
+                    }
 
-                if template_ext != ".docx":
-                    overlay_mapping = None
-                    if isinstance(cached_field_mapping, dict):
-                        overlay_mapping = cached_field_mapping.get("overlay")
-                        if overlay_mapping is None and (
-                            cached_field_mapping.get("fields") or cached_field_mapping.get("tables")
-                        ):
-                            overlay_mapping = cached_field_mapping
+            if template_ext != ".docx":
+                overlay_mapping = None
+                if isinstance(cached_field_mapping, dict):
+                    overlay_mapping = cached_field_mapping.get("overlay")
+                    if overlay_mapping is None and (
+                        cached_field_mapping.get("fields") or cached_field_mapping.get("tables")
+                    ):
+                        overlay_mapping = cached_field_mapping
 
-                    if overlay_mapping is None and os.getenv("CV_TEMPLATE_OVERLAY_AUTO", "1") != "0":
-                        overlay_mapping = build_auto_overlay_mapping(template_path, context)
+                if overlay_mapping is None and os.getenv("CV_TEMPLATE_OVERLAY_AUTO", "1") != "0":
+                    overlay_mapping = build_auto_overlay_mapping(template_path, context)
 
-                    if overlay_mapping and (overlay_mapping.get("fields") or overlay_mapping.get("tables")):
-                        pdf_path = os.path.join(output_dir, f"{base_name}.pdf")
-                        logger.info(f"Using overlay mode for scanned PDF: {template_path}")
-                        apply_pdf_overlay(template_path, pdf_path, context, overlay_mapping)
-                        return {
+                if overlay_mapping and (overlay_mapping.get("fields") or overlay_mapping.get("tables")):
+                    prefix = _safe_filename(context.get("full_name") or "cv")
+                    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                    base_name = f"{prefix}_{timestamp}"
+                    pdf_path = os.path.join(output_dir, f"{base_name}.pdf")
+                    logger.info(f"Using overlay mode for scanned PDF: {template_path}")
+                    apply_pdf_overlay(template_path, pdf_path, context, overlay_mapping)
+                    return {
+                        "template_path": template_path,
+                        "template_ext": template_ext,
+                        "response": {
                             "docx_path": None,
                             "pdf_path": pdf_path,
                             "field_mapping": {"overlay": overlay_mapping},
-                        }
+                        },
+                    }
 
-                    logger.info(f"Scanned PDF detected, running OCR rebuild: {template_path}")
-                    template_path = rebuild_scanned_template(template_path)
-                    template_ext = ".docx"
-        else:
-            logger.info(f"Converting PDF template to DOCX using pdf2docx: {template_path}")
-            from pdf2docx import Converter
-
-            temp_dir = tempfile.mkdtemp()
-            converted_docx_path = os.path.join(temp_dir, "converted_template.docx")
-
-            try:
-                cv = Converter(template_path)
-                cv.convert(converted_docx_path)
-                cv.close()
-                # Pretend the uploaded file was a DOCX!
-                template_path = converted_docx_path
+                logger.info(f"Scanned PDF detected, running OCR rebuild: {template_path}")
+                template_path = rebuild_scanned_template(template_path)
                 template_ext = ".docx"
-            except Exception as e:
-                logger.error(f"Failed to convert PDF template to DOCX: {e}")
-                raise RuntimeError(f"PDF to DOCX conversion failed: {str(e)}")
+    else:
+        logger.info(f"Converting PDF template to DOCX using pdf2docx: {template_path}")
+        from pdf2docx import Converter
+
+        temp_dir = tempfile.mkdtemp()
+        converted_docx_path = os.path.join(temp_dir, "converted_template.docx")
+
+        try:
+            cv = Converter(template_path)
+            cv.convert(converted_docx_path)
+            cv.close()
+            template_path = converted_docx_path
+            template_ext = ".docx"
+        except Exception as e:
+            logger.error(f"Failed to convert PDF template to DOCX: {e}")
+            raise RuntimeError(f"PDF to DOCX conversion failed: {str(e)}")
+
+    return {
+        "template_path": template_path,
+        "template_ext": template_ext,
+        "auto_template_used": auto_template_used,
+        "temp_dir": temp_dir,
+        "matched_template_path": matched_template_path,
+        "response": None,
+    }
+
+
+def generate_cv_document(
+    profile: Dict[str, Any],
+    template_path: str,
+    output_dir: str,
+    output_formats: List[str],
+    target_language: Optional[str] = None,
+    translate: bool = True,
+    filename_prefix: Optional[str] = None,
+    cached_field_mapping: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """Generate a CV document from a template and profile data.
+
+    Args:
+        cached_field_mapping: Previously computed PDF field mapping to reuse.
+            When provided the heuristic + LLM analysis is skipped.
+
+    Returns:
+        dict with ``docx_path``, ``pdf_path``, and ``field_mapping``
+        (the computed mapping to cache on the template).
+    """
+    if not os.path.exists(template_path):
+        raise FileNotFoundError(f"Template not found: {template_path}")
+
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    context = _build_context(profile)
+    if translate and target_language:
+        payload = _build_translation_payload(context)
+        translated = translate_json_payload(payload, target_language)
+        context = _apply_translations(context, translated)
+
+        # Translate description_lines in a dedicated pass for better coverage.
+        lines_payload = {
+            "work_experience_lines": [
+                exp.get("description_lines", []) for exp in context.get("work_experiences", [])
+            ],
+            "project_lines": [
+                proj.get("description_lines", []) for proj in context.get("projects", [])
+            ],
+        }
+        translated_lines = translate_json_payload(lines_payload, target_language)
+        we_lines = translated_lines.get("work_experience_lines") if isinstance(translated_lines, dict) else None
+        if isinstance(we_lines, list):
+            for idx, exp in enumerate(context.get("work_experiences", [])):
+                if idx < len(we_lines) and isinstance(we_lines[idx], list):
+                    exp["description_lines"] = _normalize_lines(we_lines[idx])
+                elif idx < len(we_lines) and we_lines[idx] is not None:
+                    exp["description_lines"] = _normalize_lines(we_lines[idx])
+
+    # Set the open-ended label after translation so it matches target language.
+    if target_language:
+        lang = target_language.lower()
+        if lang.startswith("fr"):
+            context["open_end_label"] = "Aujourd'hui"
+        elif lang.startswith("en"):
+            context["open_end_label"] = "Present"
+        elif lang.startswith("es"):
+            context["open_end_label"] = "Actualidad"
+        elif lang.startswith("de"):
+            context["open_end_label"] = "Heute"
+        elif lang.startswith("it"):
+            context["open_end_label"] = "Presente"
+        elif lang.startswith("ar"):
+            context["open_end_label"] = "حاليًا"
+        else:
+            context["open_end_label"] = "Present"
+
+    # Derive last degree fields when available.
+    if not context.get("last_degree") and not context.get("last_degree_year"):
+        degree, year = _derive_last_degree(context)
+        context["last_degree"] = degree
+        context["last_degree_year"] = year
+
+    # Precompute date ranges for table-friendly templates.
+    open_end_label = context.get("open_end_label") or "Present"
+    for exp in context.get("work_experiences", []) or []:
+        start = exp.get("startDate") or ""
+        end = exp.get("endDate") or ""
+        if start and not end:
+            end = open_end_label
+        if start and end:
+            exp["date_range"] = f"{start} - {end}"
+        else:
+            exp["date_range"] = str(start or end or "")
+
+    for proj in context.get("projects", []) or []:
+        start = proj.get("startDate") or ""
+        end = proj.get("endDate") or ""
+        if start and not end:
+            end = open_end_label
+        if start and end:
+            proj["date_range"] = f"{start} - {end}"
+        else:
+            proj["date_range"] = str(start or end or "")
+
+    for edu in context.get("educations", []) or []:
+        start = edu.get("startDate") or ""
+        end = edu.get("endDate") or edu.get("graduationDate") or ""
+        if start and not end:
+            end = open_end_label
+        if start and end:
+            edu["date_range"] = f"{start} - {end}"
+        else:
+            edu["date_range"] = str(start or end or edu.get("year") or "")
+
+    prefix = filename_prefix or _safe_filename(context.get("full_name") or "cv")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    base_name = f"{prefix}_{timestamp}"
+
+    # Standardize template (conversion, OCR, etc.)
+    original_template_path = template_path
+    std_result = standardize_template(
+        template_path, output_dir, context, output_formats, cached_field_mapping
+    )
+    if std_result["response"]:
+        return std_result["response"]
+
+    template_path = std_result["template_path"]
+    template_ext = std_result["template_ext"]
+    auto_template_used = std_result["auto_template_used"]
+    temp_dir = std_result["temp_dir"]
+    matched_template_path = std_result["matched_template_path"]
 
     # Analyzer-driven rendering (no DB storage)
     analyzer_only = os.getenv("CV_TEMPLATE_ANALYZER_ONLY", "1") != "0"
@@ -1072,6 +1268,9 @@ def generate_cv_document(
     try:
         doc.render(render_context)
         logger.info("[DEBUG] doc.render() finished.")
+        # Apply global cleanup (handle orphaned dotted placeholders or label-based contact info)
+        _fill_common_placeholders(doc, context)
+        logger.info("[DEBUG] Global placeholder cleanup finished.")
     except TemplateSyntaxError as exc:
         logger.error(f"[ERROR] Template syntax error during render: {exc}")
         # If auto-tagging produced a bad template, retry once with conditionals disabled.

@@ -1,0 +1,16 @@
+@echo off
+echo Setting up AI Service environment...
+
+if not exist "venv" (
+    echo Creating virtual environment...
+    python -m venv venv
+)
+
+echo Activating virtual environment...
+call venv\Scripts\activate
+
+echo Installing dependencies...
+pip install -r requirements.txt
+
+echo Starting AI Service...
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000

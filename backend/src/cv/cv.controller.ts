@@ -48,21 +48,6 @@ export class CvController {
 
     /**
      * One-time backfill: populate project dates from stored metadata.json files
-     */
-    @Post('backfill-project-dates')
-    async backfillProjectDates() {
-        return this.cvService.backfillProjectDates();
-    }
-
-    /**
-     * Rania's Logic: Endpoint for employees to upload CV files
-     */
-    @Post('upload')
-    @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.EMPLOYEE, UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
-    @UseInterceptors(
-        FileInterceptor('file', {
-            limits: { fileSize: MAX_UPLOAD_BYTES },
             fileFilter: (_req, file, cb) => {
                 if (!ALLOWED_UPLOAD_MIME_TYPES.includes((file.mimetype || '').toLowerCase())) {
                     return cb(new BadRequestException('Unsupported file type'), false);
@@ -116,9 +101,10 @@ export class CvController {
             fileFilter: (_req, file, cb) => {
                 const allowed = [
                     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                    'application/pdf',
                 ];
                 if (!allowed.includes((file.mimetype || '').toLowerCase())) {
-                    return cb(new BadRequestException('Template must be .docx format'), false);
+                    return cb(new BadRequestException('Template must be .docx or .pdf format'), false);
                 }
                 return cb(null, true);
             },
