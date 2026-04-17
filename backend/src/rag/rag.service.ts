@@ -94,10 +94,11 @@ export class RagService {
             const elapsedMs = Date.now() - startedAt;
             const context = Array.isArray(payload?.context) ? payload.context : [];
             const results = this.buildResults(context, message);
+            const groundedAnswer = this.buildGroundedAnswer(message, results, payload?.answer);
             const extractedEntities = this.extractEntities(context);
             const resultCount = this.resolveResultCount(context, extractedEntities, results);
             await this.safeLogQuery(userId, message, extractedEntities, resultCount, elapsedMs);
-            return { ...payload, results };
+            return { ...payload, answer: groundedAnswer, results };
         } catch (error) {
             this.logger.error(`Error in RAG chat: ${error.message}`);
             const elapsedMs = Date.now() - startedAt;
@@ -477,10 +478,13 @@ export class RagService {
 
     private isDirectoryQuery(query?: string): boolean {
         if (!query) return false;
-        const normalized = query.toLowerCase();
+        const normalized = this.normalizeForMatch(query);
         return (
             normalized.includes('list employees') ||
             normalized.includes('all employees') ||
+            normalized.includes('our employees') ||
+            normalized.includes('who are our employees') ||
+            normalized.includes('who are the employees') ||
             normalized.includes('show employees') ||
             normalized.includes('employee directory') ||
             normalized.includes('team directory') ||
@@ -511,6 +515,131 @@ export class RagService {
                 if (!hasLetter) return false;
                 return token.length >= 2;
             });
+    }
+
+    private normalizeForMatch(value?: string): string {
+        return String(value || '')
+            .toLowerCase()
+            .replace(/[^a-z0-9\s]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    private isAboutEmployeeQuery(query?: string): boolean {
+        const normalized = this.normalizeForMatch(query);
+        if (!normalized) return false;
+        return (
+            normalized.includes('tell me about') ||
+            normalized.includes('what do you know about') ||
+            normalized.includes('anything you know about') ||
+            normalized.includes('anything u know about') ||
+            normalized.includes('information about') ||
+            normalized.includes('about ')
+        );
+    }
+
+    private isExperienceRankingQuery(query?: string): boolean {
+        const normalized = this.normalizeForMatch(query);
+        if (!normalized) return false;
+        return (
+            normalized.includes('most experience') ||
+            normalized.includes('most experienced') ||
+            normalized.includes('highest experience') ||
+            normalized.includes('least experience') ||
+            normalized.includes('lowest experience') ||
+            normalized.includes('minimum experience') ||
+            normalized.includes('fewest experience')
+        );
+    }
+
+    private looksUngroundedAnswer(answer?: unknown): boolean {
+        const text = String(answer || '').toLowerCase();
+        if (!text) return false;
+        return (
+            text.includes("i'm just an ai") ||
+            text.includes('i am just an ai') ||
+            text.includes("i don't have any employees") ||
+            text.includes('digital entity') ||
+            text.includes('ancient egyptian')
+        );
+    }
+
+    private buildGroundedAnswer(
+        query: string,
+        results: Array<{
+            name: string;
+            role?: string;
+            experienceYears?: number;
+            companies?: string[];
+            certifications?: string[];
+            projects?: string[];
+            skills?: string[];
+        }>,
+        llmAnswer?: unknown,
+    ): string {
+        const baseAnswer = String(llmAnswer || '').trim();
+        if (!Array.isArray(results) || results.length === 0) {
+            return baseAnswer || "I don't have that information.";
+        }
+
+        if (this.isDirectoryQuery(query)) {
+            const names = results
+                .map((result) => String(result?.name || '').trim())
+                .filter((name) => name.length > 0);
+            if (names.length === 0) return baseAnswer || "I don't have that information.";
+            return `We currently have ${names.length} employee(s) in the current search results: ${names.join(', ')}.`;
+        }
+
+        if (this.isExperienceRankingQuery(query)) {
+            const normalized = this.normalizeForMatch(query);
+            const leastMode =
+                normalized.includes('least experience') ||
+                normalized.includes('lowest experience') ||
+                normalized.includes('minimum experience') ||
+                normalized.includes('fewest experience');
+            const withYears = results.filter((r) => typeof r.experienceYears === 'number');
+            if (withYears.length > 0) {
+                const target = leastMode
+                    ? Math.min(...withYears.map((r) => r.experienceYears as number))
+                    : Math.max(...withYears.map((r) => r.experienceYears as number));
+                const matched = withYears.filter((r) => (r.experienceYears as number) === target);
+                if (matched.length === 1) {
+                    return `${matched[0].name} has the ${leastMode ? 'least' : 'most'} experience with ${target} years.`;
+                }
+                return `Tie for ${leastMode ? 'least' : 'most'} experience: ${matched.map((r) => r.name).join(', ')} (${target} years each).`;
+            }
+        }
+
+        if (this.isAboutEmployeeQuery(query)) {
+            const tokens = this.extractQueryTokens(query);
+            const matched = results.find((result) => {
+                const name = this.normalizeForMatch(result?.name);
+                if (!name) return false;
+                return tokens.some((token) => name.includes(token));
+            }) || results[0];
+
+            if (matched) {
+                const parts: string[] = [];
+                parts.push(`${matched.name}:`);
+                if (matched.role) parts.push(`role: ${matched.role}`);
+                if (typeof matched.experienceYears === 'number') parts.push(`experience: ${matched.experienceYears} years`);
+                if (matched.companies?.length) parts.push(`companies: ${matched.companies.slice(0, 3).join(', ')}`);
+                if (matched.certifications?.length) parts.push(`certifications: ${matched.certifications.slice(0, 5).join(', ')}`);
+                if (matched.projects?.length) parts.push(`projects: ${matched.projects.slice(0, 4).join(', ')}`);
+                return parts.join(' ');
+            }
+        }
+
+        if (this.looksUngroundedAnswer(baseAnswer)) {
+            const names = results
+                .map((result) => String(result?.name || '').trim())
+                .filter((name) => name.length > 0);
+            if (names.length > 0) {
+                return `I found these employees in our records: ${names.join(', ')}.`;
+            }
+        }
+
+        return baseAnswer || "I don't have that information.";
     }
 
     private hasTokenMatch(haystack: string, tokens: string[]): boolean {
