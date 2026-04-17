@@ -56,4 +56,11 @@ async def chat_rag(request: ChatRequest):
             ]
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        err = str(e or "").strip()
+        if "timed out" in err.lower() or "timeout" in err.lower():
+            # Return a normal payload so backend/frontend don't surface a hard 500.
+            return {
+                "answer": "The model timed out while processing your request. Please retry or use a faster model.",
+                "context": [],
+            }
+        raise HTTPException(status_code=500, detail=err)
