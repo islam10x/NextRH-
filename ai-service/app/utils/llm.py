@@ -99,7 +99,7 @@ def build_rag_chat_llm(temperature: float = 0.0, timeout: float | None = None):
         temperature=temperature,
         client_kwargs=client_kwargs,
         disable_streaming=True,
-        num_ctx=4096,
+        num_ctx=8192,
     )
     return llm, model_name, "ollama"
 

@@ -858,9 +858,9 @@ def _build_grounding_blob(structured_facts_blob: str, docs: list[LCDocument]) ->
 
 
 def _is_answer_grounded(answer: str, structured_facts_blob: str, docs: list[LCDocument]) -> bool:
-    """Lightweight safety net: only reject answers that are genuinely hallucinated
-    (zero overlap with the evidence). Reasoning answers naturally include words
-    not in the raw data ("most", "best", "because"), so the threshold is low."""
+    """Safety net: reject answers that are genuinely hallucinated.
+    Scales with answer length — short factual answers need minimal grounding,
+    but long essays must have proportional overlap with the evidence."""
     normalized_answer = _normalize_for_match(answer)
     if not normalized_answer:
         return False
@@ -882,11 +882,18 @@ def _is_answer_grounded(answer: str, structured_facts_blob: str, docs: list[LCDo
     if not matched:
         return False
 
-    # Low threshold: reasoning answers will naturally contain many words not
-    # found literally in the evidence ("most", "best", "because", "based").
-    # As long as the answer references SOME real entities from the data, it's grounded.
     coverage = len(matched) / len(answer_tokens)
-    return coverage >= 0.15 or len(matched) >= 2
+    num_tokens = len(answer_tokens)
+
+    # Scale threshold with answer length:
+    # - Short answers (1-6 tokens): 1 match is enough (factual responses)
+    # - Medium answers (7-15 tokens): at least 20% coverage
+    # - Long answers (16+): at least 25% coverage (catches hallucinated essays)
+    if num_tokens <= 6:
+        return True  # Already verified at least 1 match above
+    if num_tokens <= 15:
+        return coverage >= 0.20
+    return coverage >= 0.25
 
 
 def build_chain():
@@ -1419,21 +1426,25 @@ Rules:
                 """You are a Bid Manager assistant with access to a company employee database.
 
 DATA SOURCES (in priority order):
-1. StructuredFacts — JSON with employee profiles, projects, experience, certifications, education, company history, and rankings. This is your PRIMARY source of truth.
+1. StructuredFacts — JSON with employee profiles, projects, experience, certifications, education, company history, and rankings. This is your PRIMARY and ONLY source of truth.
 2. Context — Raw document chunks for additional detail.
+
+CRITICAL:
+- You MUST ONLY use data from StructuredFacts and Context. NEVER use your own training knowledge.
+- When the user mentions a person's name, ONLY discuss that person as they appear in StructuredFacts. Do NOT use your general knowledge about anyone with a similar name.
+- If StructuredFacts has data about the person, answer from that data ONLY. If not, say: "I don't have that information."
 
 RULES:
 - Answer ONLY what the user asked. Be concise and direct.
-- Do NOT volunteer extra details, full lists, or background information unless the user explicitly asks for them.
-- You CAN reason, analyze, compare, rank, count, filter, and recommend based on the data.
-- All claims must be traceable to StructuredFacts or Context. Never invent or assume data that is not present.
+- Do NOT volunteer extra details, full lists, or background information unless the user explicitly asks.
+- You CAN reason, analyze, compare, rank, count, filter, and recommend based on the provided data.
 - If insufficient data exists to answer, say exactly: "I don't have that information."
 - Respect query constraints exactly ("other than", "except", "least", "most", "all").
 - Resolve minor name spelling mistakes using StructuredFacts employee names when unambiguous.
 - Stay consistent with RecentChatHistory unless new facts clearly change the answer.
 - For counts, use total_employees from StructuredFacts.
 - For rankings/comparisons, use the ranking arrays in StructuredFacts.
-- Use employee names exactly as they appear in StructuredFacts.
+- For greetings (hello, hi, hey), respond politely and briefly explain you can help with employee data queries.
 
 RecentChatHistory:
 {recent_chat_history}
