@@ -86,6 +86,10 @@ def resolve_rag_chat_model() -> str:
 def build_rag_chat_llm(temperature: float = 0.0, timeout: float | None = None):
     """Build a LangChain chat model for RAG chatbot usage only."""
     model_name = resolve_rag_chat_model()
+    effective_timeout = timeout if timeout is not None else settings.RAG_CHAT_TIMEOUT_SECONDS
+    client_kwargs: dict[str, float] = {}
+    if isinstance(effective_timeout, (int, float)) and float(effective_timeout) > 0:
+        client_kwargs["timeout"] = float(effective_timeout)
 
     from langchain_ollama import ChatOllama  # Imported lazily to keep optional dependency.
 
@@ -93,6 +97,7 @@ def build_rag_chat_llm(temperature: float = 0.0, timeout: float | None = None):
         model=model_name,
         base_url=settings.OLLAMA_URL,
         temperature=temperature,
+        client_kwargs=client_kwargs,
         disable_streaming=True,
         num_ctx=4096,
     )

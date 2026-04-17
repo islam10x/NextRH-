@@ -1,6 +1,7 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 from uuid import UUID
+import re
 from app.rag.etl_ingest import ingest_employee, run_ingestion, delete_employee_vectors
 from app.rag.chat_agent import build_chain
 from app.utils.llm import build_rag_chat_llm, parse_json_object
@@ -48,7 +49,84 @@ def _get_intent_llm():
         _intent_llm = llm
     return _intent_llm
 
+def _normalize_message(message: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", (message or "").lower())).strip()
+
+def _is_obvious_small_talk(message: str) -> bool:
+    norm = _normalize_message(message)
+    if not norm:
+        return True
+
+    obvious_small_talk = {
+        "hi",
+        "hello",
+        "hey",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "how are you",
+        "thanks",
+        "thank you",
+        "ok",
+        "okay",
+        "bye",
+        "goodbye",
+    }
+    if norm in obvious_small_talk:
+        return True
+
+    tokens = [t for t in norm.split(" ") if t]
+    if len(tokens) <= 4 and any(g in norm for g in ("hi", "hello", "hey", "thanks", "thank you")):
+        return True
+
+    return False
+
+def _looks_like_employee_search(message: str) -> bool:
+    norm = _normalize_message(message)
+    if not norm:
+        return False
+
+    hr_keywords = {
+        "employee",
+        "employees",
+        "candidate",
+        "candidates",
+        "team",
+        "teams",
+        "cv",
+        "resume",
+        "skill",
+        "skills",
+        "certification",
+        "certifications",
+        "project",
+        "projects",
+        "experience",
+        "profile",
+        "profiles",
+        "who has",
+        "find",
+        "search",
+        "list",
+    }
+    if any(k in norm for k in hr_keywords):
+        return True
+
+    # Common real-world phrasing that should always hit RAG.
+    if re.search(r"\b(anything|what)\s+(do\s+you\s+know|about)\s+\w+", norm):
+        return True
+    if re.search(r"\babout\s+\w+\b", norm):
+        return True
+
+    return False
+
 def _classify_intent(message: str) -> str:
+    # Deterministic routing first to avoid model-dependent misclassification.
+    if _looks_like_employee_search(message):
+        return "employee_search"
+    if _is_obvious_small_talk(message):
+        return "small_talk"
+
     llm = _get_intent_llm()
     system_prompt = (
         "You are an intent classifier for a staffing assistant. "
@@ -66,6 +144,8 @@ def _classify_intent(message: str) -> str:
         parsed = parse_json_object(content)
         intent = str(parsed.get("intent") or "").strip().lower() if isinstance(parsed, dict) else ""
         if intent in {"employee_search", "small_talk"}:
+            if intent == "small_talk" and not _is_obvious_small_talk(message):
+                return "employee_search"
             return intent
     except Exception:
         pass
