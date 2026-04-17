@@ -624,13 +624,14 @@ export class RagService {
             skills?: string[];
         }>,
     ): boolean {
-        const queryTokens = this.extractSignalTokens(query);
-        if (!queryTokens.length) return false;
-        const contextBlob = this.buildContextBlob(context);
-        const resultsBlob = this.buildResultsBlob(results);
-        const blob = this.normalizeForMatch(`${contextBlob} ${resultsBlob}`.trim());
-        const coverage = this.computeTokenCoverage(queryTokens, blob);
-        return coverage >= 0.2;
+        // Trust the retriever: if it returned context docs or the results builder
+        // found employee cards, the query is related to our employee data.
+        // The AI service already has its own grounding (system prompt + safety net).
+        if (Array.isArray(context) && context.length > 0) return true;
+        if (Array.isArray(results) && results.length > 0) return true;
+
+        // No context at all — the retriever found nothing relevant.
+        return false;
     }
 
     private isAnswerGroundedInResults(
@@ -699,18 +700,22 @@ export class RagService {
         }>,
         llmAnswer?: unknown,
     ): string {
+        // Gate: if the retriever found nothing related, the query is out of scope.
         if (!this.isQueryGroundedInContext(query, context, results)) {
             return this.ragOutOfScopeMessage;
         }
-        if (!Array.isArray(results) || results.length === 0) {
-            return this.ragNoDataMessage;
-        }
 
+        // Trust the AI service's LLM answer — it already has its own grounding
+        // (system prompt instructs "never invent data" + post-LLM safety net).
         const candidate = String(llmAnswer || '').trim();
-        if (candidate && this.isAnswerGroundedInResults(candidate, results)) {
+        if (candidate) {
             return candidate;
         }
 
+        // Fallback: AI service returned no answer, build summary from results.
+        if (!Array.isArray(results) || results.length === 0) {
+            return this.ragNoDataMessage;
+        }
         return this.buildResultsSummary(results);
     }
 
