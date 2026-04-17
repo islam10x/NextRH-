@@ -726,6 +726,154 @@ def _build_structured_facts(
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+def _parse_structured_facts_blob(blob: str) -> dict[str, object]:
+    try:
+        obj = json.loads(str(blob or "").strip() or "{}")
+    except Exception:
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def _is_employee_profile_query(query: str) -> bool:
+    q = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", _normalize_for_match(query))).strip()
+    if not q:
+        return False
+    profile_markers = [
+        "tell me about",
+        "what do you know about",
+        "anything you know about",
+        "anything u know about",
+        "who is",
+        "details about",
+        "information about",
+        "about ",
+    ]
+    return any(marker in q for marker in profile_markers)
+
+
+def _extract_query_name_tokens(query: str) -> list[str]:
+    q = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", _normalize_for_match(query))).strip()
+    tokens = re.findall(r"[a-z0-9]+", q)
+    stop = {
+        "anything",
+        "about",
+        "know",
+        "knows",
+        "tell",
+        "me",
+        "you",
+        "what",
+        "who",
+        "is",
+        "are",
+        "details",
+        "detail",
+        "information",
+        "info",
+        "u",
+        "the",
+        "a",
+        "an",
+        "employee",
+        "employees",
+    }
+    out: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        if len(token) < 3 or token in stop:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+    return out
+
+
+def _match_employees_for_profile_query(
+    structured_facts_obj: dict[str, object],
+    query: str,
+) -> list[dict[str, object]]:
+    raw_employees = structured_facts_obj.get("employees")
+    if not isinstance(raw_employees, list):
+        return []
+
+    tokens = _extract_query_name_tokens(query)
+    if not tokens:
+        return []
+
+    matches: list[dict[str, object]] = []
+    for item in raw_employees:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        name_norm = _normalize_for_match(name)
+        name_parts = [p for p in re.findall(r"[a-z0-9]+", name_norm) if len(p) >= 3]
+        if any(token in name_parts or _contains_word(name_norm, token) for token in tokens):
+            matches.append(item)
+    return matches
+
+
+def _build_employee_profile_answer(matches: list[dict[str, object]]) -> str:
+    lines: list[str] = []
+    for row in matches[:3]:
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        project_count = int(row.get("project_count") or 0)
+        experience_count = int(row.get("experience_count") or 0)
+        companies = [str(c).strip() for c in (row.get("companies") or []) if str(c).strip()]
+        certifications = [str(c).strip() for c in (row.get("certifications") or []) if str(c).strip()]
+        projects_raw = row.get("projects") or []
+        project_names: list[str] = []
+        if isinstance(projects_raw, list):
+            for p in projects_raw:
+                if not isinstance(p, dict):
+                    continue
+                p_name = str(p.get("project_name") or "").strip()
+                if p_name:
+                    project_names.append(p_name)
+
+        role = ""
+        experience_raw = row.get("experience") or []
+        if isinstance(experience_raw, list):
+            for exp in experience_raw:
+                if not isinstance(exp, dict):
+                    continue
+                role_candidate = str(exp.get("role") or "").strip()
+                if role_candidate:
+                    role = role_candidate
+                    break
+
+        lines.append(f"{name}:")
+        if role:
+            lines.append(f"- role: {role}")
+        lines.append(f"- experience entries: {experience_count}")
+        lines.append(f"- project count: {project_count}")
+        if companies:
+            lines.append(f"- companies: {', '.join(companies[:5])}")
+        if certifications:
+            lines.append(f"- certifications: {', '.join(certifications[:8])}")
+        if project_names:
+            lines.append(f"- projects: {', '.join(project_names[:6])}")
+
+    if not lines:
+        return "I don't have that information."
+    return "\n".join(lines)
+
+
+def _try_grounded_profile_answer(query: str, structured_facts_blob: str) -> str | None:
+    if not _is_employee_profile_query(query):
+        return None
+
+    facts = _parse_structured_facts_blob(structured_facts_blob)
+    matches = _match_employees_for_profile_query(facts, query)
+    if not matches:
+        return "I don't have that information."
+    return _build_employee_profile_answer(matches)
+
+
 def build_chain():
     from sqlalchemy import select
     from sqlalchemy.orm import Session
@@ -1312,6 +1460,12 @@ Context:
         if not docs:
             docs = retriever.invoke(standalone_query)
         structured_facts = _build_structured_facts(docs, query_text=standalone_query)
+        grounded_profile_answer = _try_grounded_profile_answer(standalone_query, structured_facts)
+        if grounded_profile_answer is not None:
+            return {
+                "answer": grounded_profile_answer,
+                "context": docs,
+            }
         grounded_evidence_obj = _select_llm_first_evidence(standalone_query, docs)
         if (
             str(grounded_evidence_obj.get("query_type") or "").strip().lower() == "category_filter"
