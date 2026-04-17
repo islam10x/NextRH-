@@ -858,6 +858,9 @@ def _build_grounding_blob(structured_facts_blob: str, docs: list[LCDocument]) ->
 
 
 def _is_answer_grounded(answer: str, structured_facts_blob: str, docs: list[LCDocument]) -> bool:
+    """Lightweight safety net: only reject answers that are genuinely hallucinated
+    (zero overlap with the evidence). Reasoning answers naturally include words
+    not in the raw data ("most", "best", "because"), so the threshold is low."""
     normalized_answer = _normalize_for_match(answer)
     if not normalized_answer:
         return False
@@ -868,7 +871,8 @@ def _is_answer_grounded(answer: str, structured_facts_blob: str, docs: list[LCDo
 
     answer_tokens = _signal_tokens(normalized_answer)
     if not answer_tokens:
-        return False
+        # Generic short answers ("yes", "no", "3") — pass through.
+        return True
 
     evidence_blob = _build_grounding_blob(structured_facts_blob, docs)
     if not evidence_blob:
@@ -878,8 +882,11 @@ def _is_answer_grounded(answer: str, structured_facts_blob: str, docs: list[LCDo
     if not matched:
         return False
 
+    # Low threshold: reasoning answers will naturally contain many words not
+    # found literally in the evidence ("most", "best", "because", "based").
+    # As long as the answer references SOME real entities from the data, it's grounded.
     coverage = len(matched) / len(answer_tokens)
-    return coverage >= 0.45 or (coverage >= 0.30 and any(len(token) >= 5 for token in matched))
+    return coverage >= 0.15 or len(matched) >= 2
 
 
 def build_chain():
@@ -1309,14 +1316,17 @@ Rules:
                 "system",
                 """Select explicit evidence rows that directly support answering the query.
 Return strict JSON only:
-{"query_type":"category_filter|other","selected_evidence_ids":["E1","E2"],"notes":"..."}
+{"query_type":"category_filter|listing|other","selected_evidence_ids":["E1","E2"],"notes":"..."}
 Rules:
 - Use only ids from EvidenceCatalog.
 - Set query_type=category_filter when the user asks membership/filter/category/comparison across people
   (examples: who has worked for banks, healthcare organizations, telecom, cybersecurity).
 - For category_filter, be conservative: select only rows with direct lexical evidence for the target category.
 - Do not infer category from unrelated organizations; if uncertain, select no rows.
-- For non-category queries, set query_type=other and selected_evidence_ids=[].""",
+- Set query_type=listing when the user asks to list, enumerate, or summarize all employees or the workforce
+  (examples: who are the employees, list all employees, how many employees do we have, show me the team).
+  For listing queries, set selected_evidence_ids=[].
+- For non-category, non-listing queries, set query_type=other and selected_evidence_ids=[].""",
             ),
             ("human", "StandaloneQuery:\n{standalone_query}\n\nEvidenceCatalog:\n{evidence_catalog}"),
         ]
@@ -1359,7 +1369,7 @@ Rules:
             raw = llm.invoke(messages)
             obj = parse_json_object(str(getattr(raw, "content", "") or "").strip()) or {}
             query_type = str(obj.get("query_type") or "other").strip().lower()
-            if query_type not in {"category_filter", "other"}:
+            if query_type not in {"category_filter", "listing", "other"}:
                 query_type = "other"
 
             selected_ids_raw = obj.get("selected_evidence_ids")
@@ -1406,29 +1416,30 @@ Rules:
         [
             (
                 "system",
-                """You are a Bid Manager assistant.
-Use StructuredFacts as your primary source of truth and Context as supporting evidence.
-Reasoning guidelines:
-1) Keep answers grounded only in provided facts; never invent details.
-2) For category/list/filter/comparison questions, evaluate all employees in StructuredFacts before answering.
-3) Respect query constraints exactly (for example "other than X", "least", "same", "all", "except").
-4) Resolve minor spelling mistakes in names using StructuredFacts employee names when unambiguous.
-5) Stay consistent with RecentChatHistory unless newly retrieved facts clearly change the answer.
-6) If information is missing or ambiguous, reply exactly: "I don't have that information."
-7) Keep answers concise and factual.
-8) If GroundedEvidence.query_type is "category_filter":
-   - Use only GroundedEvidence.selected_rows to determine membership.
-   - Do not add entities or employees that are not present in selected_rows.
-   - If selected_rows is empty, reply exactly: "I don't have that information."
+                """You are a Bid Manager assistant with access to a company employee database.
+
+DATA SOURCES (in priority order):
+1. StructuredFacts — JSON with employee profiles, projects, experience, certifications, education, company history, and rankings. This is your PRIMARY source of truth.
+2. Context — Raw document chunks for additional detail.
+
+RULES:
+- Answer ONLY what the user asked. Be concise and direct.
+- Do NOT volunteer extra details, full lists, or background information unless the user explicitly asks for them.
+- You CAN reason, analyze, compare, rank, count, filter, and recommend based on the data.
+- All claims must be traceable to StructuredFacts or Context. Never invent or assume data that is not present.
+- If insufficient data exists to answer, say exactly: "I don't have that information."
+- Respect query constraints exactly ("other than", "except", "least", "most", "all").
+- Resolve minor name spelling mistakes using StructuredFacts employee names when unambiguous.
+- Stay consistent with RecentChatHistory unless new facts clearly change the answer.
+- For counts, use total_employees from StructuredFacts.
+- For rankings/comparisons, use the ranking arrays in StructuredFacts.
+- Use employee names exactly as they appear in StructuredFacts.
 
 RecentChatHistory:
 {recent_chat_history}
 
 StandaloneQuery:
 {standalone_query}
-
-GroundedEvidence:
-{grounded_evidence}
 
 StructuredFacts:
 {structured_facts}
@@ -1472,16 +1483,10 @@ Context:
                 "answer": NO_INFO_REPLY,
                 "context": [],
             }
+
+        # Build structured facts from retrieved docs — this is the LLM's primary data source.
         structured_facts = _build_structured_facts(docs, query_text=standalone_query)
-        grounded_evidence_obj = _select_llm_first_evidence(standalone_query, docs)
-        if (
-            str(grounded_evidence_obj.get("query_type") or "").strip().lower() == "category_filter"
-            and not grounded_evidence_obj.get("selected_rows")
-        ):
-            return {
-                "answer": NO_INFO_REPLY,
-                "context": docs,
-            }
+
         recent_history_blob = _recent_history_blob(chat_history)
         answer = _safe_chain_invoke(
             qa_chain_llm_first,
@@ -1491,11 +1496,13 @@ Context:
                 "context": docs,
                 "structured_facts": structured_facts,
                 "recent_chat_history": recent_history_blob,
-                "grounded_evidence": json.dumps(grounded_evidence_obj, ensure_ascii=False, indent=2),
             },
         )
+
+        # Lightweight safety net: only reject genuinely hallucinated answers.
         if not _is_answer_grounded(str(answer or ""), structured_facts, docs):
             answer = NO_INFO_REPLY
+
         return {
             "answer": answer,
             "context": docs,
