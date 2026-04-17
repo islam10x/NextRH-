@@ -9,6 +9,10 @@ import { User } from '../users/entities/user.entity';
 export class RagService {
     private readonly logger = new Logger(RagService.name);
     private readonly aiServiceBaseUrl: string;
+    private readonly ragOutOfScopeMessage =
+        'Sorry, I can only answer questions based on our employee RAG data (employees, skills, certifications, projects, and experience).';
+    private readonly ragNoDataMessage =
+        "Sorry, I couldn't find that information in our employee RAG data.";
 
     constructor(
         private readonly configService: ConfigService,
@@ -94,7 +98,7 @@ export class RagService {
             const elapsedMs = Date.now() - startedAt;
             const context = Array.isArray(payload?.context) ? payload.context : [];
             const results = this.buildResults(context, message);
-            const groundedAnswer = this.buildGroundedAnswer(message, results, payload?.answer);
+            const groundedAnswer = this.buildGroundedAnswer(message, context, results, payload?.answer);
             const extractedEntities = this.extractEntities(context);
             const resultCount = this.resolveResultCount(context, extractedEntities, results);
             await this.safeLogQuery(userId, message, extractedEntities, resultCount, elapsedMs);
@@ -203,8 +207,9 @@ export class RagService {
     }> {
         if (!Array.isArray(context)) return [];
 
-        const allowDirectoryFallback = this.isDirectoryQuery(query);
         const queryTokens = this.extractQueryTokens(query);
+        // Generic fallback policy: if the query is broad/underspecified, allow directory rows as a backup.
+        const allowDirectoryFallback = queryTokens.length <= 1;
         const minYears = this.extractMinExperienceYears(query);
         const directoryIndex = new Map<string, { role?: string; experienceYears?: number; companies: Set<string> }>();
 
@@ -476,24 +481,6 @@ export class RagService {
         return tokens.every((token) => normalized.includes(token));
     }
 
-    private isDirectoryQuery(query?: string): boolean {
-        if (!query) return false;
-        const normalized = this.normalizeForMatch(query);
-        return (
-            normalized.includes('list employees') ||
-            normalized.includes('all employees') ||
-            normalized.includes('our employees') ||
-            normalized.includes('who are our employees') ||
-            normalized.includes('who are the employees') ||
-            normalized.includes('show employees') ||
-            normalized.includes('employee directory') ||
-            normalized.includes('team directory') ||
-            normalized.includes('list team') ||
-            normalized.includes('team members') ||
-            normalized.includes('everyone')
-        );
-    }
-
     private extractQueryTokens(query?: string): string[] {
         if (!query) return [];
         const stopwords = new Set([
@@ -502,6 +489,7 @@ export class RagService {
             'please', 'need', 'want', 'looking', 'that', 'those', 'these', 'which', 'whose', 'from',
             'certification', 'certifications', 'skill', 'skills', 'project', 'projects',
             'experience', 'years', 'year', 'yrs', 'yr', 'exp',
+            'cert', 'certs', 'certificate', 'certificates', 'certified',
         ]);
         return query
             .toLowerCase()
@@ -525,47 +513,181 @@ export class RagService {
             .trim();
     }
 
-    private isAboutEmployeeQuery(query?: string): boolean {
-        const normalized = this.normalizeForMatch(query);
-        if (!normalized) return false;
-        return (
-            normalized.includes('tell me about') ||
-            normalized.includes('what do you know about') ||
-            normalized.includes('anything you know about') ||
-            normalized.includes('anything u know about') ||
-            normalized.includes('information about') ||
-            normalized.includes('about ')
-        );
+    private escapeRegex(value: string): string {
+        return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
-    private isExperienceRankingQuery(query?: string): boolean {
-        const normalized = this.normalizeForMatch(query);
-        if (!normalized) return false;
-        return (
-            normalized.includes('most experience') ||
-            normalized.includes('most experienced') ||
-            normalized.includes('highest experience') ||
-            normalized.includes('least experience') ||
-            normalized.includes('lowest experience') ||
-            normalized.includes('minimum experience') ||
-            normalized.includes('fewest experience')
-        );
+    private containsWholeWord(text: string, token: string): boolean {
+        const normalizedText = this.normalizeForMatch(text);
+        const normalizedToken = this.normalizeForMatch(token);
+        if (!normalizedText || !normalizedToken) return false;
+        const pattern = new RegExp(`\\b${this.escapeRegex(normalizedToken)}\\b`, 'i');
+        return pattern.test(normalizedText);
     }
 
-    private looksUngroundedAnswer(answer?: unknown): boolean {
-        const text = String(answer || '').toLowerCase();
-        if (!text) return false;
-        return (
-            text.includes("i'm just an ai") ||
-            text.includes('i am just an ai') ||
-            text.includes("i don't have any employees") ||
-            text.includes('digital entity') ||
-            text.includes('ancient egyptian')
-        );
+
+    private extractSignalTokens(text?: string): string[] {
+        const normalized = this.normalizeForMatch(text);
+        if (!normalized) return [];
+        const stopwords = new Set([
+            'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'about', 'your', 'their',
+            'have', 'has', 'had', 'was', 'were', 'are', 'is', 'who', 'what', 'when', 'where', 'why', 'how',
+            'list', 'show', 'find', 'search', 'please', 'could', 'would', 'should', 'there', 'them', 'they',
+            'then', 'than', 'also', 'only', 'just', 'more', 'less', 'most', 'least', 'info', 'information',
+            'employee', 'employees', 'profile', 'profiles', 'project', 'projects', 'skill', 'skills',
+            'certification', 'certifications', 'experience',
+        ]);
+        const tokens = normalized.split(/\s+/).filter(Boolean);
+        const out: string[] = [];
+        const seen = new Set<string>();
+        for (const token of tokens) {
+            if (token.length < 3) continue;
+            if (stopwords.has(token)) continue;
+            if (seen.has(token)) continue;
+            seen.add(token);
+            out.push(token);
+        }
+        return out;
+    }
+
+    private buildResultsBlob(results: Array<{
+        name: string;
+        role?: string;
+        experienceYears?: number;
+        companies?: string[];
+        certifications?: string[];
+        projects?: string[];
+        skills?: string[];
+    }>): string {
+        const parts: string[] = [];
+        for (const row of results) {
+            parts.push(String(row?.name || ''));
+            parts.push(String(row?.role || ''));
+            if (typeof row?.experienceYears === 'number') {
+                parts.push(String(row.experienceYears));
+            }
+            (row?.companies || []).forEach((v) => parts.push(String(v || '')));
+            (row?.certifications || []).forEach((v) => parts.push(String(v || '')));
+            (row?.projects || []).forEach((v) => parts.push(String(v || '')));
+            (row?.skills || []).forEach((v) => parts.push(String(v || '')));
+        }
+        return this.normalizeForMatch(parts.join(' '));
+    }
+
+    private buildContextBlob(context: any[]): string {
+        if (!Array.isArray(context) || context.length === 0) return '';
+        const parts: string[] = [];
+        for (const item of context) {
+            if (typeof item?.content === 'string' && item.content.trim()) {
+                parts.push(item.content.trim());
+            }
+            const meta = item?.metadata || {};
+            const push = (value: any) => {
+                if (typeof value === 'string' && value.trim()) {
+                    parts.push(value.trim());
+                }
+            };
+            push(meta?.name);
+            push(meta?.job_title);
+            push(meta?.company_name);
+            push(meta?.client_name);
+            push(meta?.project_name);
+            push(meta?.certification_name);
+            if (Array.isArray(meta?.certifications)) {
+                meta.certifications.forEach((c: any) => push(c));
+            }
+        }
+        return this.normalizeForMatch(parts.join(' '));
+    }
+
+    private computeTokenCoverage(tokens: string[], normalizedBlob: string): number {
+        if (!tokens.length || !normalizedBlob) return 0;
+        let matched = 0;
+        for (const token of tokens) {
+            if (this.containsWholeWord(normalizedBlob, token) || (token.length >= 5 && normalizedBlob.includes(token))) {
+                matched += 1;
+            }
+        }
+        return matched / tokens.length;
+    }
+
+    private isQueryGroundedInContext(
+        query: string,
+        context: any[],
+        results: Array<{
+            name: string;
+            role?: string;
+            experienceYears?: number;
+            companies?: string[];
+            certifications?: string[];
+            projects?: string[];
+            skills?: string[];
+        }>,
+    ): boolean {
+        const queryTokens = this.extractSignalTokens(query);
+        if (!queryTokens.length) return false;
+        const contextBlob = this.buildContextBlob(context);
+        const resultsBlob = this.buildResultsBlob(results);
+        const blob = this.normalizeForMatch(`${contextBlob} ${resultsBlob}`.trim());
+        const coverage = this.computeTokenCoverage(queryTokens, blob);
+        return coverage >= 0.2;
+    }
+
+    private isAnswerGroundedInResults(
+        answer: string,
+        results: Array<{
+            name: string;
+            role?: string;
+            experienceYears?: number;
+            companies?: string[];
+            certifications?: string[];
+            projects?: string[];
+            skills?: string[];
+        }>,
+    ): boolean {
+        const normalized = this.normalizeForMatch(answer);
+        if (!normalized) return false;
+        const knownSafeReplies = [
+            this.normalizeForMatch(this.ragOutOfScopeMessage),
+            this.normalizeForMatch(this.ragNoDataMessage),
+        ];
+        if (knownSafeReplies.includes(normalized)) return true;
+
+        const answerTokens = this.extractSignalTokens(answer);
+        if (!answerTokens.length) return false;
+        const resultsBlob = this.buildResultsBlob(results);
+        const coverage = this.computeTokenCoverage(answerTokens, resultsBlob);
+        return coverage >= 0.3;
+    }
+
+    private buildResultsSummary(results: Array<{
+        name: string;
+        role?: string;
+        experienceYears?: number;
+        companies?: string[];
+        certifications?: string[];
+        projects?: string[];
+        skills?: string[];
+    }>): string {
+        if (!Array.isArray(results) || results.length === 0) {
+            return this.ragNoDataMessage;
+        }
+        const lines = results.slice(0, 5).map((row) => {
+            const parts: string[] = [];
+            parts.push(String(row?.name || '').trim());
+            if (row?.role) parts.push(`role: ${row.role}`);
+            if (typeof row?.experienceYears === 'number') parts.push(`experience: ${row.experienceYears} years`);
+            if (row?.companies?.length) parts.push(`companies: ${row.companies.slice(0, 3).join(', ')}`);
+            if (row?.certifications?.length) parts.push(`certifications: ${row.certifications.slice(0, 3).join(', ')}`);
+            return parts.filter(Boolean).join(' | ');
+        }).filter(Boolean);
+        if (!lines.length) return this.ragNoDataMessage;
+        return lines.join('\n');
     }
 
     private buildGroundedAnswer(
         query: string,
+        context: any[],
         results: Array<{
             name: string;
             role?: string;
@@ -577,75 +699,28 @@ export class RagService {
         }>,
         llmAnswer?: unknown,
     ): string {
-        const baseAnswer = String(llmAnswer || '').trim();
+        if (!this.isQueryGroundedInContext(query, context, results)) {
+            return this.ragOutOfScopeMessage;
+        }
         if (!Array.isArray(results) || results.length === 0) {
-            return baseAnswer || "I don't have that information.";
+            return this.ragNoDataMessage;
         }
 
-        if (this.isDirectoryQuery(query)) {
-            const names = results
-                .map((result) => String(result?.name || '').trim())
-                .filter((name) => name.length > 0);
-            if (names.length === 0) return baseAnswer || "I don't have that information.";
-            return `We currently have ${names.length} employee(s) in the current search results: ${names.join(', ')}.`;
+        const candidate = String(llmAnswer || '').trim();
+        if (candidate && this.isAnswerGroundedInResults(candidate, results)) {
+            return candidate;
         }
 
-        if (this.isExperienceRankingQuery(query)) {
-            const normalized = this.normalizeForMatch(query);
-            const leastMode =
-                normalized.includes('least experience') ||
-                normalized.includes('lowest experience') ||
-                normalized.includes('minimum experience') ||
-                normalized.includes('fewest experience');
-            const withYears = results.filter((r) => typeof r.experienceYears === 'number');
-            if (withYears.length > 0) {
-                const target = leastMode
-                    ? Math.min(...withYears.map((r) => r.experienceYears as number))
-                    : Math.max(...withYears.map((r) => r.experienceYears as number));
-                const matched = withYears.filter((r) => (r.experienceYears as number) === target);
-                if (matched.length === 1) {
-                    return `${matched[0].name} has the ${leastMode ? 'least' : 'most'} experience with ${target} years.`;
-                }
-                return `Tie for ${leastMode ? 'least' : 'most'} experience: ${matched.map((r) => r.name).join(', ')} (${target} years each).`;
-            }
-        }
-
-        if (this.isAboutEmployeeQuery(query)) {
-            const tokens = this.extractQueryTokens(query);
-            const matched = results.find((result) => {
-                const name = this.normalizeForMatch(result?.name);
-                if (!name) return false;
-                return tokens.some((token) => name.includes(token));
-            }) || results[0];
-
-            if (matched) {
-                const parts: string[] = [];
-                parts.push(`${matched.name}:`);
-                if (matched.role) parts.push(`role: ${matched.role}`);
-                if (typeof matched.experienceYears === 'number') parts.push(`experience: ${matched.experienceYears} years`);
-                if (matched.companies?.length) parts.push(`companies: ${matched.companies.slice(0, 3).join(', ')}`);
-                if (matched.certifications?.length) parts.push(`certifications: ${matched.certifications.slice(0, 5).join(', ')}`);
-                if (matched.projects?.length) parts.push(`projects: ${matched.projects.slice(0, 4).join(', ')}`);
-                return parts.join(' ');
-            }
-        }
-
-        if (this.looksUngroundedAnswer(baseAnswer)) {
-            const names = results
-                .map((result) => String(result?.name || '').trim())
-                .filter((name) => name.length > 0);
-            if (names.length > 0) {
-                return `I found these employees in our records: ${names.join(', ')}.`;
-            }
-        }
-
-        return baseAnswer || "I don't have that information.";
+        return this.buildResultsSummary(results);
     }
 
     private hasTokenMatch(haystack: string, tokens: string[]): boolean {
         if (!haystack || tokens.length === 0) return false;
-        const normalized = haystack.toLowerCase();
-        return tokens.some((token) => normalized.includes(token));
+        const normalized = this.normalizeForMatch(haystack);
+        return tokens.some((token) => {
+            if (this.containsWholeWord(normalized, token)) return true;
+            return token.length >= 4 && normalized.includes(token);
+        });
     }
 
     private extractMinExperienceYears(query?: string): number | null {

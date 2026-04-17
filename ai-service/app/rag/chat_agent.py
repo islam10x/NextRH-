@@ -25,6 +25,7 @@ from app.utils.llm import build_rag_chat_llm, parse_json_object
 
 TOP_K = 8
 TOP_K_PER_MATCHED_EMPLOYEE = 12
+NO_INFO_REPLY = "I don't have that information."
 
 
 def _normalize_for_match(value: str) -> str:
@@ -759,61 +760,73 @@ def _build_structured_facts(
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def _parse_structured_facts_blob(blob: str) -> dict[str, object]:
-    try:
-        obj = json.loads(str(blob or "").strip() or "{}")
-    except Exception:
-        return {}
-    return obj if isinstance(obj, dict) else {}
-
-
-def _is_employee_profile_query(query: str) -> bool:
-    q = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", _normalize_for_match(query))).strip()
-    if not q:
-        return False
-    profile_markers = [
-        "tell me about",
-        "what do you know about",
-        "anything you know about",
-        "anything u know about",
-        "who is",
-        "details about",
-        "information about",
-        "about ",
-    ]
-    return any(marker in q for marker in profile_markers)
-
-
-def _extract_query_name_tokens(query: str) -> list[str]:
-    q = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", _normalize_for_match(query))).strip()
-    tokens = re.findall(r"[a-z0-9]+", q)
-    stop = {
-        "anything",
-        "about",
-        "know",
-        "knows",
-        "tell",
-        "me",
-        "you",
-        "what",
-        "who",
-        "is",
-        "are",
-        "details",
-        "detail",
-        "information",
-        "info",
-        "u",
+def _signal_tokens(text: str) -> list[str]:
+    stopwords = {
         "the",
-        "a",
-        "an",
+        "and",
+        "for",
+        "with",
+        "that",
+        "this",
+        "from",
+        "into",
+        "about",
+        "your",
+        "their",
+        "have",
+        "has",
+        "had",
+        "was",
+        "were",
+        "are",
+        "is",
+        "who",
+        "what",
+        "when",
+        "where",
+        "why",
+        "how",
+        "list",
+        "show",
+        "find",
+        "search",
+        "please",
+        "could",
+        "would",
+        "should",
+        "there",
+        "them",
+        "they",
+        "then",
+        "than",
+        "also",
+        "only",
+        "just",
+        "more",
+        "less",
+        "most",
+        "least",
+        "info",
+        "information",
         "employee",
         "employees",
+        "profile",
+        "profiles",
+        "project",
+        "projects",
+        "skill",
+        "skills",
+        "certification",
+        "certifications",
+        "experience",
     }
+    tokens = re.findall(r"[a-z0-9]+", _normalize_for_match(text))
     out: list[str] = []
     seen: set[str] = set()
     for token in tokens:
-        if len(token) < 3 or token in stop:
+        if len(token) < 3:
+            continue
+        if token in stopwords:
             continue
         if token in seen:
             continue
@@ -822,210 +835,51 @@ def _extract_query_name_tokens(query: str) -> list[str]:
     return out
 
 
-def _match_employees_for_profile_query(
-    structured_facts_obj: dict[str, object],
-    query: str,
-) -> list[dict[str, object]]:
-    raw_employees = structured_facts_obj.get("employees")
-    if not isinstance(raw_employees, list):
-        return []
+def _build_grounding_blob(structured_facts_blob: str, docs: list[LCDocument]) -> str:
+    parts: list[str] = []
+    if structured_facts_blob:
+        parts.append(str(structured_facts_blob))
 
-    tokens = _extract_query_name_tokens(query)
-    if not tokens:
-        return []
+    for doc in docs:
+        parts.append(str(doc.page_content or ""))
+        metadata = doc.metadata or {}
+        for key in ("name", "job_title", "company_name", "client_name", "project_name", "certification_name"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                parts.append(value.strip())
+        certifications = metadata.get("certifications")
+        if isinstance(certifications, list):
+            for cert in certifications:
+                cert_text = str(cert or "").strip()
+                if cert_text:
+                    parts.append(cert_text)
 
-    matches: list[dict[str, object]] = []
-    for item in raw_employees:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name") or "").strip()
-        if not name:
-            continue
-        name_norm = _normalize_for_match(name)
-        name_parts = [p for p in re.findall(r"[a-z0-9]+", name_norm) if len(p) >= 3]
-        if any(token in name_parts or _contains_word(name_norm, token) for token in tokens):
-            matches.append(item)
-    return matches
+    return _normalize_for_match(" ".join(parts))
 
 
-def _build_employee_profile_answer(matches: list[dict[str, object]]) -> str:
-    lines: list[str] = []
-    for row in matches[:3]:
-        name = str(row.get("name") or "").strip()
-        if not name:
-            continue
-        project_count = int(row.get("project_count") or 0)
-        experience_count = int(row.get("experience_count") or 0)
-        companies = [str(c).strip() for c in (row.get("companies") or []) if str(c).strip()]
-        certifications = [str(c).strip() for c in (row.get("certifications") or []) if str(c).strip()]
-        projects_raw = row.get("projects") or []
-        project_names: list[str] = []
-        if isinstance(projects_raw, list):
-            for p in projects_raw:
-                if not isinstance(p, dict):
-                    continue
-                p_name = str(p.get("project_name") or "").strip()
-                if p_name:
-                    project_names.append(p_name)
-
-        role = ""
-        experience_raw = row.get("experience") or []
-        if isinstance(experience_raw, list):
-            for exp in experience_raw:
-                if not isinstance(exp, dict):
-                    continue
-                role_candidate = str(exp.get("role") or "").strip()
-                if role_candidate:
-                    role = role_candidate
-                    break
-
-        lines.append(f"{name}:")
-        if role:
-            lines.append(f"- role: {role}")
-        lines.append(f"- experience entries: {experience_count}")
-        lines.append(f"- project count: {project_count}")
-        if companies:
-            lines.append(f"- companies: {', '.join(companies[:5])}")
-        if certifications:
-            lines.append(f"- certifications: {', '.join(certifications[:8])}")
-        if project_names:
-            lines.append(f"- projects: {', '.join(project_names[:6])}")
-
-    if not lines:
-        return "I don't have that information."
-    return "\n".join(lines)
-
-
-def _try_grounded_profile_answer(query: str, structured_facts_blob: str) -> str | None:
-    if not _is_employee_profile_query(query):
-        return None
-
-    facts = _parse_structured_facts_blob(structured_facts_blob)
-    matches = _match_employees_for_profile_query(facts, query)
-    if not matches:
-        return "I don't have that information."
-    return _build_employee_profile_answer(matches)
-
-
-def _is_experience_ranking_query(query: str) -> bool:
-    q = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", _normalize_for_match(query))).strip()
-    if not q:
+def _is_answer_grounded(answer: str, structured_facts_blob: str, docs: list[LCDocument]) -> bool:
+    normalized_answer = _normalize_for_match(answer)
+    if not normalized_answer:
         return False
-    markers = (
-        "most experience",
-        "most experienced",
-        "highest experience",
-        "max experience",
-        "least experience",
-        "lowest experience",
-        "minimum experience",
-        "fewest experience",
-        "who has experience",
-    )
-    return any(marker in q for marker in markers)
+    if _normalize_for_match(NO_INFO_REPLY) in normalized_answer:
+        return True
+    if "timed out" in normalized_answer:
+        return True
 
-
-def _try_grounded_experience_ranking_answer(query: str, structured_facts_blob: str) -> str | None:
-    if not _is_experience_ranking_query(query):
-        return None
-
-    q = _normalize_for_match(query)
-    least_mode = any(k in q for k in ("least experience", "lowest experience", "minimum experience", "fewest experience"))
-    facts = _parse_structured_facts_blob(structured_facts_blob)
-    raw_employees = facts.get("employees")
-    if not isinstance(raw_employees, list) or not raw_employees:
-        return "I don't have that information."
-
-    year_candidates: list[tuple[str, int]] = []
-    count_candidates: list[tuple[str, int]] = []
-    for row in raw_employees:
-        if not isinstance(row, dict):
-            continue
-        name = str(row.get("name") or "").strip()
-        if not name:
-            continue
-        years = _as_int_or_none(row.get("experience_years"))
-        count = _as_int_or_none(row.get("experience_count"))
-        if years is not None:
-            year_candidates.append((name, years))
-        if count is not None:
-            count_candidates.append((name, count))
-
-    use_years = len(year_candidates) > 0
-    candidates = year_candidates if use_years else count_candidates
-    if not candidates:
-        return "I don't have that information."
-
-    target_value = min(v for _, v in candidates) if least_mode else max(v for _, v in candidates)
-    matched_names = [name for name, value in candidates if value == target_value]
-    matched_names = sorted(_dedupe_keep_order(matched_names), key=_normalize_for_match)
-    if not matched_names:
-        return "I don't have that information."
-
-    direction = "least" if least_mode else "most"
-    if use_years:
-        if len(matched_names) == 1:
-            return f"{matched_names[0]} has the {direction} experience with {target_value} years."
-        return f"Tie for {direction} experience: {', '.join(matched_names)} ({target_value} years each)."
-
-    # Fallback metric when total years are not available in context.
-    if len(matched_names) == 1:
-        return (
-            f"Based on indexed experience entries, {matched_names[0]} has the {direction} experience "
-            f"({target_value} entries)."
-        )
-    return (
-        f"Based on indexed experience entries, tie for {direction} experience: "
-        f"{', '.join(matched_names)} ({target_value} entries each)."
-    )
-
-
-def _is_directory_listing_query(query: str) -> bool:
-    q = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", _normalize_for_match(query))).strip()
-    if not q:
+    answer_tokens = _signal_tokens(normalized_answer)
+    if not answer_tokens:
         return False
-    markers = (
-        "who are our employees",
-        "who are the employees",
-        "list employees",
-        "all employees",
-        "show employees",
-        "employee directory",
-        "team directory",
-        "list team",
-        "team members",
-        "everyone",
-        "our employees",
-    )
-    return any(marker in q for marker in markers)
 
+    evidence_blob = _build_grounding_blob(structured_facts_blob, docs)
+    if not evidence_blob:
+        return False
 
-def _try_grounded_directory_answer(query: str, structured_facts_blob: str) -> str | None:
-    if not _is_directory_listing_query(query):
-        return None
+    matched = [token for token in answer_tokens if _contains_word(evidence_blob, token)]
+    if not matched:
+        return False
 
-    facts = _parse_structured_facts_blob(structured_facts_blob)
-    raw_employees = facts.get("employees")
-    if not isinstance(raw_employees, list) or not raw_employees:
-        return "I don't have that information."
-
-    names = sorted(
-        {
-            str(item.get("name") or "").strip()
-            for item in raw_employees
-            if isinstance(item, dict) and str(item.get("name") or "").strip()
-        },
-        key=_normalize_for_match,
-    )
-    if not names:
-        return "I don't have that information."
-
-    total = len(names)
-    preview = names[:12]
-    answer = f"We currently have {total} employee(s) in the indexed directory: {', '.join(preview)}."
-    if total > len(preview):
-        answer += f" ...and {total - len(preview)} more."
-    return answer
+    coverage = len(matched) / len(answer_tokens)
+    return coverage >= 0.45 or (coverage >= 0.30 and any(len(token) >= 5 for token in matched))
 
 
 def build_chain():
@@ -1613,32 +1467,19 @@ Context:
         docs = _retrieve_union(retrieval_queries)
         if not docs:
             docs = retriever.invoke(standalone_query)
+        if not docs:
+            return {
+                "answer": NO_INFO_REPLY,
+                "context": [],
+            }
         structured_facts = _build_structured_facts(docs, query_text=standalone_query)
-        grounded_directory_answer = _try_grounded_directory_answer(standalone_query, structured_facts)
-        if grounded_directory_answer is not None:
-            return {
-                "answer": grounded_directory_answer,
-                "context": docs,
-            }
-        grounded_experience_answer = _try_grounded_experience_ranking_answer(standalone_query, structured_facts)
-        if grounded_experience_answer is not None:
-            return {
-                "answer": grounded_experience_answer,
-                "context": docs,
-            }
-        grounded_profile_answer = _try_grounded_profile_answer(standalone_query, structured_facts)
-        if grounded_profile_answer is not None:
-            return {
-                "answer": grounded_profile_answer,
-                "context": docs,
-            }
         grounded_evidence_obj = _select_llm_first_evidence(standalone_query, docs)
         if (
             str(grounded_evidence_obj.get("query_type") or "").strip().lower() == "category_filter"
             and not grounded_evidence_obj.get("selected_rows")
         ):
             return {
-                "answer": "I don't have that information.",
+                "answer": NO_INFO_REPLY,
                 "context": docs,
             }
         recent_history_blob = _recent_history_blob(chat_history)
@@ -1653,6 +1494,8 @@ Context:
                 "grounded_evidence": json.dumps(grounded_evidence_obj, ensure_ascii=False, indent=2),
             },
         )
+        if not _is_answer_grounded(str(answer or ""), structured_facts, docs):
+            answer = NO_INFO_REPLY
         return {
             "answer": answer,
             "context": docs,
