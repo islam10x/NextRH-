@@ -36,6 +36,18 @@ def _normalize_for_match(value: str) -> str:
     return text
 
 
+def _as_int_or_none(value: object) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except Exception:
+        return None
+
+
 def _token_variants(token: str) -> list[str]:
     base = _normalize_for_match(token)
     if not base:
@@ -170,6 +182,7 @@ def _extract_directory_entries(doc: LCDocument) -> list[dict[str, object]]:
                     "role": str(item.get("role") or "").strip(),
                     "experience_entries": int(item.get("experience_entries") or 0),
                     "project_count": int(item.get("project_count") or 0),
+                    "experience_years": _as_int_or_none(item.get("experience_years")),
                     "companies": [str(c).strip() for c in (item.get("companies") or []) if str(c).strip()],
                 }
             )
@@ -194,9 +207,14 @@ def _extract_directory_entries(doc: LCDocument) -> list[dict[str, object]]:
             "role": "",
             "experience_entries": 0,
             "project_count": 0,
+            "experience_years": None,
             "companies": [],
         }
         for token in parts[1:]:
+            if "=" not in token and "experience_years~" in token:
+                _, value = token.split("experience_years~", 1)
+                parsed["experience_years"] = _as_int_or_none(value)
+                continue
             if "=" not in token:
                 continue
             key, value = token.split("=", 1)
@@ -210,6 +228,8 @@ def _extract_directory_entries(doc: LCDocument) -> list[dict[str, object]]:
                 parsed["experience_entries"] = int(value or 0)
             elif key == "project_count":
                 parsed["project_count"] = int(value or 0)
+            elif key == "experience_years":
+                parsed["experience_years"] = _as_int_or_none(value)
             elif key == "companies":
                 parsed["companies"] = [c.strip() for c in value.split(";") if c.strip()]
         entries.append(parsed)
@@ -532,6 +552,7 @@ def _build_structured_facts(
         lambda: {
             "project_count": None,
             "experience_count": None,
+            "experience_years": None,
             "companies": set(),
             "projects": {},
             "experience": {},
@@ -552,6 +573,9 @@ def _build_structured_facts(
             bucket = employees[name]
             bucket["project_count"] = int(row.get("project_count") or 0)
             bucket["experience_count"] = int(row.get("experience_entries") or 0)
+            years_value = _as_int_or_none(row.get("experience_years"))
+            if years_value is not None:
+                bucket["experience_years"] = years_value
             for company in row.get("companies") or []:
                 if str(company).strip():
                     bucket["companies"].add(str(company).strip())
@@ -630,6 +654,7 @@ def _build_structured_facts(
         )
 
     project_ranking: list[tuple[str, int]] = []
+    experience_years_ranking: list[tuple[str, int]] = []
     employee_rows: list[dict[str, object]] = []
     company_groups: dict[str, dict[str, object]] = {}
     employee_search_blobs: dict[str, str] = {}
@@ -646,6 +671,7 @@ def _build_structured_facts(
         experience_count_value = bucket["experience_count"]
         if experience_count_value is None:
             experience_count_value = len(experience)
+        experience_years_value = _as_int_or_none(bucket.get("experience_years"))
 
         companies = sorted(c for c in bucket["companies"] if c)
         certifications = sorted(bucket["certifications"], key=_normalize_for_match)
@@ -659,11 +685,14 @@ def _build_structured_facts(
             company_groups[key]["employees"].add(name)
 
         project_ranking.append((name, int(project_count_value or 0)))
+        if experience_years_value is not None:
+            experience_years_ranking.append((name, int(experience_years_value)))
         employee_rows.append(
             {
                 "name": name,
                 "project_count": int(project_count_value or 0),
                 "experience_count": int(experience_count_value or 0),
+                "experience_years": experience_years_value,
                 "companies": companies,
                 "projects": projects,
                 "experience": experience,
@@ -686,6 +715,7 @@ def _build_structured_facts(
         employee_search_blobs[name] = _normalize_for_match(" ".join(blob_parts))
 
     project_ranking.sort(key=lambda item: item[1], reverse=True)
+    experience_years_ranking.sort(key=lambda item: item[1], reverse=True)
 
     payload = {
         "total_employees": total_employees,
@@ -703,6 +733,9 @@ def _build_structured_facts(
         ],
         "project_count_ranking": [
             {"name": name, "project_count": count} for name, count in project_ranking
+        ],
+        "experience_years_ranking": [
+            {"name": name, "experience_years": count} for name, count in experience_years_ranking
         ],
     }
     query_norm = _normalize_for_match(query_text)
@@ -872,6 +905,127 @@ def _try_grounded_profile_answer(query: str, structured_facts_blob: str) -> str 
     if not matches:
         return "I don't have that information."
     return _build_employee_profile_answer(matches)
+
+
+def _is_experience_ranking_query(query: str) -> bool:
+    q = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", _normalize_for_match(query))).strip()
+    if not q:
+        return False
+    markers = (
+        "most experience",
+        "most experienced",
+        "highest experience",
+        "max experience",
+        "least experience",
+        "lowest experience",
+        "minimum experience",
+        "fewest experience",
+        "who has experience",
+    )
+    return any(marker in q for marker in markers)
+
+
+def _try_grounded_experience_ranking_answer(query: str, structured_facts_blob: str) -> str | None:
+    if not _is_experience_ranking_query(query):
+        return None
+
+    q = _normalize_for_match(query)
+    least_mode = any(k in q for k in ("least experience", "lowest experience", "minimum experience", "fewest experience"))
+    facts = _parse_structured_facts_blob(structured_facts_blob)
+    raw_employees = facts.get("employees")
+    if not isinstance(raw_employees, list) or not raw_employees:
+        return "I don't have that information."
+
+    year_candidates: list[tuple[str, int]] = []
+    count_candidates: list[tuple[str, int]] = []
+    for row in raw_employees:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        years = _as_int_or_none(row.get("experience_years"))
+        count = _as_int_or_none(row.get("experience_count"))
+        if years is not None:
+            year_candidates.append((name, years))
+        if count is not None:
+            count_candidates.append((name, count))
+
+    use_years = len(year_candidates) > 0
+    candidates = year_candidates if use_years else count_candidates
+    if not candidates:
+        return "I don't have that information."
+
+    target_value = min(v for _, v in candidates) if least_mode else max(v for _, v in candidates)
+    matched_names = [name for name, value in candidates if value == target_value]
+    matched_names = sorted(_dedupe_keep_order(matched_names), key=_normalize_for_match)
+    if not matched_names:
+        return "I don't have that information."
+
+    direction = "least" if least_mode else "most"
+    if use_years:
+        if len(matched_names) == 1:
+            return f"{matched_names[0]} has the {direction} experience with {target_value} years."
+        return f"Tie for {direction} experience: {', '.join(matched_names)} ({target_value} years each)."
+
+    # Fallback metric when total years are not available in context.
+    if len(matched_names) == 1:
+        return (
+            f"Based on indexed experience entries, {matched_names[0]} has the {direction} experience "
+            f"({target_value} entries)."
+        )
+    return (
+        f"Based on indexed experience entries, tie for {direction} experience: "
+        f"{', '.join(matched_names)} ({target_value} entries each)."
+    )
+
+
+def _is_directory_listing_query(query: str) -> bool:
+    q = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", _normalize_for_match(query))).strip()
+    if not q:
+        return False
+    markers = (
+        "who are our employees",
+        "who are the employees",
+        "list employees",
+        "all employees",
+        "show employees",
+        "employee directory",
+        "team directory",
+        "list team",
+        "team members",
+        "everyone",
+        "our employees",
+    )
+    return any(marker in q for marker in markers)
+
+
+def _try_grounded_directory_answer(query: str, structured_facts_blob: str) -> str | None:
+    if not _is_directory_listing_query(query):
+        return None
+
+    facts = _parse_structured_facts_blob(structured_facts_blob)
+    raw_employees = facts.get("employees")
+    if not isinstance(raw_employees, list) or not raw_employees:
+        return "I don't have that information."
+
+    names = sorted(
+        {
+            str(item.get("name") or "").strip()
+            for item in raw_employees
+            if isinstance(item, dict) and str(item.get("name") or "").strip()
+        },
+        key=_normalize_for_match,
+    )
+    if not names:
+        return "I don't have that information."
+
+    total = len(names)
+    preview = names[:12]
+    answer = f"We currently have {total} employee(s) in the indexed directory: {', '.join(preview)}."
+    if total > len(preview):
+        answer += f" ...and {total - len(preview)} more."
+    return answer
 
 
 def build_chain():
@@ -1460,6 +1614,18 @@ Context:
         if not docs:
             docs = retriever.invoke(standalone_query)
         structured_facts = _build_structured_facts(docs, query_text=standalone_query)
+        grounded_directory_answer = _try_grounded_directory_answer(standalone_query, structured_facts)
+        if grounded_directory_answer is not None:
+            return {
+                "answer": grounded_directory_answer,
+                "context": docs,
+            }
+        grounded_experience_answer = _try_grounded_experience_ranking_answer(standalone_query, structured_facts)
+        if grounded_experience_answer is not None:
+            return {
+                "answer": grounded_experience_answer,
+                "context": docs,
+            }
         grounded_profile_answer = _try_grounded_profile_answer(standalone_query, structured_facts)
         if grounded_profile_answer is not None:
             return {
