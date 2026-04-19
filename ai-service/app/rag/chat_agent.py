@@ -1423,33 +1423,16 @@ Rules:
         [
             (
                 "system",
-                """You are a Bid Manager assistant with access to a company employee database.
+                """You are a helpful employee database assistant. Answer questions using ONLY the data provided below in StructuredFacts and Context. Do not use outside knowledge.
 
-DATA SOURCES (in priority order):
-1. StructuredFacts — JSON with employee profiles, projects, experience, certifications, education, company history, and rankings. This is your PRIMARY and ONLY source of truth.
-2. Context — Raw document chunks for additional detail.
-
-CRITICAL:
-- You MUST ONLY use data from StructuredFacts and Context. NEVER use your own training knowledge.
-- When the user mentions a person's name, ONLY discuss that person as they appear in StructuredFacts. Do NOT use your general knowledge about anyone with a similar name.
-- If StructuredFacts has data about the person, answer from that data ONLY. If not, say: "I don't have that information."
-
-RULES:
-- Answer ONLY what the user asked. Be concise and direct.
-- Do NOT volunteer extra details, full lists, or background information unless the user explicitly asks.
-- You CAN reason, analyze, compare, rank, count, filter, and recommend based on the provided data.
-- If insufficient data exists to answer, say exactly: "I don't have that information."
-- Respect query constraints exactly ("other than", "except", "least", "most", "all").
-- Resolve minor name spelling mistakes using StructuredFacts employee names when unambiguous.
-- Stay consistent with RecentChatHistory unless new facts clearly change the answer.
-- For counts, use total_employees from StructuredFacts.
-- For rankings/comparisons, use the ranking arrays in StructuredFacts.
-- For greetings (hello, hi, hey), respond politely and briefly explain you can help with employee data queries.
+If the answer is in StructuredFacts or Context, provide it concisely.
+If the answer is NOT in the data below, reply: "I don't have that information."
+Answer only what was asked. Do not add extra details unless requested.
 
 RecentChatHistory:
 {recent_chat_history}
 
-StandaloneQuery:
+Question:
 {standalone_query}
 
 StructuredFacts:
@@ -1481,9 +1464,25 @@ Context:
                 return "The language model request timed out. Please try again."
             raise
 
+    _GREETING_WORDS = {"hello", "hi", "hey", "greetings", "bonjour", "salut", "yo", "sup"}
+    _GREETING_REPLY = (
+        "Hello! I'm your employee database assistant. "
+        "I can help you find information about employees, their skills, "
+        "certifications, projects, and experience. What would you like to know?"
+    )
+
     def _invoke(inputs: dict) -> dict:
         user_input = str(inputs.get("input") or "").strip()
         chat_history = inputs.get("chat_history", []) or []
+
+        # Handle greetings directly — no need for retrieval + LLM.
+        input_norm = _normalize_for_match(user_input)
+        input_words = set(input_norm.split())
+        if input_words and input_words.issubset(_GREETING_WORDS | {"", "there", "everyone", "all"}):
+            return {
+                "answer": _GREETING_REPLY,
+                "context": [],
+            }
 
         standalone_query, retrieval_queries = _plan_llm_first_queries(user_input, chat_history)
         docs = _retrieve_union(retrieval_queries)
