@@ -1320,99 +1320,6 @@ Rules:
         except Exception:
             return fallback_query, fallback_queries[:3]
 
-    llm_first_evidence_selector_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """Select explicit evidence rows that directly support answering the query.
-Return strict JSON only:
-{"query_type":"category_filter|listing|other","selected_evidence_ids":["E1","E2"],"notes":"..."}
-Rules:
-- Use only ids from EvidenceCatalog.
-- Set query_type=category_filter when the user asks membership/filter/category/comparison across people
-  (examples: who has worked for banks, healthcare organizations, telecom, cybersecurity).
-- For category_filter, be conservative: select only rows with direct lexical evidence for the target category.
-- Do not infer category from unrelated organizations; if uncertain, select no rows.
-- Set query_type=listing when the user asks to list, enumerate, or summarize all employees or the workforce
-  (examples: who are the employees, list all employees, how many employees do we have, show me the team).
-  For listing queries, set selected_evidence_ids=[].
-- For non-category, non-listing queries, set query_type=other and selected_evidence_ids=[].""",
-            ),
-            ("human", "StandaloneQuery:\n{standalone_query}\n\nEvidenceCatalog:\n{evidence_catalog}"),
-        ]
-    )
-
-    def _select_llm_first_evidence(standalone_query: str, docs: list[LCDocument]) -> dict[str, object]:
-        fallback = {
-            "query_type": "other",
-            "selected_rows": [],
-            "notes": "",
-        }
-        candidates = _build_evidence_rows(docs)
-        if not candidates:
-            return fallback
-
-        catalog_lines: list[str] = []
-        for row in candidates:
-            text = str(row.get("evidence_text") or "")
-            if len(text) > 220:
-                text = f"{text[:220]}..."
-            catalog_lines.append(
-                " | ".join(
-                    [
-                        str(row.get("id") or ""),
-                        f"employee={row.get('employee_name') or ''}",
-                        f"type={row.get('evidence_type') or ''}",
-                        f"entity={row.get('entity') or ''}",
-                        f"text={text}",
-                    ]
-                )
-            )
-        evidence_catalog = "\n".join(catalog_lines)
-        id_to_row = {str(row.get("id") or ""): row for row in candidates}
-
-        try:
-            messages = llm_first_evidence_selector_prompt.format_messages(
-                standalone_query=standalone_query,
-                evidence_catalog=evidence_catalog,
-            )
-            raw = llm.invoke(messages)
-            obj = parse_json_object(str(getattr(raw, "content", "") or "").strip()) or {}
-            query_type = str(obj.get("query_type") or "other").strip().lower()
-            if query_type not in {"category_filter", "listing", "other"}:
-                query_type = "other"
-
-            selected_ids_raw = obj.get("selected_evidence_ids")
-            selected_ids: list[str] = []
-            if isinstance(selected_ids_raw, list):
-                for item in selected_ids_raw:
-                    row_id = str(item or "").strip().upper()
-                    if row_id in id_to_row:
-                        selected_ids.append(row_id)
-            selected_ids = _dedupe_keep_order(selected_ids)
-
-            selected_rows: list[dict[str, str]] = []
-            for row_id in selected_ids:
-                row = id_to_row.get(row_id)
-                if not row:
-                    continue
-                selected_rows.append(
-                    {
-                        "employee_name": str(row.get("employee_name") or "").strip(),
-                        "evidence_type": str(row.get("evidence_type") or "").strip(),
-                        "entity": str(row.get("entity") or "").strip(),
-                        "evidence_text": str(row.get("evidence_text") or "").strip(),
-                    }
-                )
-
-            return {
-                "query_type": query_type,
-                "selected_rows": selected_rows,
-                "notes": str(obj.get("notes") or "").strip(),
-            }
-        except Exception:
-            return fallback
-
     def _recent_history_blob(chat_history: list) -> str:
         lines: list[str] = []
         for msg in chat_history[-8:]:
@@ -1444,6 +1351,7 @@ RULES:
 - If matching data exists, answer concisely from it.
 - If no matching data exists, reply exactly: "I don't have that information."
 - Answer only what was asked. Keep it short.
+- For greetings or small talk, respond briefly and explain you can help with employee data.
 
 Question: {standalone_query}""",
             ),
@@ -1480,15 +1388,6 @@ Question: {standalone_query}""",
     def _invoke(inputs: dict) -> dict:
         user_input = str(inputs.get("input") or "").strip()
         chat_history = inputs.get("chat_history", []) or []
-
-        # Handle greetings directly — no need for retrieval + LLM.
-        input_norm = _normalize_for_match(user_input)
-        input_words = set(input_norm.split())
-        if input_words and input_words.issubset(_GREETING_WORDS | {"", "there", "everyone", "all"}):
-            return {
-                "answer": _GREETING_REPLY,
-                "context": [],
-            }
 
         standalone_query, retrieval_queries = _plan_llm_first_queries(user_input, chat_history)
         docs = _retrieve_union(retrieval_queries)
