@@ -10,13 +10,32 @@ import {
   Max,
   ValidateNested,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 
 // ── Upload PV DTO (Team Manager uploads for an employee) ─────────────────────────
 
 export class UploadPvDto {
+  @IsOptional()
   @IsUUID()
   profileId: string;
+
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (!value) return undefined;
+    if (Array.isArray(value)) return value;
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed : [value];
+      } catch {
+        return [value];
+      }
+    }
+    return undefined;
+  })
+  @IsArray()
+  @IsUUID(undefined, { each: true })
+  profileIds?: string[];
 
   /** Existing project ID — if provided, links PV to this project */
   @IsOptional()

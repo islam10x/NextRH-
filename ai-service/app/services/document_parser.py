@@ -255,6 +255,14 @@ class DocumentParser:
             assumptions.append("Nom du formateur non identifié")
 
         result.assumptions = assumptions
+        logger.info(
+            "Training sheet regex parse: training_name=%s trainer_name=%s start_date=%s participant_count=%s assumptions=%s",
+            bool(result.training_name),
+            bool(result.trainer_name),
+            result.start_date.isoformat() if result.start_date else None,
+            result.participant_count,
+            assumptions,
+        )
         return result
 
     def parse_document(self, file_path: str, file_bytes: bytes) -> Dict[str, Any]:
@@ -277,8 +285,25 @@ class DocumentParser:
             parsed = self.parse_training_sheet(text)
             # LLM fallback for missing fields
             if self._training_needs_llm(parsed):
-                logger.info("Training sheet has missing fields — invoking LLM inference")
+                logger.info(
+                    "Training sheet parsing incomplete after regex: missing_training_name=%s missing_trainer_name=%s missing_start_date=%s — invoking LLM inference",
+                    not parsed.training_name,
+                    not parsed.trainer_name,
+                    not parsed.start_date,
+                )
                 parsed = self._llm_infer_training(text, parsed)
+            logger.info(
+                "Training sheet final parse: training_name=%s trainer_name=%s start_date=%s participant_count=%s assumptions=%s",
+                bool(parsed.training_name),
+                bool(parsed.trainer_name),
+                parsed.start_date.isoformat() if parsed.start_date else None,
+                parsed.participant_count,
+                parsed.assumptions,
+            )
+            if not parsed.trainer_name:
+                logger.warning(
+                    "Training sheet parsing finished without trainer_name; backend validation should reject this document"
+                )
         else:
             parsed = self.parse_pv(text)
             # LLM fallback for missing fields

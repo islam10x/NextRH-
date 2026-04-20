@@ -26,6 +26,7 @@ import { Upload, Trophy, Calculator, FileCheck, TrendingUp, Settings } from 'luc
 import { scoringService, LeaderboardEntry, ProjectRecord, AvailableProject } from '@/services/scoring.service';
 import { teamService } from '@/services/team.service';
 import { useAuth } from '@/contexts/AuthContext';
+import api from '@/services/api';
 
 const currentYear = new Date().getFullYear();
 
@@ -51,7 +52,7 @@ const ManagerScoringPage: React.FC = () => {
   // Upload PV state
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploadProfileId, setUploadProfileId] = useState('');
+  const [uploadProfileIds, setUploadProfileIds] = useState<string[]>([]);
   const [uploadProjectId, setUploadProjectId] = useState('');        // existing project or '__new__'
   const [uploadProjectName, setUploadProjectName] = useState('');    // new project name
   const [uploadClientName, setUploadClientName] = useState('');      // new project client
@@ -82,15 +83,43 @@ const ManagerScoringPage: React.FC = () => {
 
   const loadMembers = async () => {
     try {
-      const data = await teamService.listMyMembers();
-      setMembers(
-        data.map((m) => ({
-          userId: m.userId,
-          profileId: m.profileId,
-          name: [m.firstName, m.lastName].filter(Boolean).join(' ') || m.email,
-          email: m.email,
-        })),
-      );
+      if (user?.role === 'bid_manager') {
+        const usersResponse = await api.get<any[]>('/users');
+        const employees = usersResponse.data.filter((u) => u.role === 'employee' && u.status === 'active');
+
+        const profiles = await Promise.all(
+          employees.map(async (employee) => {
+            try {
+              const profileResponse = await api.get(`/cv/profile/${employee.user_id}`);
+              return {
+                userId: employee.user_id,
+                profileId: profileResponse.data?.profile_id || profileResponse.data?.profileId || null,
+                name: [employee.firstName, employee.lastName].filter(Boolean).join(' ') || employee.email,
+                email: employee.email,
+              };
+            } catch {
+              return {
+                userId: employee.user_id,
+                profileId: null,
+                name: [employee.firstName, employee.lastName].filter(Boolean).join(' ') || employee.email,
+                email: employee.email,
+              };
+            }
+          }),
+        );
+
+        setMembers(profiles);
+      } else {
+        const data = await teamService.listMyMembers();
+        setMembers(
+          data.map((m) => ({
+            userId: m.userId,
+            profileId: m.profileId,
+            name: [m.firstName, m.lastName].filter(Boolean).join(' ') || m.email,
+            email: m.email,
+          })),
+        );
+      }
     } catch {
       toast.error('Impossible de charger les membres');
     }
@@ -170,8 +199,8 @@ const ManagerScoringPage: React.FC = () => {
   }, [year]);
 
   const handleUploadPv = async () => {
-    if (!uploadFile || !uploadProfileId) {
-      toast.error('Veuillez sélectionner un fichier et un employé');
+    if (!uploadFile || uploadProfileIds.length === 0) {
+      toast.error('Veuillez sélectionner un fichier et au moins un employé');
       return;
     }
     if (!uploadProjectId) {
@@ -187,7 +216,7 @@ const ManagerScoringPage: React.FC = () => {
       const isNew = uploadProjectId === '__new__';
       const result = await scoringService.uploadPv(
         uploadFile,
-        uploadProfileId,
+        uploadProfileIds,
         isNew ? undefined : uploadProjectId,
         isNew ? uploadProjectName : undefined,
         isNew ? uploadClientName : undefined,
@@ -195,18 +224,15 @@ const ManagerScoringPage: React.FC = () => {
         isNew ? uploadRole : undefined,
       );
       if (result.status === 'duplicate') {
-        toast.warning(result.message || 'Document déjà importé');
+        toast.warning(result.message || 'Aucun nouvel enregistrement créé');
       } else {
-        toast.success('PV importé avec succès — recalcul du score...');
-        // Auto-recompute score for this employee
-        try {
-          await scoringService.computeScore(uploadProfileId, year);
-          await loadLeaderboard();
-        } catch { /* score will update on next manual compute */ }
+        toast.success(result.message || 'PV importé avec succès');
+        await loadLeaderboard();
       }
       setUploadOpen(false);
       setUploadFile(null);
       setUploadProjectId('');
+      setUploadProfileIds([]);
       setUploadProjectName('');
       setUploadClientName('');
     } catch (err: any) {
@@ -219,7 +245,7 @@ const ManagerScoringPage: React.FC = () => {
   const openUploadDialog = async () => {
     setUploadOpen(true);
     setUploadProjectId('');
-    setUploadProfileId('');
+    setUploadProfileIds([]);
     setProjectFilteredMembers([]);
     try {
       const projects = await scoringService.listProjects();
@@ -231,7 +257,7 @@ const ManagerScoringPage: React.FC = () => {
 
   const handleProjectChange = (projectId: string) => {
     setUploadProjectId(projectId);
-    setUploadProfileId(''); // reset employee when project changes
+    setUploadProfileIds([]); // reset selected employees when project changes
     if (projectId === '__new__') {
       setProjectFilteredMembers(members);
     } else {
@@ -243,6 +269,14 @@ const ManagerScoringPage: React.FC = () => {
         setProjectFilteredMembers([]);
       }
     }
+  };
+
+  const toggleUploadProfile = (profileId: string) => {
+    setUploadProfileIds((current) =>
+      current.includes(profileId)
+        ? current.filter((id) => id !== profileId)
+        : [...current, profileId],
+    );
   };
 
   const handleSetTarget = async () => {
@@ -290,7 +324,11 @@ const ManagerScoringPage: React.FC = () => {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Scoring Employés</h1>
-          <p className="text-muted-foreground">Évaluez et classez les membres de votre équipe</p>
+          <p className="text-muted-foreground">
+            {user?.role === 'bid_manager'
+              ? 'Évaluez et classez tous les employés.'
+              : 'Évaluez et classez les membres de votre équipe'}
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <Select value={String(year)} onValueChange={(v) => setYear(Number(v))}>
@@ -316,11 +354,13 @@ const ManagerScoringPage: React.FC = () => {
         <Button variant="outline" onClick={() => setTargetOpen(true)}>
           <FileCheck className="mr-2 h-4 w-4" /> Définir objectif certification
         </Button>
-        <Button variant="secondary" onClick={handleComputeTeam} disabled={loading}>
-          <Calculator className="mr-2 h-4 w-4" />
-          {loading ? 'Calcul en cours...' : 'Calculer les scores'}
-        </Button>
-        {(user?.role === 'bid_manager' || user?.role === 'team_manager') && (
+        {user?.role === 'team_manager' && (
+          <Button variant="secondary" onClick={handleComputeTeam} disabled={loading}>
+            <Calculator className="mr-2 h-4 w-4" />
+            {loading ? 'Calcul en cours...' : 'Calculer les scores'}
+          </Button>
+        )}
+        {user?.role === 'bid_manager' && (
           <Button variant="ghost" onClick={openWeightsDialog}>
             <Settings className="mr-2 h-4 w-4" /> Configurer les poids
           </Button>
@@ -341,8 +381,8 @@ const ManagerScoringPage: React.FC = () => {
               <CardTitle>Classement {year}</CardTitle>
               <CardDescription>
                 {user?.role === 'team_manager'
-                  ? 'Classement de votre équipe. Le percentile global indique la part de tous les employés scorés dépassés par chaque collaborateur.'
-                  : 'Classement affiché sur la portée demandée. Le percentile global indique la part de tous les employés scorés dépassés par chaque collaborateur.'}
+                  ? 'Classement de votre équipe.'
+                  : 'Classement de tous les employés.'}
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -361,7 +401,6 @@ const ManagerScoringPage: React.FC = () => {
                       <TableHead className="text-right">Trainings</TableHead>
                       <TableHead className="text-right">Format.</TableHead>
                       <TableHead className="text-right">Score Final</TableHead>
-                      <TableHead className="text-right">Percentile global</TableHead>
                       <TableHead></TableHead>
                     </TableRow>
                   </TableHeader>
@@ -386,9 +425,6 @@ const ManagerScoringPage: React.FC = () => {
                         <TableCell className="text-right">{entry.trainingScore.toFixed(1)}</TableCell>
                         <TableCell className="text-right">{(entry.formationScore ?? 0).toFixed(1)}</TableCell>
                         <TableCell className="text-right font-bold">{entry.finalScore.toFixed(1)}</TableCell>
-                        <TableCell className="text-right">
-                          {entry.percentile != null ? `${entry.percentile.toFixed(0)}%` : '—'}
-                        </TableCell>
                         <TableCell>
                           {entry.rank > 0 && (
                             <Button size="sm" variant="ghost" onClick={() => showDetail(entry.profileId, entry.employeeName)}>
@@ -412,7 +448,7 @@ const ManagerScoringPage: React.FC = () => {
           <DialogHeader>
             <DialogTitle>Importer un PV</DialogTitle>
             <DialogDescription>
-              Importez une Attestation de Bonne Exécution (PDF) pour un employé de votre équipe.
+              Importez une Attestation de Bonne Exécution (PDF) pour un ou plusieurs employés de votre équipe.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -433,25 +469,46 @@ const ManagerScoringPage: React.FC = () => {
               </Select>
             </div>
             <div>
-              <Label>Employé</Label>
-              <Select
-                value={uploadProfileId}
-                onValueChange={setUploadProfileId}
-                disabled={!uploadProjectId}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder={uploadProjectId ? 'Sélectionner un employé' : 'Choisir d\'abord un projet'} />
-                </SelectTrigger>
-                <SelectContent>
-                  {projectFilteredMembers
-                    .filter((m) => m.profileId)
-                    .map((m) => (
-                      <SelectItem key={m.profileId!} value={m.profileId!}>
-                        {m.name}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
+              <Label>Employés</Label>
+              <div className={`rounded-md border p-3 space-y-2 ${!uploadProjectId ? 'opacity-60' : ''}`}>
+                {!uploadProjectId ? (
+                  <p className="text-sm text-muted-foreground">Choisir d'abord un projet</p>
+                ) : projectFilteredMembers.filter((m) => m.profileId).length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    {uploadProjectId === '__new__'
+                      ? 'Aucun employé disponible dans votre équipe.'
+                      : 'Aucun employé de votre équipe n\'est assigné à ce projet.'}
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      {uploadProjectId === '__new__'
+                        ? 'Vous pouvez sélectionner un ou plusieurs employés de votre équipe.'
+                        : 'Pour un projet assigné, vous pouvez sélectionner uniquement les employés assignés à ce projet.'}
+                    </p>
+                    <div className="max-h-44 overflow-y-auto space-y-2 pr-1">
+                      {projectFilteredMembers
+                        .filter((m) => m.profileId)
+                        .map((m) => (
+                          <label key={m.profileId!} className="flex items-center gap-2 text-sm cursor-pointer">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4"
+                              checked={uploadProfileIds.includes(m.profileId!)}
+                              onChange={() => toggleUploadProfile(m.profileId!)}
+                            />
+                            <span>{m.name}</span>
+                          </label>
+                        ))}
+                    </div>
+                    {uploadProfileIds.length > 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        {uploadProfileIds.length} employé(s) sélectionné(s)
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
             {uploadProjectId === '__new__' && (
               <>
@@ -512,7 +569,7 @@ const ManagerScoringPage: React.FC = () => {
             <Button variant="outline" onClick={() => setUploadOpen(false)}>
               Annuler
             </Button>
-            <Button onClick={handleUploadPv} disabled={uploading || !uploadFile || !uploadProfileId || !uploadProjectId}>
+            <Button onClick={handleUploadPv} disabled={uploading || !uploadFile || uploadProfileIds.length === 0 || !uploadProjectId}>
               {uploading ? 'Import en cours...' : 'Importer'}
             </Button>
           </DialogFooter>

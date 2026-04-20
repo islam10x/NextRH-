@@ -190,7 +190,7 @@ const TrainingProjectsPage: React.FC = () => {
       if (result.status === 'duplicate') {
         toast.warning(result.message || 'Document déjà importé');
       } else {
-        toast.success('Feuille de formation importée avec succès');
+        toast.success('Feuille de formation acceptée et score recalculé');
         setFormationFile(null);
       }
     } catch (err: any) {

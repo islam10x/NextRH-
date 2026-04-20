@@ -89,13 +89,7 @@ Le **score final** est la somme pondérée des 4 sous-scores. **Aucun plafond** 
 ### Rang Équipe (`rank_in_team`)
 **Représente** la position de l'employé au sein de sa propre équipe uniquement.
 
-### Percentile (`percentile`)
-**Représente** le pourcentage d'employés qui ont un score **inférieur** à celui de cet employé. 
-
-- **67%** signifie que 67% des employés ont un score plus bas → l'employé est dans le top 33%
-- **100%** signifie que l'employé a le meilleur score (ou est seul)
-- **0%** signifie que l'employé a le score le plus bas — aucun employé n'est en dessous
-- Un percentile élevé = bonne performance relative
+> Note produit : le percentile existe encore côté backend pour le classement interne, mais il n'est plus nécessaire dans les écrans utilisateur.
 
 ---
 

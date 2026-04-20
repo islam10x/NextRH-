@@ -58,7 +58,7 @@ const EmployeeScoringPage: React.FC = () => {
       setScoreHistory(hist.filter((h) => h.scoreYear !== currentYear));
       setLeaderboard(lb);
       setTarget(tg);
-      setWeights((sc?.scoreDetails?.weights_used as ScoringWeights | undefined) ?? await scoringService.getWeights().catch(() => null));
+      setWeights(await scoringService.getWeights().catch(() => null));
     } catch {
       // Handled silently for now
     } finally {
@@ -84,8 +84,7 @@ const EmployeeScoringPage: React.FC = () => {
   };
 
   const bestScore = leaderboard.length > 0 ? leaderboard[0] : null;
-  const details = score?.scoreDetails as Record<string, any> | null;
-  const activeWeights = (details?.weights_used as ScoringWeights | undefined) || weights;
+  const activeWeights = weights;
 
   if (loading) {
     return (
@@ -124,7 +123,6 @@ const EmployeeScoringPage: React.FC = () => {
             {score?.rankGlobal ? (
               <p className="text-xs text-muted-foreground mt-1">
                 Rang #{score.rankGlobal}
-                {score.percentile != null && ` · Devant ${score.percentile.toFixed(0)}% des employés scorés`}
               </p>
             ) : (
               <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
@@ -233,15 +231,6 @@ const EmployeeScoringPage: React.FC = () => {
             <p className="font-medium">Objectif certifications</p>
             <p className="text-muted-foreground">
               {target ? `Objectif défini par le manager pour ${currentYear} : ${target.certificationTarget} certification(s).` : `Aucun objectif spécifique défini par le manager pour ${currentYear}.`}
-            </p>
-          </div>
-
-          <Separator />
-
-          <div className="space-y-2 text-sm">
-            <p className="font-medium">Percentile global</p>
-            <p className="text-muted-foreground">
-              Le percentile global indique la part des employés scorés cette année qui ont un score inférieur au vôtre. Exemple : 80% signifie que votre score dépasse celui de 80% des employés scorés.
             </p>
           </div>
         </CardContent>
@@ -390,7 +379,7 @@ const EmployeeScoringPage: React.FC = () => {
           <Card>
             <CardHeader>
               <CardTitle>Classement {currentYear}</CardTitle>
-              <CardDescription>Classement global de tous les employés scorés. Le percentile global indique la part des employés scorés que chaque collaborateur dépasse.</CardDescription>
+              <CardDescription>Classement global de tous les employés scorés.</CardDescription>
             </CardHeader>
             <CardContent>
               {leaderboard.length === 0 ? (
@@ -406,7 +395,6 @@ const EmployeeScoringPage: React.FC = () => {
                       <TableHead className="text-right">Trainings</TableHead>
                       <TableHead className="text-right">Format.</TableHead>
                       <TableHead className="text-right">Score Final</TableHead>
-                      <TableHead className="text-right">Percentile global</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -430,9 +418,6 @@ const EmployeeScoringPage: React.FC = () => {
                           <TableCell className="text-right">{entry.trainingScore.toFixed(1)}</TableCell>
                           <TableCell className="text-right">{(entry.formationScore ?? 0).toFixed(1)}</TableCell>
                           <TableCell className="text-right font-bold">{entry.finalScore.toFixed(1)}</TableCell>
-                          <TableCell className="text-right">
-                            {entry.percentile != null ? `${entry.percentile.toFixed(0)}%` : '—'}
-                          </TableCell>
                         </TableRow>
                       );
                     })}

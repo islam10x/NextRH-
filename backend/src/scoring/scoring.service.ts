@@ -19,7 +19,7 @@ import { ScoringWeight } from './entities/scoring-weight.entity';
 import { EmployeeScore } from './entities/employee-score.entity';
 import { EmployeeProfile } from '../employees/entities/employee-profile.entity';
 import { Certification } from '../certifications/entities/certification.entity';
-import { User } from '../users/entities/user.entity';
+import { User, UserRole } from '../users/entities/user.entity';
 import { TrainingSession } from '../training/training-session.entity';
 import { ProjectParticipant, ParticipantRole } from '../projects/entities/participant.entity';
 import { Project } from '../projects/entities/project.entity';
@@ -66,7 +66,7 @@ export class ScoringService {
 
   async uploadPv(
     file: Express.Multer.File,
-    profileId: string,
+    profileIds: string[],
     managerUserId: string,
     projectId?: string,
     projectName?: string,
@@ -74,20 +74,27 @@ export class ScoringService {
     complexity?: 'low' | 'medium' | 'high',
     employeeRole?: 'contributor' | 'technical_lead' | 'project_lead',
   ) {
-    // 1. Validate profile exists
-    const profile = await this.profileRepo.findOne({
-      where: { profile_id: profileId },
+    if (profileIds.length === 0) {
+      throw new BadRequestException('Aucun employé sélectionné pour cet import PV');
+    }
+
+    // 1. Validate profiles exist
+    const profiles = await this.profileRepo.find({
+      where: profileIds.map((profileId) => ({ profile_id: profileId })),
+      relations: ['user'],
     });
-    if (!profile) {
-      throw new NotFoundException(`Profil ${profileId} non trouvé`);
+    const profileMap = new Map(profiles.map((profile) => [profile.profile_id, profile]));
+    const missingProfileIds = profileIds.filter((profileId) => !profileMap.has(profileId));
+    if (missingProfileIds.length > 0) {
+      throw new NotFoundException(`Profils introuvables: ${missingProfileIds.join(', ')}`);
     }
 
     // 2. Resolve the project (existing or new)
     let resolvedProjectName: string;
     let resolvedClientName: string | null = null;
     let resolvedComplexity = complexity || 'medium';
-    let resolvedRole = employeeRole || 'contributor';
     let resolvedCompletionDate: Date | null = null;
+    const roleByProfileId = new Map<string, 'contributor' | 'technical_lead' | 'project_lead'>();
 
     if (projectId) {
       // Link to an existing project in the system
@@ -102,15 +109,41 @@ export class ScoringService {
       resolvedComplexity = (existingProject.complexity as any) || resolvedComplexity;
       resolvedCompletionDate = existingProject.endDate || null;
 
-      // Check participant role (now an enum, no string parsing needed)
-      const participant = await this.participantRepo.findOne({
-        where: {
+      const participants = await this.participantRepo.find({
+        where: profileIds.map((profileId) => ({
           project: { project_id: projectId },
           profile: { profile_id: profileId },
-        },
+        })),
+        relations: ['profile'],
       });
-      if (participant?.role) {
-        resolvedRole = employeeRole || participant.role;
+
+      const participantMap = new Map(
+        participants.map((participant) => [participant.profile.profile_id, participant]),
+      );
+
+      const invalidProfileIds = profileIds.filter((profileId) => !participantMap.has(profileId));
+      if (invalidProfileIds.length > 0) {
+        const invalidNames = invalidProfileIds.map((profileId) => {
+          const profile = profileMap.get(profileId);
+          return profile?.user
+            ? `${profile.user.firstName || ''} ${profile.user.lastName || ''}`.trim() || profile.user.email
+            : profileId;
+        });
+
+        this.logger.warn(
+          `PV upload rejected for project ${projectId}: selected employees are not assigned to the project: ${invalidNames.join(', ')}`,
+        );
+        throw new BadRequestException(
+          `Pour un projet déjà assigné, vous pouvez sélectionner uniquement les employés assignés au projet: ${invalidNames.join(', ')}`,
+        );
+      }
+
+      for (const participant of participants) {
+        const participantProfileId = participant.profile.profile_id;
+        roleByProfileId.set(
+          participantProfileId,
+          (participant.role as any) || employeeRole || 'contributor',
+        );
       }
     } else {
       // New project not in the system — name is required
@@ -121,6 +154,10 @@ export class ScoringService {
       }
       resolvedProjectName = projectName;
       resolvedClientName = clientName || null;
+
+      for (const profileId of profileIds) {
+        roleByProfileId.set(profileId, employeeRole || 'contributor');
+      }
     }
 
     // 3. Call AI service to parse the PDF (for hash + any extra data)
@@ -147,85 +184,118 @@ export class ScoringService {
       );
     }
 
-    // 4. Check for duplicate via file hash
+    // 4. Reuse or create document hash once for the whole upload
     const existingHash = await this.docHashRepo.findOne({
       where: { fileHash: parsed.file_hash },
     });
-    if (existingHash) {
-      throw new ConflictException(
-        'Ce document a déjà été importé (doublon détecté par hash)',
+
+    if (!existingHash) {
+      const docHash = this.docHashRepo.create({
+        fileHash: parsed.file_hash,
+        documentType: parsed.document_type,
+        originalFilename: file.originalname,
+        uploadedBy: managerUserId,
+      });
+      await this.docHashRepo.save(docHash);
+    } else {
+      this.logger.log(
+        `Reusing existing PV document hash ${parsed.file_hash.slice(0, 12)}... for ${profileIds.length} employee(s)`,
       );
     }
 
-    // 5. Save document hash
-    const docHash = this.docHashRepo.create({
-      fileHash: parsed.file_hash,
-      documentType: parsed.document_type,
-      originalFilename: file.originalname,
-      uploadedBy: managerUserId,
-    });
-    await this.docHashRepo.save(docHash);
-
-    // 6. Save project record with pv_verified = true
-    const savedRecord = await this.saveProjectRecord(
-      profileId,
-      {
-        ...parsed.parsed_data,
-        project_name: resolvedProjectName,
-        client_name: resolvedClientName,
-        completion_date: resolvedCompletionDate
-          ? resolvedCompletionDate.toISOString().split('T')[0]
-          : parsed.parsed_data?.completion_date || null,
-      },
-      parsed.file_hash,
-      file.originalname,
-      resolvedComplexity,
-      resolvedRole,
-      true,  // pv_verified
-      managerUserId,
-    );
-
-    // 7. Notify the employee that a PV was uploaded for them
-    const profileWithUser = await this.profileRepo.findOne({
-      where: { profile_id: profileId },
-      relations: ['user'],
-    });
-    if (profileWithUser?.user) {
-      await this.notificationsService.create({
-        userId: profileWithUser.user.user_id,
-        type: 'pv_uploaded',
-        title: 'PV importé pour votre projet',
-        message: `Un PV a été importé pour le projet "${resolvedProjectName}". Votre score sera mis à jour.`,
-        relatedEntityType: 'project_record',
-        relatedEntityId: savedRecord?.record?.record_id,
-      }).catch((err) => this.logger.warn(`Notification PV failed: ${err.message}`));
-    }
-
-    // 8. Auto-recompute score for the employee
+    // 5. Save one project record per selected employee
     const currentYear = new Date().getFullYear();
-    try {
-      await this.computeScore(profileId, currentYear);
-      this.logger.log(`Auto-recomputed score for profile ${profileId} after PV upload`);
+    const results: Array<{
+      profileId: string;
+      employeeName: string;
+      status: 'created' | 'duplicate';
+      message?: string;
+      record?: any;
+    }> = [];
 
-      // Notify score update
-      if (profileWithUser?.user) {
-        const updatedScore = await this.scoreRepo.findOne({
-          where: { profileId, scoreYear: currentYear },
-        });
-        await this.notificationsService.create({
-          userId: profileWithUser.user.user_id,
-          type: 'score_updated',
-          title: 'Score mis à jour',
-          message: `Votre score a été recalculé : ${Number(updatedScore?.finalScore ?? 0).toFixed(1)} pts.`,
-          relatedEntityType: 'employee_score',
-          relatedEntityId: updatedScore?.score_id,
-        }).catch((err) => this.logger.warn(`Notification score failed: ${err.message}`));
+    for (const profileId of profileIds) {
+      const profile = profileMap.get(profileId)!;
+      const resolvedRole = roleByProfileId.get(profileId) || employeeRole || 'contributor';
+      const savedRecord = await this.saveProjectRecord(
+        profileId,
+        {
+          ...parsed.parsed_data,
+          project_name: resolvedProjectName,
+          client_name: resolvedClientName,
+          completion_date:
+            this.formatDateForScoring(resolvedCompletionDate) || parsed.parsed_data?.completion_date || null,
+        },
+        parsed.file_hash,
+        file.originalname,
+        resolvedComplexity,
+        resolvedRole,
+        true,
+        managerUserId,
+      );
+
+      const employeeName = profile.user
+        ? `${profile.user.firstName || ''} ${profile.user.lastName || ''}`.trim() || profile.user.email
+        : profileId;
+      const resultStatus: 'created' | 'duplicate' =
+        savedRecord.status === 'duplicate' ? 'duplicate' : 'created';
+
+      results.push({
+        profileId,
+        employeeName,
+        status: resultStatus,
+        message: savedRecord.message,
+        record: savedRecord.record,
+      });
+
+      if (resultStatus !== 'created') {
+        continue;
       }
-    } catch (err) {
-      this.logger.warn(`Auto-recompute after PV upload failed: ${err.message}`);
+
+      if (profile.user) {
+        await this.notificationsService.create({
+          userId: profile.user.user_id,
+          type: 'pv_uploaded',
+          title: 'PV importé pour votre projet',
+          message: `Un PV a été importé pour le projet "${resolvedProjectName}". Votre score sera mis à jour.`,
+          relatedEntityType: 'project_record',
+          relatedEntityId: savedRecord?.record?.record_id,
+        }).catch((err) => this.logger.warn(`Notification PV failed for ${profileId}: ${err.message}`));
+      }
+
+      try {
+        await this.computeScore(profileId, currentYear);
+        this.logger.log(`Auto-recomputed score for profile ${profileId} after PV upload`);
+
+        if (profile.user) {
+          const updatedScore = await this.scoreRepo.findOne({
+            where: { profileId, scoreYear: currentYear },
+          });
+          await this.notificationsService.create({
+            userId: profile.user.user_id,
+            type: 'score_updated',
+            title: 'Score mis à jour',
+            message: `Votre score a été recalculé : ${Number(updatedScore?.finalScore ?? 0).toFixed(1)} pts.`,
+            relatedEntityType: 'employee_score',
+            relatedEntityId: updatedScore?.score_id,
+          }).catch((err) => this.logger.warn(`Notification score failed for ${profileId}: ${err.message}`));
+        }
+      } catch (err: any) {
+        this.logger.warn(`Auto-recompute after PV upload failed for ${profileId}: ${err.message}`);
+      }
     }
 
-    return savedRecord;
+    const createdCount = results.filter((result) => result.status === 'created').length;
+    const duplicateCount = results.length - createdCount;
+
+    return {
+      status: createdCount > 0 ? 'created' : 'duplicate',
+      message:
+        duplicateCount > 0
+          ? `PV importé pour ${createdCount} employé(s), ${duplicateCount} doublon(s) ignoré(s).`
+          : `PV importé pour ${createdCount} employé(s).`,
+      parsed_data: parsed.parsed_data,
+      results,
+    };
   }
 
   // ── Training Sheet Upload (Employee → own profile) ────────────────────
@@ -237,6 +307,7 @@ export class ScoringService {
     // 1. Find the employee's own profile
     const profile = await this.profileRepo.findOne({
       where: { user: { user_id: userId } },
+      relations: ['user'],
     });
     if (!profile) {
       throw new NotFoundException(
@@ -268,6 +339,26 @@ export class ScoringService {
       );
     }
 
+    if (parsed.document_type !== 'training_sheet') {
+      this.logger.warn(
+        `Training sheet upload rejected for profile ${profile.profile_id}: detected document type=${parsed.document_type}, file=${file.originalname}`,
+      );
+      throw new BadRequestException(
+        'Le document importé n\'a pas été reconnu comme une feuille de présence formateur.',
+      );
+    }
+
+    const trainerValidation = this.validateTrainingSheetTrainer(
+      parsed.parsed_data,
+      profile.user,
+    );
+    if (!trainerValidation.isValid) {
+      this.logger.warn(
+        `Training sheet rejected for profile ${profile.profile_id}: ${trainerValidation.reason}; extractedTrainer="${parsed.parsed_data?.trainer_name || 'N/A'}"; expectedEmployee="${this.getEmployeeDisplayName(profile.user)}"; file=${file.originalname}; assumptions=${JSON.stringify(parsed.parsed_data?.assumptions || [])}`,
+      );
+      throw new BadRequestException(trainerValidation.message);
+    }
+
     // 3. Check for duplicate
     const existingHash = await this.docHashRepo.findOne({
       where: { fileHash: parsed.file_hash },
@@ -288,12 +379,57 @@ export class ScoringService {
     await this.docHashRepo.save(docHash);
 
     // 5. Save training record
-    return this.saveTrainingRecord(
+    const savedRecord = await this.saveTrainingRecord(
       profile.profile_id,
       parsed.parsed_data,
       parsed.file_hash,
       file.originalname,
     );
+
+    if (savedRecord.status !== 'created') {
+      this.logger.warn(
+        `Training sheet duplicate for profile ${profile.profile_id}: ${savedRecord.message || 'duplicate detected'}`,
+      );
+      return savedRecord;
+    }
+
+    const currentYear = new Date().getFullYear();
+    try {
+      await this.computeScore(profile.profile_id, currentYear);
+      this.logger.log(
+        `Training sheet accepted for profile ${profile.profile_id}; trainer="${parsed.parsed_data?.trainer_name}"; formation score recomputed for ${currentYear}`,
+      );
+    } catch (err: any) {
+      this.logger.warn(
+        `Training sheet saved for profile ${profile.profile_id} but score recompute failed: ${err.message}`,
+      );
+    }
+
+    return savedRecord;
+  }
+
+  private formatDateForScoring(value: unknown): string | null {
+    if (!value) {
+      return null;
+    }
+
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? null : value.toISOString().split('T')[0];
+    }
+
+    if (typeof value === 'string') {
+      const trimmedValue = value.trim();
+      if (!trimmedValue) {
+        return null;
+      }
+
+      const parsedDate = new Date(trimmedValue);
+      return Number.isNaN(parsedDate.getTime())
+        ? trimmedValue
+        : parsedDate.toISOString().split('T')[0];
+    }
+
+    return null;
   }
 
   private async saveProjectRecord(
@@ -389,6 +525,9 @@ export class ScoringService {
     });
 
     if (existing) {
+      this.logger.warn(
+        `Formation en double (sémantique): ${trainingName} / ${clientName} pour profil ${profileId}`,
+      );
       return {
         status: 'duplicate',
         message: `Cette formation (${trainingName}) est déjà enregistrée`,
@@ -411,10 +550,80 @@ export class ScoringService {
     });
 
     const saved = await this.trainingRecordRepo.save(record);
+    this.logger.log(
+      `Training record created for profile ${profileId}: training="${trainingName}", trainer="${parsedData.trainer_name || 'N/A'}", startDate=${parsedData.start_date || 'N/A'}`,
+    );
     return {
       status: 'created',
       record: saved,
       parsed_data: parsedData,
+    };
+  }
+
+  private getEmployeeDisplayName(user?: User | null): string {
+    const name = [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim();
+    return name || user?.email || 'employé inconnu';
+  }
+
+  private normalizeNameTokens(value?: string | null): string[] {
+    return (value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean);
+  }
+
+  private trainerMatchesEmployee(trainerName: string, user?: User | null): boolean {
+    const trainerTokens = this.normalizeNameTokens(trainerName);
+    const employeeTokens = this.normalizeNameTokens(this.getEmployeeDisplayName(user));
+
+    if (trainerTokens.length === 0 || employeeTokens.length === 0) {
+      return false;
+    }
+
+    if (trainerTokens.join(' ') === employeeTokens.join(' ')) {
+      return true;
+    }
+
+    if (trainerTokens.length !== employeeTokens.length) {
+      return false;
+    }
+
+    return [...trainerTokens].sort().join(' ') === [...employeeTokens].sort().join(' ');
+  }
+
+  private validateTrainingSheetTrainer(parsedData: any, user?: User | null): {
+    isValid: boolean;
+    reason: string;
+    message: string;
+  } {
+    const trainerName = String(parsedData?.trainer_name || '').trim();
+    const employeeName = this.getEmployeeDisplayName(user);
+
+    if (!trainerName) {
+      return {
+        isValid: false,
+        reason: 'trainer_name missing in parsed document',
+        message:
+          'Document rejeté : le nom du formateur est introuvable dans le PDF. La feuille n\'est acceptée que si le formateur correspond à l\'employé concerné.',
+      };
+    }
+
+    if (!this.trainerMatchesEmployee(trainerName, user)) {
+      return {
+        isValid: false,
+        reason: 'trainer_name does not match employee identity',
+        message:
+          `Document rejeté : le formateur extrait ("${trainerName}") ne correspond pas à l'employé attendu ("${employeeName}").`,
+      };
+    }
+
+    return {
+      isValid: true,
+      reason: 'trainer_name matches employee identity',
+      message: 'OK',
     };
   }
 
@@ -468,15 +677,7 @@ export class ScoringService {
 
   // ── Weights ───────────────────────────────────────────────────────────
 
-  async getWeights(teamId?: string): Promise<ScoringWeight> {
-    // Try team-specific, fall back to global (team_id IS NULL)
-    if (teamId) {
-      const teamWeight = await this.weightRepo.findOne({
-        where: { teamId },
-      });
-      if (teamWeight) return teamWeight;
-    }
-
+  async getWeights(): Promise<ScoringWeight> {
     let global = await this.weightRepo.findOne({
       where: { teamId: IsNull() as any },
     });
@@ -518,7 +719,6 @@ export class ScoringService {
     certWeight: number,
     trainingWeight: number,
     formationWeight: number,
-    teamId?: string,
     updatedBy?: string,
   ) {
     // Validate: all weights must be 0-1 and sum must be ~1.0
@@ -531,9 +731,7 @@ export class ScoringService {
       throw new BadRequestException(`Weights must sum to 1.0 (got ${sum.toFixed(2)})`);
     }
 
-    let weight = teamId
-      ? await this.weightRepo.findOne({ where: { teamId } })
-      : await this.weightRepo.findOne({ where: { teamId: IsNull() as any } });
+    let weight = await this.weightRepo.findOne({ where: { teamId: IsNull() as any } });
 
     if (weight) {
       weight.projectWeight = projectWeight;
@@ -543,7 +741,7 @@ export class ScoringService {
       weight.updatedBy = updatedBy || null;
     } else {
       weight = this.weightRepo.create({
-        teamId: teamId || null,
+        teamId: null,
         projectWeight,
         certificationWeight: certWeight,
         trainingWeight,
@@ -560,13 +758,6 @@ export class ScoringService {
     });
 
     for (const score of existingScores) {
-      if (teamId) {
-        const employeeTeamId = await this.getEmployeeTeamId(score.profileId);
-        if (employeeTeamId !== teamId) {
-          continue;
-        }
-      }
-
       try {
         await this.computeScore(score.profileId, currentYear);
       } catch (err: any) {
@@ -704,8 +895,7 @@ export class ScoringService {
     const certTarget = targets?.certificationTarget ?? 2;
 
     // 5. Get weights (try team-specific, fall back to global)
-    const employeeTeamId = await this.getEmployeeTeamId(profileId);
-    const weights = await this.getWeights(employeeTeamId || undefined);
+    const weights = await this.getWeights();
 
     // 6. Build AI scoring input
     const scoringInput = {
@@ -994,17 +1184,31 @@ export class ScoringService {
     return saved;
   }
 
-  async listProjects(managerUserId: string) {
-    // Step 1: get profile IDs of the manager's team members
-    const teamRows = await this.profileRepo
-      .createQueryBuilder('ep')
-      .innerJoin('team_members', 'tm', 'tm.employee_id = ep.user_id')
-      .innerJoin('teams', 't', 't.team_id = tm.team_id')
-      .where('t.manager_id = :managerId', { managerId: managerUserId })
-      .select('ep.profile_id', 'profile_id')
-      .getRawMany();
+  async listProjects(requestUserId: string, role?: string) {
+    let profileIds: string[] = [];
 
-    const profileIds: string[] = teamRows.map((r: any) => r.profile_id);
+    if (role === UserRole.BID_MANAGER) {
+      const profileRows = await this.profileRepo
+        .createQueryBuilder('ep')
+        .innerJoin('ep.user', 'u')
+        .where('u.role = :role', { role: UserRole.EMPLOYEE })
+        .andWhere('u.status = :status', { status: 'active' })
+        .select('ep.profile_id', 'profile_id')
+        .getRawMany();
+
+      profileIds = profileRows.map((r: any) => r.profile_id);
+    } else {
+      const teamRows = await this.profileRepo
+        .createQueryBuilder('ep')
+        .innerJoin('team_members', 'tm', 'tm.employee_id = ep.user_id')
+        .innerJoin('teams', 't', 't.team_id = tm.team_id')
+        .where('t.manager_id = :managerId', { managerId: requestUserId })
+        .select('ep.profile_id', 'profile_id')
+        .getRawMany();
+
+      profileIds = teamRows.map((r: any) => r.profile_id);
+    }
+
     if (profileIds.length === 0) return [];
 
     // Step 2: fetch participants for projects that include at least one team member

@@ -133,7 +133,6 @@ const EmployeeDashboard: React.FC = () => {
             <div className="text-right">
               <p className="text-sm text-muted-foreground">Rang</p>
               <p className="text-xl font-bold">#{myScore.rankGlobal}</p>
-              {myScore.percentile != null && <p className="text-xs text-muted-foreground">Devant {Number(myScore.percentile).toFixed(0)}% des employés scorés</p>}
             </div>
           ) : (
             <div className="text-right">
