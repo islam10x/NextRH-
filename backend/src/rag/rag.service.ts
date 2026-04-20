@@ -112,6 +112,86 @@ export class RagService {
     }
 
     /**
+     * Stream a RAG chat response. Proxies the AI service NDJSON stream,
+     * intercepts the context event to build result cards, and forwards
+     * everything to the caller as NDJSON lines.
+     */
+    async *chatStream(
+        message: string,
+        sessionId: string,
+        userId?: string,
+    ): AsyncGenerator<string> {
+        const startedAt = Date.now();
+        let fullAnswer = '';
+        let contextArr: any[] = [];
+
+        try {
+            const url = `${this.aiServiceBaseUrl}/api/v1/rag/chat/stream`;
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message, session_id: sessionId }),
+            });
+
+            if (!response.ok) {
+                throw new Error(`AI stream failed: ${response.status}`);
+            }
+
+            const reader = response.body?.getReader();
+            if (!reader) throw new Error('No readable stream from AI service');
+
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed) continue;
+
+                    try {
+                        const event = JSON.parse(trimmed);
+
+                        if (event.type === 'context') {
+                            contextArr = Array.isArray(event.data) ? event.data : [];
+                            // Build result cards from context and send them first
+                            const results = this.buildResults(contextArr, message);
+                            yield JSON.stringify({ type: 'results', data: results }) + '\n';
+                        } else if (event.type === 'token') {
+                            fullAnswer += event.data || '';
+                            yield trimmed + '\n';
+                        } else if (event.type === 'replace') {
+                            fullAnswer = event.data || '';
+                            yield trimmed + '\n';
+                        } else if (event.type === 'done') {
+                            yield trimmed + '\n';
+                        }
+                    } catch {
+                        // Skip malformed lines
+                    }
+                }
+            }
+        } catch (error) {
+            this.logger.error(`Stream error: ${error.message}`);
+            yield JSON.stringify({ type: 'token', data: 'Sorry, I could not reach the AI service.' }) + '\n';
+            yield JSON.stringify({ type: 'done' }) + '\n';
+            fullAnswer = 'Sorry, I could not reach the AI service.';
+        }
+
+        // Log the query after the stream completes
+        const elapsedMs = Date.now() - startedAt;
+        const extractedEntities = this.extractEntities(contextArr);
+        const resultCount = this.resolveResultCount(contextArr, extractedEntities, []);
+        await this.safeLogQuery(userId, message, extractedEntities, resultCount, elapsedMs);
+    }
+
+    /**
      * Delete RAG vectors for a specific user (best-effort).
      */
     async deleteUserVectors(userId: string): Promise<void> {

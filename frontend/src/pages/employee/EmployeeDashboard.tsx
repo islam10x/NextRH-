@@ -119,25 +119,25 @@ const EmployeeDashboard: React.FC = () => {
           <div className="flex items-center gap-3">
             <Trophy className="h-8 w-8 text-yellow-500" />
             <div>
-              <p className="text-sm text-muted-foreground">Score Final {new Date().getFullYear()}</p>
+              <p className="text-sm text-muted-foreground">Final Score {new Date().getFullYear()}</p>
               <p className="text-3xl font-bold">{Number(myScore?.finalScore ?? 0).toFixed(1)}</p>
             </div>
           </div>
           <div className="hidden md:flex gap-6 ml-auto text-center">
-            <div><p className="text-xs text-muted-foreground">Projets</p><p className="font-semibold">{Number(myScore?.projectScore ?? 0).toFixed(1)}</p></div>
+            <div><p className="text-xs text-muted-foreground">Projects</p><p className="font-semibold">{Number(myScore?.projectScore ?? 0).toFixed(1)}</p></div>
             <div><p className="text-xs text-muted-foreground">Certif.</p><p className="font-semibold">{Number(myScore?.certificationScore ?? 0).toFixed(1)}</p></div>
             <div><p className="text-xs text-muted-foreground">Trainings</p><p className="font-semibold">{Number(myScore?.trainingScore ?? 0).toFixed(1)}</p></div>
-            <div><p className="text-xs text-muted-foreground">Formations</p><p className="font-semibold">{Number(myScore?.formationScore ?? 0).toFixed(1)}</p></div>
+            <div><p className="text-xs text-muted-foreground">Workshops</p><p className="font-semibold">{Number(myScore?.formationScore ?? 0).toFixed(1)}</p></div>
           </div>
           {myScore?.rankGlobal ? (
             <div className="text-right">
-              <p className="text-sm text-muted-foreground">Rang</p>
+              <p className="text-sm text-muted-foreground">Rank</p>
               <p className="text-xl font-bold">#{myScore.rankGlobal}</p>
-              {myScore.percentile != null && <p className="text-xs text-muted-foreground">Devant {Number(myScore.percentile).toFixed(0)}% des employés scorés</p>}
+              {myScore.percentile != null && <p className="text-xs text-muted-foreground">Ahead of {Number(myScore.percentile).toFixed(0)}% of scored employees</p>}
             </div>
           ) : (
             <div className="text-right">
-              <p className="text-sm text-muted-foreground">Rang</p>
+              <p className="text-sm text-muted-foreground">Rank</p>
               <p className="text-xs text-muted-foreground">—</p>
             </div>
           )}
@@ -268,12 +268,12 @@ const EmployeeDashboard: React.FC = () => {
               <div>
                 <CardTitle className="text-lg flex items-center gap-2">
                   <Crown className="h-5 w-5 text-yellow-500" />
-                  Classement {new Date().getFullYear()}
+                  Leaderboard {new Date().getFullYear()}
                 </CardTitle>
-                <CardDescription>Votre position parmi les employés scorés</CardDescription>
+                <CardDescription>Your position among scored employees</CardDescription>
               </div>
               <Button variant="outline" size="sm" onClick={() => navigate('/employee/scoring')}>
-                Voir détails
+                View details
               </Button>
             </div>
           </CardHeader>
@@ -296,7 +296,7 @@ const EmployeeDashboard: React.FC = () => {
                         #{entry.rank}
                       </Badge>
                       <span className={`text-sm ${isMe ? 'font-bold' : 'font-medium'}`}>
-                        {entry.employeeName}{isMe ? ' (vous)' : ''}
+                        {entry.employeeName}{isMe ? ' (you)' : ''}
                       </span>
                     </div>
                     <span className="text-sm font-semibold">{entry.finalScore.toFixed(1)} pts</span>
@@ -313,7 +313,7 @@ const EmployeeDashboard: React.FC = () => {
                     <div className="flex items-center justify-between p-2.5 rounded-lg bg-primary/10 border border-primary/20">
                       <div className="flex items-center gap-3">
                         <Badge variant="secondary">#{myEntry.rank}</Badge>
-                        <span className="text-sm font-bold">{myEntry.employeeName} (vous)</span>
+                        <span className="text-sm font-bold">{myEntry.employeeName} (you)</span>
                       </div>
                       <span className="text-sm font-semibold">{myEntry.finalScore.toFixed(1)} pts</span>
                     </div>

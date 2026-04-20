@@ -188,13 +188,13 @@ const TrainingProjectsPage: React.FC = () => {
     try {
       const result = await scoringService.uploadTrainingSheet(formationFile);
       if (result.status === 'duplicate') {
-        toast.warning(result.message || 'Document déjà importé');
+        toast.warning(result.message || 'Document already imported');
       } else {
-        toast.success('Feuille de formation importée avec succès');
+        toast.success('Training sheet imported successfully');
         setFormationFile(null);
       }
     } catch (err: any) {
-      toast.error(err?.response?.data?.message || "Erreur lors de l'import");
+      toast.error(err?.response?.data?.message || "Error during import");
     } finally {
       setUploadingFormation(false);
     }
@@ -402,13 +402,13 @@ const TrainingProjectsPage: React.FC = () => {
                   <Upload className="h-5 w-5 text-accent" />
                 </div>
                 <div className="flex-1 space-y-2">
-                  <h3 className="font-semibold text-foreground">Importer une feuille de formation (formateur)</h3>
+                  <h3 className="font-semibold text-foreground">Import a training sheet (trainer)</h3>
                   <p className="text-sm text-muted-foreground">
-                    Importez votre feuille de présence (PDF) pour les formations que vous avez dispensées aux clients. Chaque formation comptabilisée rapporte 10 points.
+                    Import your attendance sheet (PDF) for trainings you have delivered to clients. Each verified training adds 10 points to your score.
                   </p>
                   <div className="flex items-end gap-3">
                     <div className="flex-1">
-                      <Label>Fichier PDF</Label>
+                      <Label>PDF File</Label>
                       <Input
                         type="file"
                         accept=".pdf"
@@ -416,7 +416,7 @@ const TrainingProjectsPage: React.FC = () => {
                       />
                     </div>
                     <Button onClick={handleFormationUpload} disabled={uploadingFormation || !formationFile}>
-                      {uploadingFormation ? 'Import en cours...' : 'Importer'}
+                      {uploadingFormation ? 'Importing...' : 'Import'}
                     </Button>
                   </div>
                 </div>

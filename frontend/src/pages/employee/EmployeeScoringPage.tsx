@@ -11,8 +11,8 @@ import { Project } from '@/types';
 import api from '@/services/api';
 import { Separator } from '@/components/ui/separator';
 
-const complexityLabel: Record<string, string> = { low: 'Basse', medium: 'Moyenne', high: 'Haute' };
-const roleLabel: Record<string, string> = { contributor: 'Contributeur', technical_lead: 'Lead Technique', project_lead: 'Chef de projet' };
+const complexityLabel: Record<string, string> = { low: 'Low', medium: 'Medium', high: 'High' };
+const roleLabel: Record<string, string> = { contributor: 'Contributor', technical_lead: 'Technical Lead', project_lead: 'Project Lead' };
 
 const toPercent = (value?: number) => `${Math.round(Number(value || 0) * 100)}%`;
 
@@ -90,7 +90,7 @@ const EmployeeScoringPage: React.FC = () => {
   if (loading) {
     return (
       <div className="space-y-6 p-6">
-        <h1 className="text-2xl font-bold">Mon Scoring</h1>
+        <h1 className="text-2xl font-bold">My Scoring</h1>
         <div className="flex items-center justify-center p-12">
           <RefreshCw className="h-8 w-8 text-primary animate-spin" />
         </div>
@@ -102,13 +102,13 @@ const EmployeeScoringPage: React.FC = () => {
     <div className="space-y-8 p-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">Mon Scoring</h1>
-          <p className="text-muted-foreground">Consultez vos scores, classement et historique de projets/formations</p>
+          <h1 className="text-2xl font-bold">My Scoring</h1>
+          <p className="text-muted-foreground">View your scores, leaderboard, and history of projects/workshops</p>
         </div>
         <div className="flex gap-2">
           <Button onClick={handleRecompute} disabled={recomputing || loading} variant="default" size="sm">
             <RefreshCw className={`h-4 w-4 mr-2 ${recomputing ? 'animate-spin' : ''}`} />
-            Recalculer mon score
+            Recompute my score
           </Button>
         </div>
       </div>
@@ -117,25 +117,25 @@ const EmployeeScoringPage: React.FC = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4">
         <Card className="border-2 border-primary/20 flex flex-col justify-between">
           <CardHeader className="p-4 pb-2">
-            <CardDescription className="flex items-center gap-1 font-medium"><Trophy className="h-4 w-4" /> Score Final</CardDescription>
+            <CardDescription className="flex items-center gap-1 font-medium"><Trophy className="h-4 w-4" /> Final Score</CardDescription>
           </CardHeader>
           <CardContent className="p-4 pt-0">
             <div className="text-2xl lg:text-3xl font-bold">{score ? Number(score.finalScore).toFixed(1) : '0.0'}</div>
             {score?.rankGlobal ? (
               <p className="text-xs text-muted-foreground mt-1">
-                Rang #{score.rankGlobal}
-                {score.percentile != null && ` · Devant ${score.percentile.toFixed(0)}% des employés scorés`}
+                Rank #{score.rankGlobal}
+                {score.percentile != null && ` · Ahead of ${score.percentile.toFixed(0)}% of scored employees`}
               </p>
             ) : (
               <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-                <AlertCircle className="h-3 w-3" /> Pas classé
+                <AlertCircle className="h-3 w-3" /> Not ranked
               </p>
             )}
           </CardContent>
         </Card>
         <Card className="flex flex-col justify-between">
           <CardHeader className="p-4 pb-2">
-            <CardDescription className="flex items-center gap-1 font-medium"><FolderKanban className="h-4 w-4" /> Projets</CardDescription>
+            <CardDescription className="flex items-center gap-1 font-medium"><FolderKanban className="h-4 w-4" /> Projects</CardDescription>
           </CardHeader>
           <CardContent className="p-4 pt-0">
             <div className="text-xl lg:text-2xl font-semibold">{score ? Number(score.projectScore).toFixed(1) : '0.0'}</div>
@@ -159,7 +159,7 @@ const EmployeeScoringPage: React.FC = () => {
         </Card>
         <Card className="flex flex-col justify-between">
           <CardHeader className="p-4 pb-2">
-            <CardDescription className="flex items-center gap-1 font-medium"><BookOpen className="h-4 w-4" /> Formations</CardDescription>
+            <CardDescription className="flex items-center gap-1 font-medium"><BookOpen className="h-4 w-4" /> Workshops</CardDescription>
           </CardHeader>
           <CardContent className="p-4 pt-0">
             <div className="text-xl lg:text-2xl font-semibold">{score ? Number(score.formationScore).toFixed(1) : '0.0'}</div>
@@ -174,12 +174,12 @@ const EmployeeScoringPage: React.FC = () => {
           <CardContent className="flex items-center gap-4 py-4">
             <Crown className="h-6 w-6 text-yellow-500" />
             <div>
-              <p className="text-sm font-medium">Meilleur score {currentYear}</p>
+              <p className="text-sm font-medium">Best score {currentYear}</p>
               <p className="text-lg font-bold">{bestScore.employeeName} — {bestScore.finalScore.toFixed(1)} pts</p>
             </div>
             {score?.rankGlobal && (
               <div className="ml-auto text-right">
-                <p className="text-sm text-muted-foreground">Votre position</p>
+                <p className="text-sm text-muted-foreground">Your position</p>
                 <p className="text-lg font-bold">#{score.rankGlobal} / {leaderboard.length}</p>
               </div>
             )}
@@ -189,27 +189,27 @@ const EmployeeScoringPage: React.FC = () => {
 
       <Card>
         <CardHeader>
-          <CardTitle>Poids, formules et objectif</CardTitle>
+          <CardTitle>Weights, formulas and target</CardTitle>
           <CardDescription>
-            Les poids actifs et les formules utilisées pour votre scoring {currentYear}. Les projets comptés sont uniquement ceux datés dans l'année en cours.
+            Active weights and formulas used for your {currentYear} scoring. Only projects dated in the current year are counted.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
             <div>
-              <p className="text-muted-foreground">Poids Projets</p>
+              <p className="text-muted-foreground">Project Weight</p>
               <p className="font-semibold">{toPercent(activeWeights?.projectWeight)}</p>
             </div>
             <div>
-              <p className="text-muted-foreground">Poids Certifications</p>
+              <p className="text-muted-foreground">Certification Weight</p>
               <p className="font-semibold">{toPercent(activeWeights?.certificationWeight)}</p>
             </div>
             <div>
-              <p className="text-muted-foreground">Poids Trainings</p>
+              <p className="text-muted-foreground">Training Weight</p>
               <p className="font-semibold">{toPercent(activeWeights?.trainingWeight)}</p>
             </div>
             <div>
-              <p className="text-muted-foreground">Poids Formations</p>
+              <p className="text-muted-foreground">Workshop Weight</p>
               <p className="font-semibold">{toPercent(activeWeights?.formationWeight)}</p>
             </div>
           </div>
@@ -217,31 +217,31 @@ const EmployeeScoringPage: React.FC = () => {
           <Separator />
 
           <div className="space-y-2 text-sm">
-            <p className="font-medium">Formules utilisées</p>
+            <p className="font-medium">Formulas used</p>
             <div className="space-y-1 text-muted-foreground">
-              <p>Projets = Somme(10 × Complexité × Rôle × Bonus PV)</p>
-              <p>Certifications = (Nombre de certifications / Objectif annuel) × 100</p>
-              <p>Trainings = Nombre de trainings complétés × 10</p>
-              <p>Formations = Nombre de formations dispensées × 10</p>
-              <p>Score final = Poids Projets × Score Projets + Poids Certifications × Score Certifications + Poids Trainings × Score Trainings + Poids Formations × Score Formations</p>
+              <p>Projects = Sum(10 × Complexity × Role × PV Bonus)</p>
+              <p>Certifications = (Number of certifications / Annual Target) × 100</p>
+              <p>Trainings = Number of completed trainings × 10</p>
+              <p>Workshops = Number of workshops delivered × 10</p>
+              <p>Final Score = Project Weight × Project Score + Certification Weight × Certification Score + Training Weight × Training Score + Workshop Weight × Workshop Score</p>
             </div>
           </div>
 
           <Separator />
 
           <div className="space-y-2 text-sm">
-            <p className="font-medium">Objectif certifications</p>
+            <p className="font-medium">Certification Target</p>
             <p className="text-muted-foreground">
-              {target ? `Objectif défini par le manager pour ${currentYear} : ${target.certificationTarget} certification(s).` : `Aucun objectif spécifique défini par le manager pour ${currentYear}.`}
+              {target ? `Target defined by manager for ${currentYear}: ${target.certificationTarget} certification(s).` : `No specific target defined by manager for ${currentYear}.`}
             </p>
           </div>
 
           <Separator />
 
           <div className="space-y-2 text-sm">
-            <p className="font-medium">Percentile global</p>
+            <p className="font-medium">Global Percentile</p>
             <p className="text-muted-foreground">
-              Le percentile global indique la part des employés scorés cette année qui ont un score inférieur au vôtre. Exemple : 80% signifie que votre score dépasse celui de 80% des employés scorés.
+              The global percentile indicates the percentage of scored employees this year who have a lower score than yours. Example: 80% means your score is higher than 80% of scored employees.
             </p>
           </div>
         </CardContent>
@@ -250,11 +250,11 @@ const EmployeeScoringPage: React.FC = () => {
       {/* Tabs: Projects (read-only), Formations (with upload), Classement, History */}
       <Tabs defaultValue="projects">
         <TabsList>
-          <TabsTrigger value="projects"><FolderKanban className="mr-2 h-4 w-4" /> Projets ({pmProjects.length + projectRecords.length})</TabsTrigger>
-          <TabsTrigger value="formations"><BookOpen className="mr-2 h-4 w-4" /> Formations ({trainingRecords.length})</TabsTrigger>
-          <TabsTrigger value="classement"><Trophy className="mr-2 h-4 w-4" /> Classement</TabsTrigger>
+          <TabsTrigger value="projects"><FolderKanban className="mr-2 h-4 w-4" /> Projects ({pmProjects.length + projectRecords.length})</TabsTrigger>
+          <TabsTrigger value="formations"><BookOpen className="mr-2 h-4 w-4" /> Workshops ({trainingRecords.length})</TabsTrigger>
+          <TabsTrigger value="classement"><Trophy className="mr-2 h-4 w-4" /> Leaderboard</TabsTrigger>
           {scoreHistory.length > 0 && (
-            <TabsTrigger value="history"><History className="mr-2 h-4 w-4" /> Historique</TabsTrigger>
+            <TabsTrigger value="history"><History className="mr-2 h-4 w-4" /> History</TabsTrigger>
           )}
         </TabsList>
 
@@ -264,19 +264,19 @@ const EmployeeScoringPage: React.FC = () => {
             {/* PM Projects — assigned by manager */}
             <Card>
               <CardHeader>
-                <CardTitle>Projets assignés</CardTitle>
-                <CardDescription>Projets assignés par votre manager — comptent dans votre score projets</CardDescription>
+                <CardTitle>Assigned Projects</CardTitle>
+                <CardDescription>Projects assigned by your manager — count towards your project score</CardDescription>
               </CardHeader>
               <CardContent>
                 {pmProjects.length === 0 ? (
-                  <p className="text-muted-foreground text-center py-4">Aucun projet assigné</p>
+                  <p className="text-muted-foreground text-center py-4">No assigned projects</p>
                 ) : (
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Projet</TableHead>
+                        <TableHead>Project</TableHead>
                         <TableHead>Client</TableHead>
-                        <TableHead>Rôle</TableHead>
+                        <TableHead>Role</TableHead>
                         <TableHead>Dates</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -302,17 +302,17 @@ const EmployeeScoringPage: React.FC = () => {
             {projectRecords.length > 0 && (
               <Card>
                 <CardHeader>
-                  <CardTitle>Projets avec PV</CardTitle>
-                  <CardDescription>Procès-verbaux importés par votre manager — donnent un bonus de vérification (+25%)</CardDescription>
+                  <CardTitle>Projects with PV</CardTitle>
+                  <CardDescription>Handover records (PV) imported by your manager — give a verification bonus (+25%)</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Projet</TableHead>
+                        <TableHead>Project</TableHead>
                         <TableHead>Client</TableHead>
-                        <TableHead>Complexité</TableHead>
-                        <TableHead>Rôle</TableHead>
+                        <TableHead>Complexity</TableHead>
+                        <TableHead>Role</TableHead>
                         <TableHead>PV</TableHead>
                         <TableHead>Date</TableHead>
                       </TableRow>
@@ -328,8 +328,8 @@ const EmployeeScoringPage: React.FC = () => {
                           <TableCell>{roleLabel[r.employeeRole] || r.employeeRole}</TableCell>
                           <TableCell>
                             {r.pvVerified
-                              ? <Badge className="bg-green-500">Vérifié</Badge>
-                              : <Badge variant="secondary">En attente</Badge>}
+                              ? <Badge className="bg-green-500">Verified</Badge>
+                              : <Badge variant="secondary">Pending</Badge>}
                           </TableCell>
                           <TableCell>{r.completionDate || r.createdAt?.slice(0, 10) || '—'}</TableCell>
                         </TableRow>
@@ -346,20 +346,20 @@ const EmployeeScoringPage: React.FC = () => {
         <TabsContent value="formations">
           <Card>
             <CardHeader>
-              <CardTitle>Mes Formations dispensées</CardTitle>
-              <CardDescription>Formations que vous avez données aux clients. Importez vos feuilles de présence depuis la page Projets.</CardDescription>
+              <CardTitle>Workshops Delivered</CardTitle>
+              <CardDescription>Workshops you have delivered to clients. Import your attendance sheets from the Projects page.</CardDescription>
             </CardHeader>
             <CardContent>
               {trainingRecords.length === 0 ? (
-                <p className="text-muted-foreground text-center py-6">Aucune formation enregistrée</p>
+                <p className="text-muted-foreground text-center py-6">No workshops recorded</p>
               ) : (
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Formation</TableHead>
-                      <TableHead>Formateur</TableHead>
+                      <TableHead>Workshop</TableHead>
+                      <TableHead>Trainer</TableHead>
                       <TableHead>Client</TableHead>
-                      <TableHead>Lieu</TableHead>
+                      <TableHead>Location</TableHead>
                       <TableHead>Dates</TableHead>
                       <TableHead>Participants</TableHead>
                     </TableRow>
@@ -389,24 +389,24 @@ const EmployeeScoringPage: React.FC = () => {
         <TabsContent value="classement">
           <Card>
             <CardHeader>
-              <CardTitle>Classement {currentYear}</CardTitle>
-              <CardDescription>Classement global de tous les employés scorés. Le percentile global indique la part des employés scorés que chaque collaborateur dépasse.</CardDescription>
+              <CardTitle>Leaderboard {currentYear}</CardTitle>
+              <CardDescription>Global leaderboard of all scored employees. The global percentile indicates the percentage of scored employees that each collaborator outperforms.</CardDescription>
             </CardHeader>
             <CardContent>
               {leaderboard.length === 0 ? (
-                <p className="text-muted-foreground text-center py-6">Aucun classement disponible pour {currentYear}</p>
+                <p className="text-muted-foreground text-center py-6">No leaderboard available for {currentYear}</p>
               ) : (
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-16">Rang</TableHead>
-                      <TableHead>Employé</TableHead>
-                      <TableHead className="text-right">Projets</TableHead>
+                      <TableHead className="w-16">Rank</TableHead>
+                      <TableHead>Employee</TableHead>
+                      <TableHead className="text-right">Projects</TableHead>
                       <TableHead className="text-right">Certif.</TableHead>
                       <TableHead className="text-right">Trainings</TableHead>
-                      <TableHead className="text-right">Format.</TableHead>
-                      <TableHead className="text-right">Score Final</TableHead>
-                      <TableHead className="text-right">Percentile global</TableHead>
+                      <TableHead className="text-right">Workshops</TableHead>
+                      <TableHead className="text-right">Final Score</TableHead>
+                      <TableHead className="text-right">Global Percentile</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -423,7 +423,7 @@ const EmployeeScoringPage: React.FC = () => {
                             </Badge>
                           </TableCell>
                           <TableCell className={isMe ? 'font-bold' : 'font-medium'}>
-                            {entry.employeeName}{isMe ? ' (vous)' : ''}
+                            {entry.employeeName}{isMe ? ' (you)' : ''}
                           </TableCell>
                           <TableCell className="text-right">{entry.projectScore.toFixed(1)}</TableCell>
                           <TableCell className="text-right">{entry.certificationScore.toFixed(1)}</TableCell>
@@ -448,20 +448,20 @@ const EmployeeScoringPage: React.FC = () => {
           <TabsContent value="history">
             <Card>
               <CardHeader>
-                <CardTitle>Historique des scores</CardTitle>
-                <CardDescription>Évolution de vos scores au fil des années</CardDescription>
+                <CardTitle>Score History</CardTitle>
+                <CardDescription>Evolution of your scores over the years</CardDescription>
               </CardHeader>
               <CardContent>
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Année</TableHead>
-                      <TableHead className="text-right">Projets</TableHead>
+                      <TableHead>Year</TableHead>
+                      <TableHead className="text-right">Projects</TableHead>
                       <TableHead className="text-right">Certif.</TableHead>
                       <TableHead className="text-right">Trainings</TableHead>
-                      <TableHead className="text-right">Formations</TableHead>
-                      <TableHead className="text-right">Score Final</TableHead>
-                      <TableHead className="text-right">Rang</TableHead>
+                      <TableHead className="text-right">Workshops</TableHead>
+                      <TableHead className="text-right">Final Score</TableHead>
+                      <TableHead className="text-right">Rank</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>

@@ -29,16 +29,16 @@ import { useAuth } from '@/contexts/AuthContext';
 
 const currentYear = new Date().getFullYear();
 
-const complexityLabel: Record<string, string> = { low: 'Basse', medium: 'Moyenne', high: 'Haute' };
+const complexityLabel: Record<string, string> = { low: 'Low', medium: 'Medium', high: 'High' };
 const complexityColor: Record<string, string> = {
   low: 'bg-green-100 text-green-800',
   medium: 'bg-yellow-100 text-yellow-800',
   high: 'bg-red-100 text-red-800',
 };
 const roleLabel: Record<string, string> = {
-  contributor: 'Contributeur',
-  technical_lead: 'Chef de projet technique',
-  project_lead: 'Chef de projet',
+  contributor: 'Contributor',
+  technical_lead: 'Technical Lead',
+  project_lead: 'Project Lead',
 };
 
 const ManagerScoringPage: React.FC = () => {
@@ -92,7 +92,7 @@ const ManagerScoringPage: React.FC = () => {
         })),
       );
     } catch {
-      toast.error('Impossible de charger les membres');
+      toast.error('Failed to load members');
     }
   };
 
@@ -148,13 +148,13 @@ const ManagerScoringPage: React.FC = () => {
     try {
       await scoringService.updateWeights(wProject / 100, wCert / 100, wTraining / 100, wFormation / 100);
       await loadLeaderboard();
-      toast.success('Poids mis à jour');
+      toast.success('Weights updated');
       setWeightsOpen(false);
     } catch (err: any) {
       if (err?.response?.status === 403) {
         toast.error('Vous n\'êtes pas autorisé à modifier les poids');
       } else {
-        toast.error(err?.response?.data?.message || 'Erreur lors de la mise à jour des poids');
+        toast.error(err?.response?.data?.message || 'Error updating weights');
       }
     } finally {
       setSavingWeights(false);
@@ -171,15 +171,15 @@ const ManagerScoringPage: React.FC = () => {
 
   const handleUploadPv = async () => {
     if (!uploadFile || !uploadProfileId) {
-      toast.error('Veuillez sélectionner un fichier et un employé');
+      toast.error('Please select a file and an employee');
       return;
     }
     if (!uploadProjectId) {
-      toast.error('Veuillez sélectionner un projet');
+      toast.error('Please select a project');
       return;
     }
     if (uploadProjectId === '__new__' && !uploadProjectName.trim()) {
-      toast.error('Veuillez saisir le nom du projet');
+      toast.error('Please enter the project name');
       return;
     }
     setUploading(true);
@@ -195,9 +195,9 @@ const ManagerScoringPage: React.FC = () => {
         isNew ? uploadRole : undefined,
       );
       if (result.status === 'duplicate') {
-        toast.warning(result.message || 'Document déjà importé');
+        toast.warning(result.message || 'Document already imported');
       } else {
-        toast.success('PV importé avec succès — recalcul du score...');
+        toast.success('PV imported successfully — recalculating score...');
         // Auto-recompute score for this employee
         try {
           await scoringService.computeScore(uploadProfileId, year);
@@ -210,7 +210,7 @@ const ManagerScoringPage: React.FC = () => {
       setUploadProjectName('');
       setUploadClientName('');
     } catch (err: any) {
-      toast.error(err?.response?.data?.message || "Erreur lors de l'import du PV");
+      toast.error(err?.response?.data?.message || "Error importing PV");
     } finally {
       setUploading(false);
     }
@@ -250,12 +250,12 @@ const ManagerScoringPage: React.FC = () => {
     setSettingTarget(true);
     try {
       await scoringService.setTarget(targetProfileId, year, targetCertValue);
-      toast.success('Objectif certification défini');
+      toast.success('Certification target set');
       setTargetOpen(false);
       // Reload leaderboard since target change triggers score recomputation
       await loadLeaderboard();
     } catch (err: any) {
-      toast.error(err?.response?.data?.message || "Erreur lors de la définition de l'objectif");
+      toast.error(err?.response?.data?.message || "Error setting target");
     } finally {
       setSettingTarget(false);
     }
@@ -268,7 +268,7 @@ const ManagerScoringPage: React.FC = () => {
       toast.success('Scores de l\'équipe calculés');
       await loadLeaderboard();
     } catch (err: any) {
-      toast.error(err?.response?.data?.message || 'Erreur lors du calcul');
+      toast.error(err?.response?.data?.message || 'Error calculating scores');
     } finally {
       setLoading(false);
     }
@@ -281,7 +281,7 @@ const ManagerScoringPage: React.FC = () => {
       setDetailName(name);
       setDetailOpen(true);
     } catch {
-      toast.error('Impossible de charger les détails');
+      toast.error('Failed to load details');
     }
   };
 
@@ -289,8 +289,8 @@ const ManagerScoringPage: React.FC = () => {
     <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Scoring Employés</h1>
-          <p className="text-muted-foreground">Évaluez et classez les membres de votre équipe</p>
+          <h1 className="text-2xl font-bold">Employee Scoring</h1>
+          <p className="text-muted-foreground">Evaluate and rank your team members</p>
         </div>
         <div className="flex items-center gap-3">
           <Select value={String(year)} onValueChange={(v) => setYear(Number(v))}>
@@ -318,7 +318,7 @@ const ManagerScoringPage: React.FC = () => {
         </Button>
         <Button variant="secondary" onClick={handleComputeTeam} disabled={loading}>
           <Calculator className="mr-2 h-4 w-4" />
-          {loading ? 'Calcul en cours...' : 'Calculer les scores'}
+          {loading ? 'Calculating...' : 'Calculer les scores'}
         </Button>
         {(user?.role === 'bid_manager' || user?.role === 'team_manager') && (
           <Button variant="ghost" onClick={openWeightsDialog}>
@@ -338,30 +338,30 @@ const ManagerScoringPage: React.FC = () => {
         <TabsContent value="leaderboard">
           <Card>
             <CardHeader>
-              <CardTitle>Classement {year}</CardTitle>
+              <CardTitle>Leaderboard {year}</CardTitle>
               <CardDescription>
                 {user?.role === 'team_manager'
-                  ? 'Classement de votre équipe. Le percentile global indique la part de tous les employés scorés dépassés par chaque collaborateur.'
-                  : 'Classement affiché sur la portée demandée. Le percentile global indique la part de tous les employés scorés dépassés par chaque collaborateur.'}
+                  ? 'Team leaderboard. The global percentile indicates the percentage of scored employees that each collaborator outperforms.'
+                  : 'Displayed leaderboard. The global percentile indicates the percentage of scored employees that each collaborator outperforms.'}
               </CardDescription>
             </CardHeader>
             <CardContent>
               {fullTeamScores.length === 0 ? (
                 <p className="text-muted-foreground text-center py-8">
-                  Aucun membre dans l'équipe.
+                  No members in the team.
                 </p>
               ) : (
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-16">Rang</TableHead>
-                      <TableHead>Employé</TableHead>
-                      <TableHead className="text-right">Projets</TableHead>
+                      <TableHead className="w-16">Rank</TableHead>
+                      <TableHead>Employee</TableHead>
+                      <TableHead className="text-right">Projects</TableHead>
                       <TableHead className="text-right">Certif.</TableHead>
                       <TableHead className="text-right">Trainings</TableHead>
-                      <TableHead className="text-right">Format.</TableHead>
-                      <TableHead className="text-right">Score Final</TableHead>
-                      <TableHead className="text-right">Percentile global</TableHead>
+                      <TableHead className="text-right">Workshops</TableHead>
+                      <TableHead className="text-right">Final Score</TableHead>
+                      <TableHead className="text-right">Global Percentile</TableHead>
                       <TableHead></TableHead>
                     </TableRow>
                   </TableHeader>
@@ -410,17 +410,17 @@ const ManagerScoringPage: React.FC = () => {
       <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Importer un PV</DialogTitle>
+            <DialogTitle>Import PV</DialogTitle>
             <DialogDescription>
-              Importez une Attestation de Bonne Exécution (PDF) pour un employé de votre équipe.
+              Import a handover record (PV) in PDF for a team member.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label>Projet</Label>
+              <Label>Project</Label>
               <Select value={uploadProjectId} onValueChange={handleProjectChange}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Sélectionner un projet" />
+                  <SelectValue placeholder="Select a project" />
                 </SelectTrigger>
                 <SelectContent>
                   {availableProjects.map((p) => (
@@ -428,19 +428,19 @@ const ManagerScoringPage: React.FC = () => {
                       {p.projectName}{p.clientName ? ` — ${p.clientName}` : ''}
                     </SelectItem>
                   ))}
-                  <SelectItem value="__new__">➕ Nouveau projet (hors système)</SelectItem>
+                  <SelectItem value="__new__">➕ New project (outside system)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div>
-              <Label>Employé</Label>
+              <Label>Employee</Label>
               <Select
                 value={uploadProfileId}
                 onValueChange={setUploadProfileId}
                 disabled={!uploadProjectId}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder={uploadProjectId ? 'Sélectionner un employé' : 'Choisir d\'abord un projet'} />
+                  <SelectValue placeholder={uploadProjectId ? 'Select an employee' : 'Choisir d\'abord un projet'} />
                 </SelectTrigger>
                 <SelectContent>
                   {projectFilteredMembers
@@ -456,9 +456,9 @@ const ManagerScoringPage: React.FC = () => {
             {uploadProjectId === '__new__' && (
               <>
                 <div>
-                  <Label>Nom du projet</Label>
+                  <Label>Project name</Label>
                   <Input
-                    placeholder="Ex: Projet Alpha"
+                    placeholder="Ex: Project Alpha"
                     value={uploadProjectName}
                     onChange={(e) => setUploadProjectName(e.target.value)}
                   />
@@ -466,41 +466,41 @@ const ManagerScoringPage: React.FC = () => {
                 <div>
                   <Label>Client</Label>
                   <Input
-                    placeholder="Nom du client (optionnel)"
+                    placeholder="Client name (optional)"
                     value={uploadClientName}
                     onChange={(e) => setUploadClientName(e.target.value)}
                   />
                 </div>
                 <div>
-                  <Label>Complexité du projet</Label>
+                  <Label>Project complexity</Label>
                   <Select value={uploadComplexity} onValueChange={setUploadComplexity}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="low">Basse</SelectItem>
-                      <SelectItem value="medium">Moyenne</SelectItem>
-                      <SelectItem value="high">Haute</SelectItem>
+                      <SelectItem value="low">Low</SelectItem>
+                      <SelectItem value="medium">Medium</SelectItem>
+                      <SelectItem value="high">High</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <div>
-                  <Label>Rôle de l'employé</Label>
+                  <Label>Employee role</Label>
                   <Select value={uploadRole} onValueChange={setUploadRole}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="contributor">Contributeur</SelectItem>
-                      <SelectItem value="technical_lead">Lead Technique</SelectItem>
-                      <SelectItem value="project_lead">Chef de Projet</SelectItem>
+                      <SelectItem value="contributor">Contributor</SelectItem>
+                      <SelectItem value="technical_lead">Technical Lead</SelectItem>
+                      <SelectItem value="project_lead">Project Lead</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
               </>
             )}
             <div>
-              <Label>Fichier PDF</Label>
+              <Label>PDF File</Label>
               <Input
                 type="file"
                 accept=".pdf"
@@ -513,7 +513,7 @@ const ManagerScoringPage: React.FC = () => {
               Annuler
             </Button>
             <Button onClick={handleUploadPv} disabled={uploading || !uploadFile || !uploadProfileId || !uploadProjectId}>
-              {uploading ? 'Import en cours...' : 'Importer'}
+              {uploading ? 'Importing...' : 'Importer'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -523,17 +523,17 @@ const ManagerScoringPage: React.FC = () => {
       <Dialog open={targetOpen} onOpenChange={setTargetOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Objectif Certification {year}</DialogTitle>
+            <DialogTitle>Certification Target {year}</DialogTitle>
             <DialogDescription>
-              Définissez le nombre de certifications attendues pour un employé cette année.
+              Set the expected number of certifications for an employee this year.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label>Employé</Label>
+              <Label>Employee</Label>
               <Select value={targetProfileId} onValueChange={setTargetProfileId}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Sélectionner un employé" />
+                  <SelectValue placeholder="Select an employee" />
                 </SelectTrigger>
                 <SelectContent>
                   {members
@@ -547,7 +547,7 @@ const ManagerScoringPage: React.FC = () => {
               </Select>
             </div>
             <div>
-              <Label>Nombre de certifications</Label>
+              <Label>Number of certifications</Label>
               <Input
                 type="number"
                 min={0}
@@ -562,7 +562,7 @@ const ManagerScoringPage: React.FC = () => {
               Annuler
             </Button>
             <Button onClick={handleSetTarget} disabled={settingTarget || !targetProfileId}>
-              {settingTarget ? 'Enregistrement...' : 'Enregistrer'}
+              {settingTarget ? 'Saving...' : 'Enregistrer'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -572,18 +572,18 @@ const ManagerScoringPage: React.FC = () => {
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Détails projets — {detailName}</DialogTitle>
+            <DialogTitle>Project details — {detailName}</DialogTitle>
           </DialogHeader>
           {detailProjects.length === 0 ? (
-            <p className="text-muted-foreground text-center py-4">Aucun projet enregistré</p>
+            <p className="text-muted-foreground text-center py-4">No projects recorded</p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Projet</TableHead>
+                  <TableHead>Project</TableHead>
                   <TableHead>Client</TableHead>
-                  <TableHead>Complexité</TableHead>
-                  <TableHead>Rôle</TableHead>
+                  <TableHead>Complexity</TableHead>
+                  <TableHead>Role</TableHead>
                   <TableHead>PV</TableHead>
                   <TableHead>Date</TableHead>
                 </TableRow>
@@ -601,9 +601,9 @@ const ManagerScoringPage: React.FC = () => {
                     <TableCell>{roleLabel[p.employeeRole]}</TableCell>
                     <TableCell>
                       {p.pvVerified ? (
-                        <Badge className="bg-green-100 text-green-800">✓ Vérifié</Badge>
+                        <Badge className="bg-green-100 text-green-800">✓ Verified</Badge>
                       ) : (
-                        <Badge variant="secondary">Non</Badge>
+                        <Badge variant="secondary">No</Badge>
                       )}
                     </TableCell>
                     <TableCell>{p.completionDate || '—'}</TableCell>
@@ -619,37 +619,37 @@ const ManagerScoringPage: React.FC = () => {
       <Dialog open={weightsOpen} onOpenChange={setWeightsOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Configurer les poids de scoring</DialogTitle>
+            <DialogTitle>Configure scoring weights</DialogTitle>
             <DialogDescription>
-              Chaque poids représente le pourcentage du score final (ex : 35 pour les projets = 35%). La somme des poids doit être 100%.
+              Each weight represents the percentage of the final score (e.g. 35 for projects = 35%). The sum of weights must be 100%.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label>Poids Projets ({wProject}%)</Label>
+              <Label>Project Weight ({wProject}%)</Label>
               <Input type="number" min={0} max={100} step={5} value={wProject} onChange={(e) => setWProject(Number(e.target.value))} />
             </div>
             <div>
-              <Label>Poids Certifications ({wCert}%)</Label>
+              <Label>Certification Weight ({wCert}%)</Label>
               <Input type="number" min={0} max={100} step={5} value={wCert} onChange={(e) => setWCert(Number(e.target.value))} />
             </div>
             <div>
-              <Label>Poids Trainings ({wTraining}%)</Label>
+              <Label>Training Weight ({wTraining}%)</Label>
               <Input type="number" min={0} max={100} step={5} value={wTraining} onChange={(e) => setWTraining(Number(e.target.value))} />
             </div>
             <div>
-              <Label>Poids Formations ({wFormation}%)</Label>
+              <Label>Workshop Weight ({wFormation}%)</Label>
               <Input type="number" min={0} max={100} step={5} value={wFormation} onChange={(e) => setWFormation(Number(e.target.value))} />
             </div>
             <p className={`text-sm ${Math.abs(wProject + wCert + wTraining + wFormation - 100) > 1 ? 'text-red-500 font-medium' : 'text-muted-foreground'}`}>
-              Total : {wProject + wCert + wTraining + wFormation}%
-              {Math.abs(wProject + wCert + wTraining + wFormation - 100) > 1 && ' ⚠ La somme doit être 100%'}
+              Total: {wProject + wCert + wTraining + wFormation}%
+              {Math.abs(wProject + wCert + wTraining + wFormation - 100) > 1 && ' ⚠ The sum must be 100%'}
             </p>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setWeightsOpen(false)}>Annuler</Button>
+            <Button variant="outline" onClick={() => setWeightsOpen(false)}>Cancel</Button>
             <Button onClick={handleSaveWeights} disabled={savingWeights || Math.abs(wProject + wCert + wTraining + wFormation - 100) > 1}>
-              {savingWeights ? 'Enregistrement...' : 'Enregistrer'}
+              {savingWeights ? 'Saving...' : 'Enregistrer'}
             </Button>
           </DialogFooter>
         </DialogContent>

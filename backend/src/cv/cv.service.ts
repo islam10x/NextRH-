@@ -9,7 +9,7 @@ import { WorkExperience } from '../employees/entities/work-experience.entity';
 import { Education } from '../employees/entities/education.entity';
 import { Certification, CertificationStatus } from '../certifications/entities/certification.entity';
 import { Project } from '../projects/entities/project.entity';
-import { ProjectParticipant } from '../projects/entities/participant.entity';
+import { ProjectParticipant, ParticipantRole } from '../projects/entities/participant.entity';
 import { FileStorageService } from '../file-storage/file-storage.service';
 import { RagService } from '../rag/rag.service';
 import { FileValidationService } from '../file-validation/file-validation.service';
@@ -780,7 +780,7 @@ export class CvService {
                     profile: profile,
                     project: project,
                     description: projectDesc,
-                    role: this.normalizeProjectRole(projectData.role) || 'Contributor'
+                    role: this.normalizeProjectRole(projectData.role)
                 });
                 await this.participantRepository.save(participant);
                 processedProjectIds.add(project.project_id);
@@ -1504,17 +1504,18 @@ export class CvService {
         );
     }
 
-    private normalizeProjectRole(value: unknown): string | null {
-        const text = this.cleanText(value);
-        if (!text) {
-            return null;
+    private normalizeProjectRole(value: unknown): ParticipantRole {
+        const text = this.cleanText(value).toLowerCase();
+        
+        if (text.includes('tech lead') || text.includes('technical lead') || text.includes('lead tech') || text.includes('lead developer')) {
+            return ParticipantRole.TECHNICAL_LEAD;
         }
-
-        if (text.split(/\s+/).length > 6 && /[.!?]/.test(text)) {
-            return null;
+        
+        if (text.includes('project manager') || text.includes('chef de projet') || text.includes('project lead') || text.includes('scrum master')) {
+            return ParticipantRole.PROJECT_LEAD;
         }
-
-        return text;
+        
+        return ParticipantRole.CONTRIBUTOR;
     }
 
     private normalizeEducationEntry(input: {

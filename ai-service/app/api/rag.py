@@ -1,4 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from uuid import UUID
 from app.rag.etl_ingest import ingest_employee, run_ingestion, delete_employee_vectors
@@ -29,18 +30,24 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str = "default"
 
-# Global or lazy-loaded chain
-_chain = None
+# Lazy-loaded chain + stream function
+_built = None
+
+def _get_built():
+    global _built
+    if _built is None:
+        _built = build_chain()
+    return _built
 
 def get_chain():
-    global _chain
-    if _chain is None:
-        _chain = build_chain()
-    return _chain
+    return _get_built()["chain"]
+
+def get_stream_fn():
+    return _get_built()["stream"]
 
 @router.post("/chat")
 async def chat_rag(request: ChatRequest):
-    """Perform a RAG chat interaction."""
+    """Perform a RAG chat interaction (non-streaming)."""
     message = (request.message or "").strip()
     chain = get_chain()
     try:
@@ -64,3 +71,35 @@ async def chat_rag(request: ChatRequest):
                 "context": [],
             }
         raise HTTPException(status_code=500, detail=err)
+
+
+@router.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """Stream a RAG chat response as NDJSON lines.
+
+    Events:
+      {"type": "context", "data": [...]}   – retrieved docs (sent first)
+      {"type": "token",   "data": "..."}   – LLM answer chunk
+      {"type": "replace", "data": "..."}   – replaces full answer (grounding failure)
+      {"type": "done"}                     – stream finished
+    """
+    message = (request.message or "").strip()
+    stream_fn = get_stream_fn()
+
+    def _generate():
+        try:
+            yield from stream_fn(message, request.session_id)
+        except Exception as e:
+            import json
+            err = str(e or "").strip()
+            yield json.dumps({"type": "token", "data": f"Error: {err}"}) + "\n"
+            yield json.dumps({"type": "done"}) + "\n"
+
+    return StreamingResponse(
+        _generate(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

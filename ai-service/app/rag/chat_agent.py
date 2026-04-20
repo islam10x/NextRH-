@@ -1424,6 +1424,12 @@ IMPORTANT:
 - If there is truly no matching data, reply: "I don't have that information."
 - Answer only what was asked. Keep it short and factual.
 
+FORMATTING RULES:
+- Use **bold** for employee names.
+- Use bullet points (- ) when listing multiple items.
+- Keep answers concise: 2-4 sentences for simple questions, a short bullet list for multi-item answers.
+- Never dump raw JSON or internal data structures.
+
 RecentChatHistory:
 {recent_chat_history}
 
@@ -1523,11 +1529,85 @@ Context:
         history_messages_key="chat_history",
         output_messages_key="answer",
     )
-    return conversational_chain
+
+    def _stream_invoke(user_input: str, session_id: str):
+        """Sync generator yielding NDJSON lines: context first, then tokens."""
+        import json as _json
+
+        history = store[session_id]
+        chat_history = history.messages
+
+        # Greetings — no retrieval needed
+        input_norm = _normalize_for_match(user_input)
+        input_words = set(input_norm.split())
+        if input_words and input_words.issubset(_GREETING_WORDS | {"", "there", "everyone", "all"}):
+            yield _json.dumps({"type": "context", "data": []}) + "\n"
+            yield _json.dumps({"type": "token", "data": _GREETING_REPLY}) + "\n"
+            yield _json.dumps({"type": "done"}) + "\n"
+            history.add_user_message(user_input)
+            history.add_ai_message(_GREETING_REPLY)
+            return
+
+        # Retrieval
+        standalone_query, retrieval_queries = _plan_llm_first_queries(user_input, chat_history)
+        docs = _retrieve_union(retrieval_queries)
+        if not docs:
+            docs = retriever.invoke(standalone_query)
+
+        # Yield context immediately so cards appear first
+        context_data = [
+            {"content": doc.page_content, "metadata": doc.metadata}
+            for doc in docs
+        ]
+        yield _json.dumps({"type": "context", "data": context_data}) + "\n"
+
+        if not docs:
+            yield _json.dumps({"type": "token", "data": NO_INFO_REPLY}) + "\n"
+            yield _json.dumps({"type": "done"}) + "\n"
+            history.add_user_message(user_input)
+            history.add_ai_message(NO_INFO_REPLY)
+            return
+
+        structured_facts = _build_structured_facts(docs, query_text=standalone_query)
+        recent_history_blob = _recent_history_blob(chat_history)
+
+        # Stream LLM answer token-by-token
+        full_answer = ""
+        try:
+            for chunk in qa_chain_llm_first.stream({
+                "input": user_input,
+                "standalone_query": standalone_query,
+                "context": docs,
+                "structured_facts": structured_facts,
+                "recent_chat_history": recent_history_blob,
+            }):
+                token = str(chunk or "")
+                if token:
+                    full_answer += token
+                    yield _json.dumps({"type": "token", "data": token}) + "\n"
+        except Exception as exc:
+            err = str(exc or "")
+            if "timeout" in _normalize_for_match(err):
+                full_answer = "The language model request timed out. Please try again."
+            else:
+                full_answer = "An error occurred while generating the response."
+            yield _json.dumps({"type": "token", "data": full_answer}) + "\n"
+
+        # Grounding safety net
+        if full_answer and not _is_answer_grounded(full_answer, structured_facts, docs):
+            yield _json.dumps({"type": "replace", "data": NO_INFO_REPLY}) + "\n"
+            full_answer = NO_INFO_REPLY
+
+        yield _json.dumps({"type": "done"}) + "\n"
+        history.add_user_message(user_input)
+        history.add_ai_message(full_answer)
+
+    return {"chain": conversational_chain, "stream": _stream_invoke}
 
 
 def chat_loop():
-    chain = build_chain()
+    built = build_chain()
+    chain = built["chain"]
     session_id = "cli"
     print("Bid Manager ready. Type 'exit' to quit.\n")
 
