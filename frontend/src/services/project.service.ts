@@ -37,6 +37,8 @@ export const projectService = {
     technologies?: string[];
     assigneeProfileIds: string[];
     role?: string;
+    complexity?: string;
+    roles?: Record<string, string>;
   }) {
     return api.post('/projects/assign', payload);
   },

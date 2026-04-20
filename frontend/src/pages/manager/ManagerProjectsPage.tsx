@@ -5,6 +5,13 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -40,7 +47,8 @@ const ManagerProjectsPage: React.FC = () => {
   const [isAssigning, setIsAssigning] = useState(false);
   const [projectName, setProjectName] = useState('');
   const [clientName, setClientName] = useState('');
-  const [projectRole, setProjectRole] = useState('');
+  const [profileRoles, setProfileRoles] = useState<Record<string, string>>({});
+  const [projectComplexity, setProjectComplexity] = useState('medium');
   const [projectStartDate, setProjectStartDate] = useState('');
   const [projectEndDate, setProjectEndDate] = useState('');
   const [projectTechnologies, setProjectTechnologies] = useState('');
@@ -115,9 +123,20 @@ const ManagerProjectsPage: React.FC = () => {
       toast.error('This member has no profile yet');
       return;
     }
-    setSelectedProfiles((prev) =>
-      prev.includes(profileId) ? prev.filter((id) => id !== profileId) : [...prev, profileId]
-    );
+    setSelectedProfiles((prev) => {
+      if (prev.includes(profileId)) {
+        // Unselect: also remove the role entry
+        setProfileRoles((r) => {
+          const copy = { ...r };
+          delete copy[profileId];
+          return copy;
+        });
+        return prev.filter((id) => id !== profileId);
+      }
+      // Select: default role = contributor
+      setProfileRoles((r) => ({ ...r, [profileId]: 'contributor' }));
+      return [...prev, profileId];
+    });
   };
 
   const resetAssignForm = () => {
@@ -125,7 +144,8 @@ const ManagerProjectsPage: React.FC = () => {
     setAssignSearch('');
     setProjectName('');
     setClientName('');
-    setProjectRole('');
+    setProfileRoles({});
+    setProjectComplexity('medium');
     setProjectStartDate('');
     setProjectEndDate('');
     setProjectTechnologies('');
@@ -158,7 +178,8 @@ const ManagerProjectsPage: React.FC = () => {
         endDate: projectEndDate || undefined,
         technologies: technologies.length ? technologies : undefined,
         assigneeProfileIds: selectedProfiles,
-        role: projectRole.trim() || undefined,
+        complexity: projectComplexity,
+        roles: profileRoles,
       });
 
       const count = selectedProfiles.length;
@@ -220,13 +241,17 @@ const ManagerProjectsPage: React.FC = () => {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="projectRole">Role for Assignee</Label>
-                    <Input
-                      id="projectRole"
-                      placeholder="e.g., Lead Developer"
-                      value={projectRole}
-                      onChange={(e) => setProjectRole(e.target.value)}
-                    />
+                    <Label htmlFor="projectComplexity">Complexité</Label>
+                    <Select value={projectComplexity} onValueChange={setProjectComplexity}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Sélectionner la complexité" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="low">Basse</SelectItem>
+                        <SelectItem value="medium">Moyenne</SelectItem>
+                        <SelectItem value="high">Haute</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="space-y-2">
@@ -289,17 +314,36 @@ const ManagerProjectsPage: React.FC = () => {
                           const disabled = !m.profileId;
                           const checked = m.profileId ? selectedProfiles.includes(m.profileId) : false;
                           return (
-                            <label key={m.userId} className="flex items-center gap-2 text-sm cursor-pointer">
-                              <input
-                                type="checkbox"
-                                disabled={disabled}
-                                checked={checked}
-                                onChange={() => toggleSelection(m.profileId)}
-                              />
-                              <span className={disabled ? 'text-muted-foreground' : ''}>
-                                {m.name} ({m.email}) {disabled && '(no profile yet)'}
-                              </span>
-                            </label>
+                            <div key={m.userId} className="flex items-center gap-2 text-sm">
+                              <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                                <input
+                                  type="checkbox"
+                                  disabled={disabled}
+                                  checked={checked}
+                                  onChange={() => toggleSelection(m.profileId)}
+                                />
+                                <span className={`truncate ${disabled ? 'text-muted-foreground' : ''}`}>
+                                  {m.name} ({m.email}) {disabled && '(no profile yet)'}
+                                </span>
+                              </label>
+                              {checked && m.profileId && (
+                                <Select
+                                  value={profileRoles[m.profileId] || 'contributor'}
+                                  onValueChange={(v) =>
+                                    setProfileRoles((r) => ({ ...r, [m.profileId!]: v }))
+                                  }
+                                >
+                                  <SelectTrigger className="w-[160px] h-7 text-xs shrink-0">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="contributor">Contributeur</SelectItem>
+                                    <SelectItem value="technical_lead">Lead Technique</SelectItem>
+                                    <SelectItem value="project_lead">Chef de Projet</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              )}
+                            </div>
                           );
                         })
                       )}

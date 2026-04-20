@@ -3,10 +3,13 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Training, Notification } from '@/types';
-import { GraduationCap, Bell, Upload, FileText, Clock, Play, CheckCircle2, Link as LinkIcon } from 'lucide-react';
+import { GraduationCap, Bell, Upload, FileText, Clock, Play, CheckCircle2, Link as LinkIcon, Trophy, TrendingUp, FolderKanban, Award, BookOpen, Crown } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { trainingService } from '@/services/training.service';
 import { notificationService } from '@/services/notification.service';
+import { scoringService, EmployeeScore, LeaderboardEntry } from '@/services/scoring.service';
+import { Badge } from '@/components/ui/badge';
+import api from '@/services/api';
 
 const statusTone = (status?: string) => {
   if (status === 'completed') return 'bg-success/15 text-success border border-success/20';
@@ -21,6 +24,9 @@ const EmployeeDashboard: React.FC = () => {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loadingTrainings, setLoadingTrainings] = useState(false);
   const [loadingNotifications, setLoadingNotifications] = useState(false);
+  const [myScore, setMyScore] = useState<EmployeeScore | null>(null);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [myProfileId, setMyProfileId] = useState('');
 
   const notificationsToShow = notifications.slice(0, 4);
 
@@ -59,6 +65,16 @@ const EmployeeDashboard: React.FC = () => {
   useEffect(() => {
     loadTrainings();
     loadNotifications();
+    // Load score + leaderboard
+    const currentYear = new Date().getFullYear();
+    api.get('/cv/profile/me').then((res) => {
+      const pid = res.data?.profile_id || res.data?.profileId;
+      if (pid) {
+        setMyProfileId(pid);
+        scoringService.getScore(pid, currentYear).then((s) => setMyScore(s)).catch(() => {});
+        scoringService.getLeaderboard(currentYear).then((lb) => setLeaderboard(lb)).catch(() => {});
+      }
+    }).catch(() => {});
   }, [user]);
 
   useEffect(() => {
@@ -96,6 +112,37 @@ const EmployeeDashboard: React.FC = () => {
           ))}
         </div>
       </div>
+
+      {/* Score Widget — always visible, defaults to 0 */}
+      <Card className="border-2 border-primary/20 animate-fade-in cursor-pointer" onClick={() => navigate('/employee/scoring')}>
+        <CardContent className="flex items-center gap-6 pt-6 pb-4">
+          <div className="flex items-center gap-3">
+            <Trophy className="h-8 w-8 text-yellow-500" />
+            <div>
+              <p className="text-sm text-muted-foreground">Score Final {new Date().getFullYear()}</p>
+              <p className="text-3xl font-bold">{Number(myScore?.finalScore ?? 0).toFixed(1)}</p>
+            </div>
+          </div>
+          <div className="hidden md:flex gap-6 ml-auto text-center">
+            <div><p className="text-xs text-muted-foreground">Projets</p><p className="font-semibold">{Number(myScore?.projectScore ?? 0).toFixed(1)}</p></div>
+            <div><p className="text-xs text-muted-foreground">Certif.</p><p className="font-semibold">{Number(myScore?.certificationScore ?? 0).toFixed(1)}</p></div>
+            <div><p className="text-xs text-muted-foreground">Trainings</p><p className="font-semibold">{Number(myScore?.trainingScore ?? 0).toFixed(1)}</p></div>
+            <div><p className="text-xs text-muted-foreground">Formations</p><p className="font-semibold">{Number(myScore?.formationScore ?? 0).toFixed(1)}</p></div>
+          </div>
+          {myScore?.rankGlobal ? (
+            <div className="text-right">
+              <p className="text-sm text-muted-foreground">Rang</p>
+              <p className="text-xl font-bold">#{myScore.rankGlobal}</p>
+              {myScore.percentile != null && <p className="text-xs text-muted-foreground">Devant {Number(myScore.percentile).toFixed(0)}% des employés scorés</p>}
+            </div>
+          ) : (
+            <div className="text-right">
+              <p className="text-sm text-muted-foreground">Rang</p>
+              <p className="text-xs text-muted-foreground">—</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Stats Grid */}
       <div className="grid gap-4 md:grid-cols-3">
@@ -212,6 +259,71 @@ const EmployeeDashboard: React.FC = () => {
           </CardContent>
         </Card>
       </div>
+
+      {/* Leaderboard / Ranking */}
+      {leaderboard.length > 0 && (
+        <Card className="animate-fade-in" style={{ animationDelay: '450ms' }}>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Crown className="h-5 w-5 text-yellow-500" />
+                  Classement {new Date().getFullYear()}
+                </CardTitle>
+                <CardDescription>Votre position parmi les employés scorés</CardDescription>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => navigate('/employee/scoring')}>
+                Voir détails
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {leaderboard.slice(0, 5).map((entry) => {
+                const isMe = entry.profileId === myProfileId;
+                return (
+                  <div
+                    key={entry.profileId}
+                    className={`flex items-center justify-between p-2.5 rounded-lg ${
+                      isMe ? 'bg-primary/10 border border-primary/20' : 'bg-muted/40'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Badge
+                        variant={entry.rank <= 3 ? 'default' : 'secondary'}
+                        className={entry.rank === 1 ? 'bg-yellow-500' : entry.rank === 2 ? 'bg-gray-400' : entry.rank === 3 ? 'bg-amber-600' : ''}
+                      >
+                        #{entry.rank}
+                      </Badge>
+                      <span className={`text-sm ${isMe ? 'font-bold' : 'font-medium'}`}>
+                        {entry.employeeName}{isMe ? ' (vous)' : ''}
+                      </span>
+                    </div>
+                    <span className="text-sm font-semibold">{entry.finalScore.toFixed(1)} pts</span>
+                  </div>
+                );
+              })}
+              {/* Show user's position if not in top 5 */}
+              {myProfileId && !leaderboard.slice(0, 5).some((e) => e.profileId === myProfileId) && (() => {
+                const myEntry = leaderboard.find((e) => e.profileId === myProfileId);
+                if (!myEntry) return null;
+                return (
+                  <>
+                    <div className="text-center text-xs text-muted-foreground py-1">···</div>
+                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-primary/10 border border-primary/20">
+                      <div className="flex items-center gap-3">
+                        <Badge variant="secondary">#{myEntry.rank}</Badge>
+                        <span className="text-sm font-bold">{myEntry.employeeName} (vous)</span>
+                      </div>
+                      <span className="text-sm font-semibold">{myEntry.finalScore.toFixed(1)} pts</span>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* CV Status */}
       <Card className="animate-fade-in" style={{ animationDelay: '500ms' }}>

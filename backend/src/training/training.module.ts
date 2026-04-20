@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { TrainingService } from './training.service';
 import { TrainingController } from './training.controller';
@@ -12,6 +12,7 @@ import { TeamsModule } from '../teams/teams.module';
 import { MailModule } from '../mail/mail.module';
 import { Certification } from '../certifications/entities/certification.entity';
 import { ConfigModule } from '@nestjs/config';
+import { ScoringModule } from '../scoring/scoring.module';
 
 @Module({
     imports: [
@@ -22,6 +23,7 @@ import { ConfigModule } from '@nestjs/config';
         NotificationsModule,
         TeamsModule,
         MailModule,
+        forwardRef(() => ScoringModule),
     ],
     controllers: [TrainingController],
     providers: [TrainingService],

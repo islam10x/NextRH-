@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     # Groq LLM for CV generation
     GROQ_API_KEY: str = ""
     GROQ_CV_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_SCORING_MODEL: str = "llama-3.3-70b-versatile"
     GROQ_TIMEOUT_SECONDS: float = 15.0  # per-request timeout for Groq API calls
     GROQ_SUMMARY_TEMPERATURE: float = 0.3
     GROQ_PAIRS_TEMPERATURE: float = 0.2

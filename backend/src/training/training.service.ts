@@ -3,6 +3,9 @@ import {
     NotFoundException,
     BadRequestException,
     ServiceUnavailableException,
+    Logger,
+    Inject,
+    forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
@@ -18,11 +21,11 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { TeamsService } from '../teams/teams.service';
 import { MailService } from '../mail/mail.service';
 import { ConfigService } from '@nestjs/config';
-import { Logger } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 import axios, { AxiosResponse } from 'axios';
 import * as FormDataNode from 'form-data';
+import { ScoringService } from '../scoring/scoring.service';
 
 @Injectable()
 export class TrainingService {
@@ -44,6 +47,8 @@ export class TrainingService {
         private readonly teamsService: TeamsService,
         private readonly mailService: MailService,
         private readonly configService: ConfigService,
+        @Inject(forwardRef(() => ScoringService))
+        private readonly scoringService: ScoringService,
     ) { }
 
     async assignTraining(dto: CreateTrainingDto, managerUserId?: string, managerEmail?: string) {
@@ -247,7 +252,20 @@ export class TrainingService {
         }
 
         training.proofFilePath = dto.proofFilePath ?? training.proofFilePath;
-        return this.trainingRepo.save(training);
+        const saved = await this.trainingRepo.save(training);
+
+        // Auto-recompute score when training is completed
+        if (dto.status === 'completed' && training.profile?.profile_id) {
+            try {
+                const year = new Date().getFullYear();
+                await this.scoringService.computeScore(training.profile.profile_id, year);
+                this.logger.log(`Auto-recomputed score for profile ${training.profile.profile_id} after training completion`);
+            } catch (err: any) {
+                this.logger.warn(`Failed to auto-recompute score after training completion: ${err.message}`);
+            }
+        }
+
+        return saved;
     }
 
     async uploadProof(
@@ -256,6 +274,7 @@ export class TrainingService {
         userId: string,
         issueDate?: string,
         description?: string,
+        relatedProjectId?: string,
     ) {
         const training = await this.trainingRepo.findOne({
             where: { training_id: trainingId },
@@ -323,6 +342,9 @@ export class TrainingService {
         training.status = 'completed';
         training.endDate = new Date().toISOString().slice(0, 10);
         training.description = description ?? training.description;
+        if (relatedProjectId) {
+            training.relatedProjectId = relatedProjectId;
+        }
 
         await this.trainingRepo.save(training);
 
@@ -389,6 +411,17 @@ export class TrainingService {
                     })
                 )
             );
+        }
+
+        // Auto-recompute score when training is completed via proof upload
+        if (training.profile?.profile_id) {
+            try {
+                const year = new Date().getFullYear();
+                await this.scoringService.computeScore(training.profile.profile_id, year);
+                this.logger.log(`Auto-recomputed score for profile ${training.profile.profile_id} after proof upload`);
+            } catch (err: any) {
+                this.logger.warn(`Failed to auto-recompute score after proof upload: ${err.message}`);
+            }
         }
 
         return {

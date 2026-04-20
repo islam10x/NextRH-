@@ -28,7 +28,16 @@ export class AssignProjectDto {
     @IsOptional()
     technologies?: string[];
 
+    /** Default role for assignees (used when roles map doesn't specify) */
     @IsString()
     @IsOptional()
     role?: string;
+
+    @IsString()
+    @IsOptional()
+    complexity?: string;
+
+    /** Per-employee roles: { profileId: role } — overrides the default role */
+    @IsOptional()
+    roles?: Record<string, string>;
 }

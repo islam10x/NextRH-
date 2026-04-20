@@ -33,6 +33,7 @@ import {
   LogOut,
   Settings,
   ChevronRight,
+  Trophy,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -65,6 +66,7 @@ const managerNavItems: NavItem[] = [
   { title: 'Projects', url: '/manager/projects', icon: Briefcase },
   { title: 'Certification Tracking', url: '/manager/certifications', icon: Award },
   { title: 'Trainings', url: '/manager/trainings', icon: Clock3 },
+  { title: 'Scoring', url: '/manager/scoring', icon: Trophy },
   { title: 'Upload CV', url: '/employee/cv-upload', icon: FileText },
   { title: 'My Certifications', url: '/employee/certifications', icon: Award },
   { title: 'My CV Preview', url: '/employee/cv-preview', icon: Eye },

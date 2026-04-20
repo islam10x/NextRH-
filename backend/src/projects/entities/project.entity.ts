@@ -34,6 +34,9 @@ export class Project {
     @Column({ name: 'end_date', type: 'date', nullable: true })
     endDate: Date | null;
 
+    @Column({ name: 'complexity', length: 20, nullable: true, default: 'medium' })
+    complexity: string | null;
+
     @Column({ name: 'generated_title', length: 255, nullable: true })
     generatedTitle: string | null;
 }

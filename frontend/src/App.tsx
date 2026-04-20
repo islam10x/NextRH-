@@ -9,8 +9,8 @@ import LoginPage from "@/pages/auth/LoginPage";
 import SetupPasswordPage from "@/pages/auth/SetupPasswordPage";
 import ForgotPasswordPage from "@/pages/auth/ForgotPasswordPage";
 import ResetPasswordPage from "@/pages/auth/ResetPasswordPage";
-import { EmployeeDashboard, CVUploadPage, CertificationsPage, TrainingProjectsPage, CVPreviewPage } from "@/pages/employee";
-import { ManagerDashboard, TeamMembersPage, MemberProfilePage, CertificationTrackingPage, ManagerTrainingsPage, ManagerProjectsPage } from "@/pages/manager";
+import { EmployeeDashboard, CVUploadPage, CertificationsPage, TrainingProjectsPage, CVPreviewPage, EmployeeScoringPage } from "@/pages/employee";
+import { ManagerDashboard, TeamMembersPage, MemberProfilePage, CertificationTrackingPage, ManagerTrainingsPage, ManagerProjectsPage, ManagerScoringPage } from "@/pages/manager";
 import { BIDDashboard, EmployeeDirectoryPage, AIChatPage, CVGenerationPage } from "@/pages/bid";
 import ProfileSettingsPage from "./pages/ProfileSettingsPage";
 import NotFound from "./pages/NotFound";
@@ -35,6 +35,7 @@ const App = () => (
             <Route element={<MainLayout requiredRole="employee" />}>
               <Route path="/employee/dashboard" element={<EmployeeDashboard />} />
               <Route path="/employee/training-projects" element={<TrainingProjectsPage />} />
+              <Route path="/employee/scoring" element={<EmployeeScoringPage />} />
             </Route>
 
             {/* Shared self-service routes (employees + managers) */}
@@ -54,6 +55,7 @@ const App = () => (
               <Route path="/manager/certifications" element={<CertificationTrackingPage />} />
               <Route path="/manager/trainings" element={<ManagerTrainingsPage />} />
               <Route path="/manager/projects" element={<ManagerProjectsPage />} />
+              <Route path="/manager/scoring" element={<ManagerScoringPage />} />
               <Route path="/manager/settings" element={<ProfileSettingsPage />} />
             </Route>
 

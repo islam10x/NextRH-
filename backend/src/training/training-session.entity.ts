@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 import { EmployeeProfile } from '../employees/entities/employee-profile.entity';
 import { User } from '../users/entities/user.entity';
+import { Project } from '../projects/entities/project.entity';
 
 export type TrainingStatus = 'assigned' | 'in_progress' | 'completed';
 
@@ -53,6 +54,13 @@ export class TrainingSession {
 
     @Column({ name: 'description', type: 'text', nullable: true })
     description?: string | null;
+
+    @ManyToOne(() => Project, { nullable: true, onDelete: 'SET NULL' })
+    @JoinColumn({ name: 'related_project_id' })
+    relatedProject?: Project | null;
+
+    @Column({ name: 'related_project_id', nullable: true })
+    relatedProjectId?: string | null;
 
     @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;

@@ -2,6 +2,12 @@ import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 't
 import { Project } from './project.entity';
 import { EmployeeProfile } from '../../employees/entities/employee-profile.entity';
 
+export enum ParticipantRole {
+  CONTRIBUTOR = 'contributor',
+  TECHNICAL_LEAD = 'technical_lead',
+  PROJECT_LEAD = 'project_lead',
+}
+
 @Entity('project_participants')
 export class ProjectParticipant {
     @PrimaryGeneratedColumn('uuid')
@@ -15,8 +21,12 @@ export class ProjectParticipant {
     @JoinColumn({ name: 'profile_id' })
     profile: EmployeeProfile;
 
-    @Column({ nullable: true })
-    role: string;
+    @Column({
+      type: 'enum',
+      enum: ParticipantRole,
+      default: ParticipantRole.CONTRIBUTOR,
+    })
+    role: ParticipantRole;
 
     @Column({ type: 'text' })
     description: string;

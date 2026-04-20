@@ -105,6 +105,7 @@ export class TrainingController {
             userId,
             req.body?.issueDate || req.body?.issue_date,
             req.body?.description,
+            req.body?.relatedProjectId || req.body?.related_project_id,
         );
     }
 

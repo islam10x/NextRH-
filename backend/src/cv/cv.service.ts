@@ -112,6 +112,8 @@ export class CvService {
 
         if (!profile) {
             return {
+                profileId: null,
+                profile_id: null,
                 name: fullName,
                 email: structuredEmail || user.email,
                 phone,
@@ -173,6 +175,8 @@ export class CvService {
         }));
 
         return {
+            profileId: profile.profile_id,
+            profile_id: profile.profile_id,
             name: fullName,
             email: structuredEmail || user.email,
             phone,

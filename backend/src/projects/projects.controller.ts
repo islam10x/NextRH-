@@ -41,6 +41,7 @@ export class ProjectsController {
         @Req() req: any,
     ) {
         const userId = req.user?.userId || req.user?.user_id || req.user?.id;
-        return this.projectsService.updateParticipation(participantId, userId, dto);
+        const userRole = req.user?.role;
+        return this.projectsService.updateParticipation(participantId, userId, dto, userRole);
     }
 }
