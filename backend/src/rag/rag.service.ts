@@ -700,6 +700,14 @@ export class RagService {
         }>,
         llmAnswer?: unknown,
     ): string {
+        const candidate = String(llmAnswer || '').trim();
+
+        // If the AI service returned a direct answer (greeting, meta-response, or
+        // 'I don't have that information'), trust it immediately without grounding checks.
+        if (candidate && (!Array.isArray(context) || context.length === 0)) {
+            return candidate;
+        }
+
         // Gate: if the retriever found nothing related, the query is out of scope.
         if (!this.isQueryGroundedInContext(query, context, results)) {
             return this.ragOutOfScopeMessage;
@@ -707,7 +715,6 @@ export class RagService {
 
         // Trust the AI service's LLM answer — it already has its own grounding
         // (system prompt instructs "never invent data" + post-LLM safety net).
-        const candidate = String(llmAnswer || '').trim();
         if (candidate) {
             return candidate;
         }
