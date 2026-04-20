@@ -145,7 +145,7 @@ L'objectif de certifications est défini par année et par employé.
 - Si aucun objectif explicite n'existe, le calcul prend `2` comme cible par défaut.
 - Côté employé, l'interface affiche l'objectif défini par le manager s'il existe.
 
-## 6. Classements et percentile
+## 6. Classements
 
 ### Rang global
 
@@ -161,36 +161,6 @@ Le rang dans l'équipe est calculé après regroupement des employés par équip
 
 - Il dépend uniquement des scores des membres de la même équipe.
 - Il n'est pas utilisé partout dans l'UI actuelle, mais il est stocké côté backend.
-
-### Percentile global
-
-Le champ `percentile` actuellement exposé par le backend représente la part des employés scorés que l'employé dépasse au niveau global.
-
-Formule utilisée :
-
-$$
-percentile = \frac{N - rang}{N} \times 100
-$$
-
-Où :
-
-- `N` = nombre total d'employés scorés pour l'année
-- `rang` = rang global de l'employé
-
-Cas particulier :
-
-- si un seul employé est scoré pour l'année, le percentile vaut `100` par convention.
-
-Interprétation correcte :
-
-- `80%` signifie : cet employé a un score supérieur à 80% des employés scorés
-- `0%` signifie : aucun employé scoré n'a un score plus bas
-- plus le percentile est élevé, meilleure est la performance relative
-
-Important :
-
-- ce percentile est global, même si un `team_manager` consulte un classement limité à son équipe
-- dans ce cas, le rang affiché peut être un rang d'équipe, mais le percentile reste global
 
 ## 7. Réinitialisation annuelle
 
@@ -208,7 +178,6 @@ Peut voir :
 
 - son score final et ses sous-scores
 - son rang global
-- son percentile global
 - les poids appliqués à son scoring
 - les formules utilisées
 - l'objectif de certifications s'il existe
@@ -246,7 +215,6 @@ Affiche :
 - score final
 - sous-scores par axe
 - rang global
-- message de percentile interprété comme : `Devant X% des employés scorés`
 - poids actifs
 - formules
 - objectif certifications
@@ -259,14 +227,12 @@ Le widget de score affiche :
 - score final
 - sous-scores
 - rang global
-- percentile global interprété en texte métier
 
 ### Page manager `Scoring Employés`
 
 Affiche :
 
 - le classement de l'équipe pour un `team_manager`
-- un percentile global pour chaque collaborateur
 - la configuration des poids si le rôle l'autorise
 
 ## 10. Déclencheurs de recalcul
@@ -283,10 +249,8 @@ Après chaque recomputation individuelle, les rankings sont remis à jour.
 
 ## 11. Points d'attention produit
 
-1. Un percentile à `0%` est une valeur valide et doit être affiché comme tel, pas comme vide.
-2. Le percentile représente une performance relative globale, pas un pourcentage du score brut.
-3. Le score final dépend des poids actifs au moment du calcul. Si les poids changent, les scores doivent être recalculés pour rester cohérents.
-4. Les classements et les poids n'ont pas forcément la même portée : un classement peut être d'équipe, tandis que le percentile reste global.
+1. Le score final dépend des poids actifs au moment du calcul. Si les poids changent, les scores doivent être recalculés pour rester cohérents.
+2. Les classements visibles côté produit reposent sur le rang, pas sur le percentile.
 
 ## 12. Résumé rapide
 
@@ -295,7 +259,6 @@ Après chaque recomputation individuelle, les rankings sont remis à jour.
 | Score final | Employé, année | Somme pondérée des 4 axes |
 | Rang global | Global | Basé sur tous les employés scorés de l'année |
 | Rang d'équipe | Équipe | Basé sur les membres de la même équipe |
-| Percentile global | Global | Part des employés scorés dépassés |
 | Poids | Global ou équipe | Résolus automatiquement selon l'équipe |
 | Objectif certifications | Employé, année | Défini par manager, défaut de calcul = 2 |
 

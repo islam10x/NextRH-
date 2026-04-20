@@ -64,3 +64,6 @@ ai-service/qdrant_local/
 ai-service/test_templates/
 ai-service/test_outputs/
 ai-service/tests/test_outputs/
+
+# Thesis
+thesis/

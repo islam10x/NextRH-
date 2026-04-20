@@ -48,9 +48,19 @@ export class ScoringController {
     @Body() dto: UploadPvDto,
     @Req() req: any,
   ) {
+    const targetProfileIds = dto.profileIds?.length
+      ? [...new Set(dto.profileIds)]
+      : dto.profileId
+        ? [dto.profileId]
+        : [];
+
+    if (targetProfileIds.length === 0) {
+      throw new BadRequestException('Veuillez sélectionner au moins un employé');
+    }
+
     return this.scoringService.uploadPv(
       file,
-      dto.profileId,
+      targetProfileIds,
       req.user.id,
       dto.projectId,
       dto.projectName,
@@ -101,40 +111,20 @@ export class ScoringController {
 
   @Get('weights')
   @Roles(UserRole.EMPLOYEE, UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
-  async getWeights(@Query('teamId') teamId: string | undefined, @Req() req: any) {
-    const userId = req.user?.id || req.user?.userId || req.user?.user_id;
-    const role = req.user?.role;
-
-    let effectiveTeamId = teamId;
-    if (role === UserRole.EMPLOYEE) {
-      effectiveTeamId = (await this.teamsService.getTeamIdForEmployee(userId)) || undefined;
-    } else if (role === UserRole.TEAM_MANAGER) {
-      effectiveTeamId = (await this.teamsService.getTeamIdForManager(userId)) || undefined;
-    }
-
-    return this.scoringService.getWeights(effectiveTeamId);
+  async getWeights() {
+    return this.scoringService.getWeights();
   }
 
   @Patch('weights')
-  @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
+  @Roles(UserRole.BID_MANAGER)
   async updateWeights(@Body() dto: UpdateWeightsDto, @Req() req: any) {
     const userId = req.user?.id || req.user?.userId || req.user?.user_id;
-    const role = req.user?.role;
-
-    let effectiveTeamId = dto.teamId;
-    if (role === UserRole.TEAM_MANAGER) {
-      effectiveTeamId = await this.teamsService.getTeamIdForManager(userId);
-      if (!effectiveTeamId) {
-        throw new BadRequestException('No team found for this manager');
-      }
-    }
 
     return this.scoringService.updateWeights(
       dto.projectWeight,
       dto.certificationWeight,
       dto.trainingWeight,
       dto.formationWeight,
-      effectiveTeamId,
       userId,
     );
   }
@@ -207,7 +197,9 @@ export class ScoringController {
   @Get('projects')
   @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
   async listProjects(@Req() req: any) {
-    return this.scoringService.listProjects(req.user.id);
+    const userId = req.user?.id || req.user?.userId || req.user?.user_id;
+    const role = req.user?.role;
+    return this.scoringService.listProjects(userId, role);
   }
 
   // ── Leaderboard ───────────────────────────────────────────────────────

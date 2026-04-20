@@ -77,6 +77,12 @@ export interface UploadResult {
   message?: string;
   record?: ProjectRecord | TrainingRecord;
   parsed_data?: Record<string, any>;
+  results?: Array<{
+    profileId: string;
+    employeeName: string;
+    status: 'created' | 'duplicate';
+    message?: string;
+  }>;
 }
 
 export interface AvailableProject {
@@ -118,7 +124,7 @@ export const scoringService = {
   /** Team Manager uploads a PV for an employee */
   async uploadPv(
     file: File,
-    profileId: string,
+    profileIds: string[],
     projectId?: string,
     projectName?: string,
     clientName?: string,
@@ -127,7 +133,7 @@ export const scoringService = {
   ): Promise<UploadResult> {
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('profileId', profileId);
+    formData.append('profileIds', JSON.stringify(profileIds));
     if (projectId) formData.append('projectId', projectId);
     if (projectName) formData.append('projectName', projectName);
     if (clientName) formData.append('clientName', clientName);

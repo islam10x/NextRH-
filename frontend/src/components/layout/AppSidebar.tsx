@@ -75,6 +75,7 @@ const managerNavItems: NavItem[] = [
 const bidManagerNavItems: NavItem[] = [
   { title: 'BID Dashboard', url: '/bid/dashboard', icon: LayoutDashboard },
   { title: 'Employee Directory', url: '/bid/directory', icon: Search },
+  { title: 'Scoring', url: '/bid/scoring', icon: Trophy },
   { title: 'AI Assistant', url: '/bid/ai-chat', icon: MessageSquare },
   { title: 'Generate CV', url: '/bid/cv-generation', icon: FileOutput },
   { title: 'Upload CV', url: '/employee/cv-upload', icon: FileText },
