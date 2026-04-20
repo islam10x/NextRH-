@@ -17,7 +17,9 @@ export type NotificationType =
     | 'training_completed'
     | 'team_added'
     | 'project_assigned'
-    | 'project_updated';
+    | 'project_updated'
+    | 'pv_uploaded'
+    | 'score_updated';
 
 @Entity('notifications')
 export class Notification {

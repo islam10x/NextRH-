@@ -1,8 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, NotFoundException, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, Repository } from 'typeorm';
 import { Project } from './entities/project.entity';
-import { ProjectParticipant } from './entities/participant.entity';
+import { ProjectParticipant, ParticipantRole } from './entities/participant.entity';
 import { EmployeeProfile } from '../employees/entities/employee-profile.entity';
 import { Skill } from '../skills/entities/skill.entity';
 import { AssignProjectDto } from './dto/assign-project.dto';
@@ -10,6 +10,7 @@ import { UpdateParticipationDto } from './dto/update-participation.dto';
 import { TeamsService } from '../teams/teams.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { User } from '../users/entities/user.entity';
+import { ScoringService } from '../scoring/scoring.service';
 
 @Injectable()
 export class ProjectsService {
@@ -26,7 +27,13 @@ export class ProjectsService {
         private readonly usersRepo: Repository<User>,
         private readonly teamsService: TeamsService,
         private readonly notificationsService: NotificationsService,
-    ) { }
+        @Inject(forwardRef(() => ScoringService))
+        private readonly scoringService: ScoringService,
+    ) {
+        this.logger = new Logger(ProjectsService.name);
+    }
+
+    private logger: Logger;
 
     async assignProject(dto: AssignProjectDto, managerUserId: string) {
         if (!dto.assigneeProfileIds?.length) {
@@ -73,9 +80,11 @@ export class ProjectsService {
                 projectDescription: dto.projectDescription || null,
                 startDate,
                 endDate,
+                complexity: dto.complexity || 'medium',
             });
         } else if (!project.projectDescription && dto.projectDescription) {
             project.projectDescription = dto.projectDescription;
+            if (dto.complexity) project.complexity = dto.complexity;
         }
 
         if (dto.technologies?.length) {
@@ -110,13 +119,14 @@ export class ProjectsService {
                 participant = this.participantRepo.create({
                     project,
                     profile,
-                    role: dto.role || null,
+                    role: (dto.roles?.[profile.profile_id] || dto.role || 'contributor') as ParticipantRole,
                     description: '',
                     assignedBy: managerUserId,
                 });
             } else {
-                if (dto.role && !participant.role) {
-                    participant.role = dto.role;
+                const newRole = dto.roles?.[profile.profile_id] || dto.role;
+                if (newRole && !participant.role) {
+                    participant.role = newRole as ParticipantRole;
                 }
                 participant.assignedBy = managerUserId;
             }
@@ -139,6 +149,17 @@ export class ProjectsService {
                 });
             }),
         );
+
+        // Auto-recompute scoring for all assigned employees
+        const currentYear = new Date().getFullYear();
+        for (const profile of profiles) {
+            try {
+                await this.scoringService.computeScore(profile.profile_id, currentYear);
+                this.logger.log(`Auto-recomputed score for profile ${profile.profile_id} after project assignment`);
+            } catch (err: any) {
+                this.logger.warn(`Failed to auto-recompute score after project assignment for ${profile.profile_id}: ${err.message}`);
+            }
+        }
 
         return created;
     }
@@ -241,7 +262,7 @@ export class ProjectsService {
         });
     }
 
-    async updateParticipation(participantId: string, userId: string, dto: UpdateParticipationDto) {
+    async updateParticipation(participantId: string, userId: string, dto: UpdateParticipationDto, userRole?: string) {
         const participant = await this.participantRepo.findOne({
             where: { participant_id: participantId },
             relations: ['profile', 'profile.user', 'project'],
@@ -256,9 +277,10 @@ export class ProjectsService {
         if (dto.description !== undefined) {
             participant.description = String(dto.description || '').trim();
         }
-        if (dto.role !== undefined) {
+        // Only managers can change role; employees can only update description
+        if (dto.role !== undefined && userRole !== 'employee') {
             const role = String(dto.role || '').trim();
-            participant.role = role || null;
+            participant.role = (role || 'contributor') as ParticipantRole;
         }
 
         const saved = await this.participantRepo.save(participant);

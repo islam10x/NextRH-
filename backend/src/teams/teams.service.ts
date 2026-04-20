@@ -57,6 +57,24 @@ export class TeamsService {
         return this.teamRepo.count();
     }
 
+    async getTeamIdForManager(managerUserId: string): Promise<string | null> {
+        const team = await this.teamRepo.findOne({
+            where: { manager: { user_id: managerUserId } },
+        });
+
+        return team?.team_id || null;
+    }
+
+    async getTeamIdForEmployee(employeeUserId: string): Promise<string | null> {
+        const row = await this.teamMemberRepo
+            .createQueryBuilder('tm')
+            .where('tm.employee_id = :employeeUserId', { employeeUserId })
+            .select('tm.team_id', 'team_id')
+            .getRawOne();
+
+        return row?.team_id || null;
+    }
+
     async getManagersForEmployee(employeeUserId: string): Promise<string[]> {
         const rows = await this.teamMemberRepo
             .createQueryBuilder('tm')

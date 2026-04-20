@@ -20,15 +20,24 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   GraduationCap,
   Briefcase,
   Calendar,
   Building2,
   Code,
   ChevronRight,
+  Upload,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
+import { scoringService } from '@/services/scoring.service';
 
 const TrainingProjectsPage: React.FC = () => {
   const { user } = useAuth();
@@ -48,6 +57,9 @@ const TrainingProjectsPage: React.FC = () => {
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [projectRole, setProjectRole] = useState('');
   const [projectDescription, setProjectDescription] = useState('');
+  const [formationFile, setFormationFile] = useState<File | null>(null);
+  const [uploadingFormation, setUploadingFormation] = useState(false);
+  const [completionProjectId, setCompletionProjectId] = useState<string>('');
 
   const formatDate = (dateString: string) => {
     if (!dateString) return 'n/a';
@@ -62,6 +74,7 @@ const TrainingProjectsPage: React.FC = () => {
     setSelectedTraining(training);
     setCompletionComment('');
     setCompletionFile(null);
+    setCompletionProjectId('');
     setCompletionDialogOpen(true);
   };
 
@@ -72,6 +85,7 @@ const TrainingProjectsPage: React.FC = () => {
           if (completionFile) {
             await trainingService.uploadProof(selectedTraining.id, completionFile, {
           description: completionComment || undefined,
+          relatedProjectId: completionProjectId || undefined,
             });
           } else {
             await trainingService.completeWithoutProof(selectedTraining.id, {
@@ -79,7 +93,7 @@ const TrainingProjectsPage: React.FC = () => {
           description: completionComment || undefined,
             });
           }
-      toast.success('Training marked as completed');
+      toast.success('Training marked as completed — your score has been updated');
       setCompletionDialogOpen(false);
       loadTrainings();
     } catch (error: any) {
@@ -165,6 +179,24 @@ const TrainingProjectsPage: React.FC = () => {
       loadTrainings();
     } catch (error: any) {
       toast.error(error?.response?.data?.message || 'Upload failed');
+    }
+  };
+
+  const handleFormationUpload = async () => {
+    if (!formationFile) return;
+    setUploadingFormation(true);
+    try {
+      const result = await scoringService.uploadTrainingSheet(formationFile);
+      if (result.status === 'duplicate') {
+        toast.warning(result.message || 'Document déjà importé');
+      } else {
+        toast.success('Feuille de formation importée avec succès');
+        setFormationFile(null);
+      }
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || "Erreur lors de l'import");
+    } finally {
+      setUploadingFormation(false);
     }
   };
 
@@ -361,6 +393,36 @@ const TrainingProjectsPage: React.FC = () => {
               </CardContent>
             </Card>
           )}
+
+          {/* Formation Upload — formateur attendance sheet */}
+          <Card>
+            <CardContent className="p-5">
+              <div className="flex items-start gap-4">
+                <div className="p-2 rounded-lg bg-accent/10 shrink-0">
+                  <Upload className="h-5 w-5 text-accent" />
+                </div>
+                <div className="flex-1 space-y-2">
+                  <h3 className="font-semibold text-foreground">Importer une feuille de formation (formateur)</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Importez votre feuille de présence (PDF) pour les formations que vous avez dispensées aux clients. Chaque formation comptabilisée rapporte 10 points.
+                  </p>
+                  <div className="flex items-end gap-3">
+                    <div className="flex-1">
+                      <Label>Fichier PDF</Label>
+                      <Input
+                        type="file"
+                        accept=".pdf"
+                        onChange={(e) => setFormationFile(e.target.files?.[0] || null)}
+                      />
+                    </div>
+                    <Button onClick={handleFormationUpload} disabled={uploadingFormation || !formationFile}>
+                      {uploadingFormation ? 'Import en cours...' : 'Importer'}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
 
@@ -398,6 +460,24 @@ const TrainingProjectsPage: React.FC = () => {
                 <p className="text-xs text-muted-foreground">Selected: {completionFile.name}</p>
               )}
             </div>
+            {projects.length > 0 && (
+              <div className="space-y-1">
+                <Label htmlFor="relatedProject">Related project (optional)</Label>
+                <Select value={completionProjectId} onValueChange={(v) => setCompletionProjectId(v === 'none' ? '' : v)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a project..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None</SelectItem>
+                    {projects.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.name}{p.client ? ` — ${p.client}` : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCompletionDialogOpen(false)}>
@@ -427,15 +507,12 @@ const TrainingProjectsPage: React.FC = () => {
                 <p className="text-xs text-muted-foreground">{selectedProject.client}</p>
               )}
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="projectRole">Your Role</Label>
-              <Input
-                id="projectRole"
-                value={projectRole}
-                onChange={(e) => setProjectRole(e.target.value)}
-                placeholder="e.g., Lead Developer"
-              />
-            </div>
+            {selectedProject?.role && (
+              <div className="space-y-1">
+                <Label>Your Role</Label>
+                <p className="text-sm text-muted-foreground">{selectedProject.role}</p>
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="projectContribution">Contribution</Label>
               <Textarea
@@ -457,7 +534,6 @@ const TrainingProjectsPage: React.FC = () => {
                 try {
                   await projectService.updateParticipation(selectedProject.id, {
                     description: projectDescription,
-                    role: projectRole,
                   });
                   toast.success('Project contribution updated');
                   setIsProjectDialogOpen(false);

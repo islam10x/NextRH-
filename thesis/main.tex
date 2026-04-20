@@ -1,0 +1,501 @@
+﻿%% ============================================================
+%%  NextRH — Thesis  (Overleaf-ready, pdfLaTeX)
+%%  PFE — Ingénierie Logicielle / Génie Informatique
+%% ============================================================
+\documentclass[12pt,a4paper,oneside,openany]{report}
+
+%% ── Bibliography (natbib — load BEFORE babel per french.ldf) ───────────────
+\usepackage[numbers,sort&compress]{natbib}
+
+%% ── Encoding & Language ────────────────────────────────────
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+
+%% ── Page layout ────────────────────────────────────────────
+\usepackage[
+  top=3cm, bottom=3cm,
+  left=3cm, right=2.5cm,
+  headheight=15pt, headsep=10pt
+]{geometry}
+
+%% ── Fonts ───────────────────────────────────────────────────
+\usepackage{mathpazo}   % Palatino text + Pazo math (classic academic)
+
+%% ── Colours ─────────────────────────────────────────────────
+\usepackage[dvipsnames,svgnames,table]{xcolor}
+\definecolor{primaryblue}{HTML}{1B3A6B}  % deep navy – chapter titles, rules
+\definecolor{accentblue}{HTML}{1B3A6B}   % same deep navy
+\definecolor{lightgray}{HTML}{F4F4F4}
+\definecolor{codegray}{HTML}{F7F7F7}
+
+%% ── Math ────────────────────────────────────────────────────
+\usepackage{amsmath,amssymb}
+
+%% ── Graphics & Figures ──────────────────────────────────────
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage[justification=centering]{caption}
+\graphicspath{{figures/}{../Docs/diagrams/}}
+\DeclareGraphicsExtensions{.png,.jpg,.jpeg,.pdf,.PNG,.JPG,.JPEG}
+
+%% ── Tables ──────────────────────────────────────────────────
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{longtable}
+\usepackage{array}
+\renewcommand{\arraystretch}{1.4}
+
+%% ── Code listings ────────────────────────────────────────────
+\usepackage{listings}
+\lstset{
+  basicstyle=\small\ttfamily,
+  backgroundcolor=\color{codegray},
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{accentblue},
+  keywordstyle=\color{primaryblue}\bfseries,
+  commentstyle=\color{gray}\itshape,
+  stringstyle=\color{BrickRed},
+  numbers=left, numberstyle=\tiny\color{gray},
+  numbersep=5pt,
+  xleftmargin=15pt,
+  captionpos=b
+}
+%% TypeScript language definition for listings
+\lstdefinelanguage{TypeScript}{
+  keywords={abstract,any,as,async,await,boolean,break,case,catch,class,const,
+             constructor,continue,debugger,declare,default,delete,do,else,enum,
+             export,extends,false,finally,for,from,function,get,if,implements,
+             import,in,instanceof,interface,let,module,namespace,new,null,number,
+             of,override,package,private,protected,public,readonly,return,set,
+             static,string,super,switch,this,throw,true,try,type,typeof,undefined,
+             var,void,while,with,yield},
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]',
+  morestring=[b]",
+  morestring=[b]`
+}
+
+%% ── Hyperlinks ──────────────────────────────────────────────
+\usepackage[
+  colorlinks=true,
+  linkcolor=primaryblue,
+  citecolor=accentblue,
+  urlcolor=accentblue,
+  bookmarks=true,
+  pdftitle={NextRH: An AI-Driven HR Management Platform},
+  pdfauthor={Rania},
+  pdfsubject={Final Year Engineering Project Report}
+]{hyperref}
+%% ── Headers / Footers ───────────────────────────────────────
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\itshape\leftmark}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+%% ── Chapter headings ────────────────────────────────────────
+\usepackage{titlesec}
+\titleformat{\chapter}[display]
+  {\normalfont\huge\bfseries}
+  {\normalsize\scshape\color{primaryblue}\chaptertitlename~\thechapter}
+  {4pt}{}
+  [\vspace{2pt}{\color{primaryblue}\rule{\textwidth}{0.8pt}}]
+\titlespacing*{\chapter}{0pt}{30pt}{25pt}
+
+%% ── Enumerate / itemize ─────────────────────────────────────
+\usepackage{enumitem}
+\setlist[itemize]{topsep=3pt,itemsep=3pt,parsep=0pt,leftmargin=*}
+\setlist[enumerate]{topsep=3pt,itemsep=3pt,parsep=0pt,leftmargin=*}
+
+%% ── Abbreviations (acronym — lightweight, no expl3) ────────
+\usepackage{acronym}
+
+%% ── Misc ─────────────────────────────────────────────────────
+\usepackage{setspace}
+\setstretch{1.5}
+\setlength{\parskip}{5pt plus 2pt minus 1pt}
+\setlength{\emergencystretch}{3em}
+
+%% ── Compact front-matter lists ──────────────────────────────
+\makeatletter
+\newcommand{\compactlistof}[2]{%
+  \section*{#1}%
+  \addcontentsline{toc}{section}{#1}%
+  \@starttoc{#2}%
+}
+\makeatother
+
+%% ─────────────────────────────────────────────────────────────
+\begin{document}
+
+\pagenumbering{roman}
+
+%% ════════════════════════════════════════════════════════════
+%%  TITLE PAGE
+%% ════════════════════════════════════════════════════════════
+\begin{titlepage}
+\newgeometry{left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm}
+\setlength{\parindent}{0pt}
+
+%%── University / Company header ─────────────────────────────
+\begin{minipage}[t]{0.54\textwidth}
+  {\small \textbf{[Nom de l'Université]}}\\[2pt]
+  {\small [Faculté / École d'Ingénieurs]}\\[2pt]
+  {\small Département Informatique}
+\end{minipage}
+\hfill
+\begin{minipage}[t]{0.42\textwidth}\raggedleft
+  \includegraphics[height=1.8cm]{figures/nextstep_logo}\\[4pt]
+  {\small Stage de Fin d'Études}\\[2pt]
+  {\small Réalisé chez \textbf{NextStep}, Tunis, Tunisie}\\[2pt]
+  {\small Année universitaire 2025--2026}
+\end{minipage}
+
+\vspace{8pt}
+{\color{primaryblue}\rule{\linewidth}{1.5pt}}
+\vspace{8pt}
+
+%%── Report type ──────────────────────────────────────────────
+\begin{center}
+  {\large Mémoire de Projet de Fin d'Études}\\[4pt]
+  {\normalsize Pour l'obtention du diplôme d'\textbf{Ingénieur en Informatique}}
+\end{center}
+
+\vspace{30pt}
+
+%%── Title block ──────────────────────────────────────────────
+\begin{center}
+  {\color{primaryblue}\rule{0.38\linewidth}{0.6pt}}\\[16pt]
+  {\fontsize{32}{38}\selectfont\bfseries NextRH}\\[10pt]
+  {\LARGE\bfseries
+   Plateforme Intelligente de Gestion des\\[4pt]
+   Ressources Humaines et des Compétences\\[4pt]
+   basée sur l'Intelligence Artificielle}\\[16pt]
+  {\color{primaryblue}\rule{0.38\linewidth}{0.6pt}}
+\end{center}
+
+\vspace{36pt}
+
+%%── Author / Supervisors ─────────────────────────────────────
+\begin{center}
+\renewcommand{\arraystretch}{1.6}
+\begin{tabular}{rl}
+  \textbf{Étudiante :}            & Rania \textsc{[Nom de famille]}\\
+  \textbf{Encadrant académique :} & Dr.\ [Prénom Nom]\quad---\quad[Université]\\
+  \textbf{Encadrant entreprise :} & [Prénom Nom]\quad---\quad NextStep, Tunis\\
+\end{tabular}
+\end{center}
+
+\vfill
+{\color{primaryblue}\rule{\linewidth}{1.5pt}}
+\begin{center}
+  {\small Tunis, Tunisie\quad\textbullet\quad 2025--2026}
+\end{center}
+\restoregeometry
+\end{titlepage}
+
+\clearpage
+
+%% ════════════════════════════════════════════════════════════
+%%  DEDICATION
+%% ════════════════════════════════════════════════════════════
+\thispagestyle{empty}
+\vspace*{4cm}
+\begin{flushright}
+  \textit{To my family, whose unwavering love and support}\\[4pt]
+  \textit{have been my greatest strength.}\\[14pt]
+  \textit{To all those who believe that technology,}\\[4pt]
+  \textit{when built with care, can dignify human work.}
+\end{flushright}
+\clearpage
+
+%% ════════════════════════════════════════════════════════════
+%%  ACKNOWLEDGEMENTS
+%% ════════════════════════════════════════════════════════════
+\chapter*{Acknowledgements}
+\addcontentsline{toc}{chapter}{Acknowledgements}
+
+First and foremost, I would like to express my sincere gratitude to my academic supervisor, Dr.\ [First Name Last Name], for the invaluable guidance, meticulous attention to detail, and constant availability throughout this project. Their expertise in software engineering and their constructive feedback have been instrumental in shaping the quality of this work.
+
+I extend my heartfelt thanks to my company supervisor at \textbf{NextStep} (Tunis, Tunisia) for welcoming me into the team and providing the technical environment, resources, and mentorship necessary to bring this project to life. The collaborative and innovative culture at NextStep made this internship an extraordinarily enriching experience.
+
+I am grateful to the members of the examination committee for taking the time to evaluate this work and for their insightful remarks.
+
+Special thanks go to my colleagues and fellow students for the stimulating debates, shared knowledge, and mutual encouragement that sustained me throughout this journey.
+
+Finally, I am deeply indebted to my family for their unconditional support, patience, and belief in my abilities---without them, none of this would have been possible.
+\clearpage
+
+%% ════════════════════════════════════════════════════════════
+%%  ABSTRACTS
+%% ════════════════════════════════════════════════════════════
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+
+\textbf{Title:} NextRH --- An AI-Driven Human Resources Management Platform
+
+\smallskip
+\textbf{Keywords:} Human Resources Management, Artificial Intelligence, Retrieval-Augmented Generation, Natural Language Processing, Optical Character Recognition, NestJS, FastAPI, pgvector, Docker, Microservices.
+
+\bigskip
+Modern organisations demand digital tools that not only store personnel data but actively transform it into actionable knowledge. Traditional \ac{HR} information systems, predominantly designed around manual data entry and rigid relational schemas, struggle to meet these expectations at scale. The rise of large language models, vector search engines, and cloud-native deployment practices now offers a credible path towards intelligent, conversational \ac{HR} systems.
+
+This thesis presents \textbf{NextRH}, a full-stack, AI-augmented human resources management platform designed and implemented as a final-year engineering project hosted at \textbf{NextStep}, Tunis, Tunisia. The platform addresses five core organisational needs: centralised employee profile management, intelligent \ac{CV} parsing, \ac{OCR}-powered certification tracking, structured training assignment and completion workflows, and a conversational \ac{AI} assistant that answers natural-language queries over the entire employee knowledge base using \ac{RAG}.
+
+The architecture adopts a microservices model composed of seven Docker-orchestrated containers: a NestJS \ac{REST} back-end, a FastAPI \ac{AI} service, a React \ac{SPA}, a PostgreSQL/pgvector unified data store, an Ollama local \ac{LLM} runtime, a ClamAV antivirus daemon, and an n8n notification workflow engine. Security is enforced through invitation-only onboarding, short-lived \ac{JWT} access tokens, httpOnly refresh-token cookies, \ac{RBAC} guards, and file-level malware scanning.
+
+The deterministic \texttt{TemplateCVParser} achieves a 96\% exact-match rate on full-name extraction and 88\% on work-experience fields across a 26-document multilingual evaluation corpus. The \ac{RAG} pipeline, evaluated on a 20-query benchmark using the RAGAS framework, achieves a faithfulness score of 0.91, demonstrating strong grounding and very low hallucination rates. \ac{API} \ac{CRUD} operations remain below the 200\,ms P95 latency target, and the end-to-end \ac{CV} parsing pipeline completes in under 5 seconds on average.
+\clearpage
+
+%% ════════════════════════════════════════════════════════════
+%%  TABLE OF CONTENTS / FIGURES / TABLES
+%% ════════════════════════════════════════════════════════════
+\tableofcontents
+\compactlistof{List of Figures}{lof}
+\compactlistof{List of Tables}{lot}
+
+%% ── Acronyms list ────────────────────────────────────────────
+\section*{List of Acronyms}
+\addcontentsline{toc}{section}{List of Acronyms}
+\begin{acronym}[RBAC]
+  \acro{AI}{Artificial Intelligence}
+  \acro{API}{Application Programming Interface}
+  \acro{CD}{Continuous Deployment}
+  \acro{CI}{Continuous Integration}
+  \acro{CRUD}{Create Read Update Delete}
+  \acro{CV}{Curriculum Vitae}
+  \acro{ETL}{Extract Transform Load}
+  \acro{HR}{Human Resources}
+  \acro{JSON}{JavaScript Object Notation}
+  \acro{JWT}{JSON Web Token}
+  \acro{LLM}{Large Language Model}
+  \acro{NLP}{Natural Language Processing}
+  \acro{OCR}{Optical Character Recognition}
+  \acro{ORM}{Object-Relational Mapping}
+  \acro{PDF}{Portable Document Format}
+  \acro{RAG}{Retrieval-Augmented Generation}
+  \acro{RBAC}{Role-Based Access Control}
+  \acro{REST}{Representational State Transfer}
+  \acro{SPA}{Single-Page Application}
+  \acro{DTO}{Data Transfer Object}
+  \acro{SaaS}{Software as a Service}
+  \acro{CPU}{Central Processing Unit}
+  \acro{HTTP}{Hypertext Transfer Protocol}
+  \acro{GPU}{Graphics Processing Unit}
+  \acro{SMTP}{Simple Mail Transfer Protocol}
+\end{acronym}
+\clearpage
+
+%% ════════════════════════════════════════════════════════════
+%%  MAIN MATTER
+%% ════════════════════════════════════════════════════════════
+\pagenumbering{arabic}
+
+%% ────────────────────────────────────────────────────────────
+%% CHAPTER 1 — GENERAL INTRODUCTION
+%% ────────────────────────────────────────────────────────────
+\chapter{General Introduction}
+\label{chap:intro}
+
+\section{Context and Motivation}
+
+The digital transformation of human capital management has become a strategic priority for organisations of all sizes. Human resources departments are expected to maintain accurate, up-to-date records of employee competencies, professional certifications, training histories, and career trajectories---all while maintaining compliance with data-protection regulations and responding in real time to management queries \cite{kavanagh2017human}. In practice, however, many organisations still rely on fragmented toolchains: spreadsheets for competency matrices, email attachments for \ac{CV} sharing, and ad-hoc manual processes for certificate verification. The resulting information silos introduce latency, inaccuracy, and significant administrative overhead.
+
+Simultaneously, the past decade has witnessed a revolution in \acl{AI} for document understanding. The introduction of Transformer-based language models \cite{devlin2019bert}, the maturation of \ac{OCR} toolchains \cite{smith2007overview}, and the recent popularisation of \ac{RAG} \cite{lewis2020retrieval} have lowered the barrier to building intelligent, document-aware systems that can be deployed on modest hardware without reliance on proprietary cloud services. Combining these capabilities with modern microservices engineering practices \cite{newman2021microservices} and container orchestration \cite{merkel2014docker} opens a new design space: HR platforms that parse, index, and reason over employee knowledge in near real time.
+
+This project was born from a concrete operational need observed at \textbf{NextStep}, a technology consulting company in Tunis, Tunisia. Managing a growing portfolio of skilled engineers required a systematic way to track certifications, assign training programmes, and answer management queries such as ``who in the network division holds a current CCNP certification?'' Without an automated system, answering such questions involved manually reviewing dozens of \ac{CV} files---a costly, error-prone, and unscalable process.
+
+\section{Host Organisation: NextStep}
+
+\textbf{NextStep} is a well-established Tunisian company founded in 2012 and headquartered in Charguia I, Tunis. It specializes in IT systems integration, cybersecurity infrastructure, and digital transformation services. The company also operates a regional office in Hammam Sousse and has expanded its activities internationally across several countries. Over the years, NextSTEP has delivered tailored digital solutions designed to help organizations transform, differentiate, and grow their businesses. It focuses on deploying and operating solutions adapted to each client’s working environment. With a strong client-oriented approach, the company emphasizes quality, scalability, and long-term support across all project phases. NextSTEP has worked with more than 250 satisfied clients across various sectors, including banking, healthcare, telecommunications, public administration, and energy. Its multidisciplinary teams ensure the delivery of innovative and secure solutions aligned with both business and security requirements.
+
+Figure~\ref{fig:nextstep_logo} presents the NextStep company logo, which reflects its focus on forward-looking technology solutions.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=6cm]{figures/nextstep_logo}
+  \caption{NextStep --- Internship Host Company}
+  \label{fig:nextstep_logo}
+\end{figure}
+
+The company's HR function manages a dynamic employee directory that changes with project assignments, external training programmes, and certification renewals. This internship was hosted within the engineering division, where the need for an automated, queryable HR knowledge base was most acutely felt. NextStep provided the technical environment---including development servers, access to real (anonymised) \ac{CV} datasets for testing, and access to the \ac{SMTP} infrastructure for notification testing---and served as the primary end-user stakeholder for the platform's functional requirements.
+
+\section{Problem Statement}
+
+The following five operational problems were identified during the requirements-gathering phase at NextStep:
+
+\begin{enumerate}
+  \item \textbf{Fragmented employee data.} Employee profiles, \acp{CV}, certification scans, and training records are stored in heterogeneous formats across multiple systems (email, cloud drives, spreadsheets), making it difficult to obtain a unified view of any individual employee's competency profile.
+  \item \textbf{Manual document processing.} Every new hire or certification submission requires manual review and re-keying of data into a master spreadsheet. This introduces transcription errors and significant time delays.
+  \item \textbf{Absence of structured certification tracking.} There is no automated mechanism to record certificate expiry dates and alert responsible managers before certificates lapse, which can expose clients to compliance risk on regulated projects.
+  \item \textbf{No conversational access to knowledge.} Management cannot query the employee knowledge base in natural language. Answering the question ``which engineer has the most recent cloud architect certification?'' requires manually searching across multiple files.
+  \item \textbf{No standardised CV generation.} Producing a company-standard formatted \ac{CV} for a client proposal requires hours of manual reformatting of the employee's original document.
+\end{enumerate}
+
+No existing open-source or affordable \ac{SaaS} platform adequately addresses this combination of requirements within the budget and on-premises deployment constraints of a mid-sized Tunisian IT firm.
+
+\section{Proposed Solution}
+
+This project proposes \textbf{NextRH}: a full-stack, AI-augmented \ac{HR} platform built as a containerised microservices ecosystem. The platform integrates:
+
+\begin{itemize}
+  \item A \textbf{NestJS} \ac{REST} back-end handling business logic, role-based authorisation, and service orchestration.
+  \item A \textbf{FastAPI} AI microservice responsible for \ac{CV} parsing, certification \ac{OCR}, \ac{RAG}-based conversational search, and \ac{CV} generation.
+  \item A \textbf{React} \ac{SPA} providing a responsive, role-aware user interface covering all HR workflows.
+  \item \textbf{PostgreSQL with pgvector} as the unified relational and vector data store, eliminating the need for a separate vector database infrastructure.
+  \item \textbf{Docker Compose} for reproducible, single-command multi-service orchestration suitable for on-premises deployment.
+  \item \textbf{n8n} for email notification workflow automation, decoupled from the core application.
+  \item An optional \textbf{observability stack} (Prometheus, Loki, Tempo, Grafana) for production monitoring.
+\end{itemize}
+
+\section{Development Methodology}
+\label{sec:methodology}
+
+The project follows an \textbf{incremental release strategy} inspired by the Scrum framework \cite{schwaber2020scrum}. Six functional releases are defined, each delivering a vertical slice of production-ready functionality. This approach was chosen over a monolithic delivery plan for three reasons: it enables early feedback from NextStep engineers, it limits the integration risk of any single release, and it produces demonstrable, testable artefacts at regular intervals.
+
+Each release is defined by a \textit{sprint goal}, a list of \textit{user stories}, and a set of \textit{acceptance criteria} validated through manual feature tests. Table~\ref{tab:releases} summarises the six releases.
+
+\begin{table}[H]
+\centering
+\caption{Project Releases Overview}
+\label{tab:releases}
+\begin{tabularx}{\textwidth}{@{}c l X@{}}
+\toprule
+\textbf{Release} & \textbf{Theme} & \textbf{Key Deliverables} \\
+\midrule
+R1 & Infrastructure \& Authentication & Docker stack, PostgreSQL schema, JWT-based auth, invitation flow \\
+R2 & CV Management & Secure upload, deterministic parsing, storage, profile API, PDF preview \\
+R3 & Certification Management & OCR pipeline, fuzzy name validation, expiry tracking \& alerts \\
+R4 & Training \& Teams & Assignment workflow, status machine, proof upload, team CRUD \\
+R5 & RAG / AI Assistant & Vector ingestion, LangChain agent, session memory, sync triggers \\
+R6 & CV Generation, Notifications \& Observability & DOCX/PDF generation, n8n workflows, Grafana/Loki/Tempo stack \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+%% ────────────────────────────────────────────────────────────
+%% CHAPTER 2 — STATE OF THE ART
+%% ────────────────────────────────────────────────────────────
+\chapter{State of the Art}
+\label{chap:state_of_art}
+
+\section{Human Resources Information Systems}
+
+\subsection{Historical Evolution}
+The evolution of \ac{HR} Information Systems (\acs{HR}IS) mirrors the broader trajectory of enterprise software. In the 1960s and 1970s, \acs{HR}IS solutions were little more than payroll-processing modules running on mainframe computers, automating the computation of wages and statutory deductions \cite{kavanagh2017human}. The advent of relational databases in the 1980s enabled the first integrated personnel management systems, which could cross-reference payroll data with attendance records and basic competency profiles.
+
+The 1990s and 2000s saw the rise of large-scale Enterprise Resource Planning (ERP) suites---SAP HCM, Oracle HRMS, PeopleSoft---which consolidated payroll, recruitment, performance management, and learning management into single, monolithic platforms. While these systems offered comprehensive coverage, they required costly licences, multi-month implementation projects, heavy customisation, and specialised consultants, placing them beyond the reach of small and medium enterprises \cite{dinger2017open}.
+
+\subsection{Contemporary Commercial and Open-Source Platforms}
+Today's commercial landscape is dominated by Software-as-a-Service platforms: SAP SuccessFactors, Workday, Oracle HCM Cloud, and BambooHR. These products offer mobile-first interfaces, advanced analytics, and AI-powered recruitment tools, but continue to carry prohibitive per-seat licensing costs and operate exclusively in the cloud---an obstacle for organisations with on-premises data-residency requirements.
+
+Open-source alternatives such as OrangeHRM and Sentrifugo provide a cost-effective entry point but lack AI-augmented capabilities: they cannot parse uploaded \acp{CV}, extract text from scanned certificates, or answer natural-language queries about employee competencies \cite{dinger2017open}.
+
+\subsection{Identified Gaps}
+A systematic review of both commercial and open-source offerings reveals three persistent gaps relevant to this project:
+\begin{enumerate}
+  \item \textbf{Document intelligence}: Most systems treat \ac{CV} and certificate files as binary blobs; they store the file but do not extract, validate, or index its semantic content.
+  \item \textbf{Conversational search}: No affordable solution supports natural-language querying over the employee knowledge base---a capability now achievable with \ac{RAG} and local \acp{LLM}.
+  \item \textbf{On-premises deployability}: Cloud-only solutions are unsuitable for organisations with sovereignty or connectivity constraints.
+\end{enumerate}
+
+\section{Document Intelligence and Information Extraction}
+
+\subsection{Rule-Based and Template-Driven Parsers}
+The earliest automated \ac{CV} parsers relied on hand-crafted rules: regular expressions for dates and email addresses, keyword lists for section headers, and positional heuristics for field boundaries. Systems such as Burning Glass Technologies and Textkernel built large proprietary rule sets over many years \cite{borman2005document}. While these approaches excel on well-structured, single-column documents, their performance degrades significantly on the rich diversity of real-world \ac{CV} layouts---two-column designs, infographic \acp{CV}, tables rendered as plain text, and non-standard section naming conventions.
+
+The TemplateCVParser at the core of NextRH takes a hybrid approach: it uses PyMuPDF's spatial table-detection engine (which operates at the PDF coordinate level rather than the text level) to reconstruct table boundaries that may have been encoded as borderless cells, and then applies multi-strategy regex extraction within each detected region. This gives it the layout robustness of a geometric approach with the precision of targeted extraction rules.
+
+\subsection{Machine Learning and Transformer-Based Extraction}
+The introduction of BERT \cite{devlin2019bert} triggered a wave of named-entity recognition (NER) models applied to resume parsing. Models fine-tuned on annotated corpora of \acp{CV} can identify entities such as company names, job titles, dates, and degree designations with high accuracy on in-domain data. The key limitation is domain shift: a model trained on English Silicon Valley \acp{CV} degrades on French or Arabic \acp{CV} without re-annotation and re-training.
+
+LayoutLM \cite{xu2020layoutlm} and its successors (LayoutLMv2, LayoutLMv3 \cite{xu2022layoutlmv3}) jointly encode textual, visual, and two-dimensional positional information from document images. This enables layout-aware extraction that is robust to arbitrary formatting---tables, multi-column layouts, and infographics. LayoutLMv3 achieves state-of-the-art results on form understanding benchmarks (FUNSD, CORD) but requires a \ac{GPU} for inference and substantial annotated training data, making it impractical for zero-annotation on-premises deployment. NextRH reserves machine learning for the post-\ac{OCR} stage, where the volume of annotated data is sufficient, and uses the deterministic TemplateCVParser as the primary extraction engine.
+
+\subsection{Optical Character Recognition}
+\ac{OCR} transforms raster images into machine-readable text. Tesseract \cite{smith2007overview}, originally developed at HP and subsequently open-sourced by Google, has evolved from a purely classical pipeline to a deep-learning backend (LSTM-based) in versions 4 and 5. It supports over 100 languages and provides word-level bounding boxes suitable for downstream layout analysis.
+
+EasyOCR \cite{easyocr} adopts a deep-learning-first architecture: a CRAFT text detector followed by a ResNet+LSTM recogniser. Its key advantage over Tesseract is robustness to perspective distortion, curved text, and mixed-language documents, at the cost of higher memory consumption and slower throughput.
+
+A persistent challenge in certificate \ac{OCR} is document orientation. Physical documents are frequently scanned at 90-degree or 180-degree rotations. The combination of Tesseract's \texttt{image\_to\_osd()} orientation detection and OpenCV's affine rotation correction \cite{bradski2000opencv} addresses this in NextRH's CertificationOCR module. For digitally-born PDF certificates---increasingly common as vendors such as Cisco, AWS, and Microsoft issue digital-first credentials---PyMuPDF's native text extraction bypasses the \ac{OCR} step entirely, yielding 100\% accuracy and sub-second latency.
+
+\section{Large Language Models}
+
+\subsection{Overview and Capabilities}
+The transformer architecture \cite{vaswani2017attention}, introduced in 2017, established the foundation for a generation of large pre-trained language models. GPT-3 \cite{brown2020language}, with 175 billion parameters, demonstrated that scale alone can produce emergent capabilities: few-shot learning, instruction following, and complex reasoning---abilities that smaller models do not exhibit. Subsequent models including GPT-4, LLaMA \cite{touvron2023llama}, Mistral, and Qwen \cite{bai2023qwen} have further extended these capabilities while exploring the efficiency frontier through quantisation, mixture-of-experts architectures, and grouped-query attention.
+
+For the purposes of NextRH, two \ac{LLM} capabilities are relevant: (1)~\textbf{structured information extraction}---the ability to receive raw \ac{OCR} text and output a structured \ac{JSON} object containing certificate metadata; and (2)~\textbf{grounded question answering}---the ability to synthesise a coherent, cited answer from a set of retrieved text passages. Both capabilities are well within reach of quantised 1--7B parameter models running locally via the Ollama runtime.
+
+\subsection{Hallucination and the Need for Grounding}
+A well-documented failure mode of autoregressive \acp{LLM} is hallucination: the generation of plausible-sounding but factually incorrect statements \cite{ji2023survey}. In the HR domain, hallucination is particularly dangerous: a model that fabricates a certification or misattributes a skill to a wrong employee cannot be tolerated in a production system. This failure mode motivates the use of \ac{RAG} rather than relying on the model's parametric memory alone.
+
+\section{Retrieval-Augmented Generation}
+
+\subsection{Foundations}
+\ac{RAG}, introduced by Lewis et al.\ in 2020 \cite{lewis2020retrieval}, proposes conditioning the language model's response on documents retrieved at query time from an external knowledge base. The architecture comprises two components: a \textit{dense retriever} that embeds both queries and documents into a shared vector space and retrieves the top-$k$ most similar documents, and a \textit{reader} (the \ac{LLM}) that generates an answer grounded in the retrieved context. This separation between parametric knowledge (the model's weights) and non-parametric knowledge (the external corpus) allows the knowledge base to be updated without retraining the model.
+
+\subsection{Dense Retrieval and Embedding Models}
+Dense retrieval relies on bi-encoder models that map variable-length text sequences to fixed-dimensional embeddings. Early approaches used SentenceBERT \cite{reimers2019sentencebert} variants fine-tuned on natural language inference or semantic textual similarity tasks. The Nomic Embed Text model \cite{nussbaum2024nomic} used in NextRH generates 768-dimensional embeddings optimised for retrieval benchmarks (MTEB \cite{muennighoff2022mteb}), outperforming many SentenceBERT variants on document-level retrieval while remaining small enough to run locally on \ac{CPU}.
+
+\subsection{Vector Databases and Approximate Nearest Neighbour Search}
+Once embeddings have been generated, efficient retrieval requires an index structure that supports approximate nearest-neighbour search \cite{johnson2019billion}. Dedicated vector databases such as Pinecone, Weaviate, Qdrant, and Chroma provide managed infrastructure with HNSW or IVFFlat indices. pgvector \cite{pgvector2023} is a PostgreSQL extension that adds a native \texttt{vector} column type and supports both \texttt{ivfflat} and \texttt{hnsw} indices, enabling cosine and L2 similarity search directly within a relational database. NextRH adopts pgvector to consolidate vector storage with the existing relational schema, avoiding a separate operational dependency and simplifying backup and recovery procedures.
+
+\subsection{Advanced RAG Techniques}
+Several techniques improve baseline RAG performance \cite{gao2023retrieval}. \textit{Chunking strategy}: splitting documents at semantic boundaries (sections rather than arbitrary character windows) preserves coherence within each retrieval unit. \textit{Metadata filtering}: restricting the candidate set before semantic search reduces noise; NextRH implements this as name-aware filtering---if a query mentions a specific employee, only that employee's chunks are considered. \textit{Verified-source prioritisation}: annotating chunks from human-verified certificates with a lexical prefix (\texttt{[Verified via direct upload]}) guides the model to prefer high-confidence data. These design choices are detailed in Section~\ref{sec:etl}.
+
+\section{Microservices Architecture and Cloud-Native Engineering}
+
+\subsection{Microservices vs.\ Monolithic Architecture}
+A microservices architecture \cite{newman2021microservices} decomposes an application into small, independently deployable services, each owning its own data store and communicating over well-defined APIs. The benefits include independent scalability (the AI service, which is CPU-intensive, can be scaled without touching the backend), fault isolation (a crash in the notification service does not bring down the core API), and technology heterogeneity (the AI service can be written in Python while the backend uses TypeScript).
+
+The trade-off is operational complexity: service discovery, network failure handling, distributed tracing, and eventual consistency are concerns that do not arise in a monolith. NextRH manages this complexity through Docker Compose for local orchestration, OpenTelemetry for distributed tracing, and synchronous \ac{HTTP} communication between services---a simplification appropriate for the scale of the current deployment.
+
+\subsection{Docker and Container Orchestration}
+Docker \cite{merkel2014docker} packages an application and all its runtime dependencies into a portable, immutable image. Docker Compose extends this to multi-container topologies, declaring service interdependencies, health checks, environment variables, and volume mounts in a single YAML manifest. For NextRH, Docker Compose provides a one-command deployment experience (\texttt{docker compose up --build}) on any Linux host with Docker installed, which is essential for on-premises deployment at NextStep.
+
+\subsection{NestJS as an Enterprise Node.js Framework}
+NestJS \cite{kamil2017nestjs} brings Angular-inspired module organisation, dependency injection, decorators-based routing, and OpenAPI documentation generation to Node.js. Its module system enforces a clean separation of concerns: each feature (authentication, CV management, certifications) is a self-contained module exporting a controller, a service, and TypeORM entities. The NestJS \texttt{@Roles()} decorator/guard system enables declarative \ac{RBAC} at the controller-method level.
+
+\subsection{Workflow Automation with n8n}
+n8n \cite{n8n2022} is a self-hostable, open-source workflow automation platform with a visual node editor. It supports 200+ integrations and exposes a webhook interface for event-driven trigger. NextRH uses n8n as a dedicated notification dispatcher: the backend fires HTTP webhooks to an n8n endpoint, which routes the payload through type-specific email composition nodes before dispatching via SMTP. This decoupling prevents a slow or unavailable email provider from blocking the core request-response cycle.
+
+\section{Security Considerations in HR Systems}
+
+HR systems are prime targets for data breaches because they aggregate sensitive personal information: names, contact details, salary data, and identity documents. OWASP Top-10 risks most relevant to NextRH include broken access control (mitigated by \ac{RBAC}), injection attacks (mitigated by TypeORM parameterised queries and input validation \ac{DTO}s), and insecure file uploads (mitigated by MIME allow-listing, file-size caps, and ClamAV scanning) \cite{owasp2021}. The invitation-only registration model eliminates the risk of account enumeration and bulk sign-up abuse.
+
+\section{Synthesis and Positioning}
+
+Table~\ref{tab:soa_comparison} positions NextRH against representative platforms. The key differentiator is the combination of on-premises deployability, AI-powered document parsing, conversational search, and an open-source licence---no single existing solution offers all four.
+
+\begin{table}[H]
+\centering
+\caption{Comparative Analysis of HR Management Solutions}
+\label{tab:soa_comparison}
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}X c c c c c@{}}
+\toprule
+\textbf{Platform} & \textbf{AI Parsing} & \textbf{RAG Chat} & \textbf{OCR} & \textbf{Open Source} & \textbf{On-Prem} \\
+\midrule
+SAP SuccessFactors & Partial & No  & No  & No  & No  \\
+Workday            & Partial & No  & No  & No  & No  \\
+BambooHR           & No      & No  & No  & No  & Cloud only \\
+OrangeHRM          & No      & No  & No  & Yes & Yes \\
+Textkernel (CV parsing only) & Yes & No & No & No & No \\
+\textbf{NextRH (proposed)} & \textbf{Yes} & \textbf{Yes} & \textbf{Yes} & \textbf{Yes} & \textbf{Yes} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+%% ────────────────────────────────────────────────────────────
+
+%%  BIBLIOGRAPHY
+%% ════════════════════════════════════════════════════════════
+\clearpage
+\addcontentsline{toc}{chapter}{Bibliography}
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

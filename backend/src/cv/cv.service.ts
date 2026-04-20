@@ -109,6 +109,8 @@ export class CvService {
 
         if (!profile) {
             return {
+                profileId: null,
+                profile_id: null,
                 name: fullName,
                 email: user.email,
                 phone,
@@ -241,6 +243,8 @@ export class CvService {
             .filter((project) => !(project.name.toLowerCase() === 'unknown project' && !project.client && !project.description));
 
         return {
+            profileId: profile.profile_id,
+            profile_id: profile.profile_id,
             name: fullName,
             email: user.email,
             phone,

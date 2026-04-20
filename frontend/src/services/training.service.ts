@@ -69,11 +69,12 @@ export const trainingService = {
     await api.patch(`/training/${trainingId}/status`, { status: 'completed', ...payload });
   },
 
-  async uploadProof(trainingId: string, file: File, payload: { issueDate?: string; description?: string }) {
+  async uploadProof(trainingId: string, file: File, payload: { issueDate?: string; description?: string; relatedProjectId?: string } = {}) {
     const form = new FormData();
     form.append('file', file);
     if (payload.issueDate) form.append('issueDate', payload.issueDate);
     if (payload.description) form.append('description', payload.description);
+    if (payload.relatedProjectId) form.append('relatedProjectId', payload.relatedProjectId);
     await api.post(`/training/${trainingId}/proof`, form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });

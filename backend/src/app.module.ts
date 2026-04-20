@@ -18,6 +18,7 @@ import { RagModule } from './rag/rag.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { MailModule } from './mail/mail.module';
 import { AIGenerationModule } from './ai-generation/ai-generation.module';
+import { ScoringModule } from './scoring/scoring.module';
 import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
@@ -63,6 +64,7 @@ import { ScheduleModule } from '@nestjs/schedule';
         NotificationsModule,
         MailModule,
         AIGenerationModule,
+        ScoringModule,
     ],
     controllers: [],
     providers: [],
