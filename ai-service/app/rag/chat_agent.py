@@ -858,9 +858,10 @@ def _build_grounding_blob(structured_facts_blob: str, docs: list[LCDocument]) ->
 
 
 def _is_answer_grounded(answer: str, structured_facts_blob: str, docs: list[LCDocument]) -> bool:
-    """Last-resort safety net: only blocks answers that share ZERO tokens with
-    the evidence. This catches pure hallucinations (made-up people/companies)
-    without interfering with reasoning or paraphrased answers from real data."""
+    """Safety net against hallucination. Short answers need minimal grounding,
+    but long essays must have proportional overlap with the evidence to pass.
+    This catches the case where the LLM generates a long Wikipedia-style essay
+    from its training data instead of using the provided StructuredFacts."""
     normalized_answer = _normalize_for_match(answer)
     if not normalized_answer:
         return False
@@ -869,23 +870,33 @@ def _is_answer_grounded(answer: str, structured_facts_blob: str, docs: list[LCDo
     if "timed out" in normalized_answer:
         return True
     if "i don" in normalized_answer or "don t have" in normalized_answer:
-        # LLM explicitly saying it doesn't know — always valid.
         return True
 
     answer_tokens = _signal_tokens(normalized_answer)
     if not answer_tokens:
-        # Very short generic answer — pass through.
         return True
 
     evidence_blob = _build_grounding_blob(structured_facts_blob, docs)
     if not evidence_blob:
-        # No evidence to compare against — can't verify, let through.
         return True
 
     matched = [token for token in answer_tokens if _contains_word(evidence_blob, token)]
-    # Only reject if ZERO overlap — a real answer will always reference at
-    # least one name, certification, company, or skill from the data.
-    return len(matched) > 0
+    if not matched:
+        return False
+
+    coverage = len(matched) / len(answer_tokens)
+    num_tokens = len(answer_tokens)
+
+    # Scale threshold with answer length:
+    # - Short (1-8): 1 match is enough (direct factual answers)
+    # - Medium (9-20): 15% coverage (reasoning with some paraphrasing)
+    # - Long (21+): 20% coverage (catches hallucinated essays from training data
+    #   that coincidentally share a name/word with the evidence)
+    if num_tokens <= 8:
+        return True
+    if num_tokens <= 20:
+        return coverage >= 0.15
+    return coverage >= 0.20
 
 
 def build_chain():
@@ -1415,26 +1426,26 @@ Rules:
         [
             (
                 "system",
-                """You are a helpful employee database assistant. Your job is to answer questions using the data in StructuredFacts and Context below.
-
-IMPORTANT:
-- Use ONLY the data provided. Do not use any outside or general knowledge.
-- Names in queries may be partial (e.g. "anouar" matches "Anouar ABDALLAH"). Match names case-insensitively.
-- If you find matching data, provide a concise answer based on it.
-- If there is truly no matching data, reply: "I don't have that information."
-- Answer only what was asked. Keep it short and factual.
-
-RecentChatHistory:
-{recent_chat_history}
-
-Question:
-{standalone_query}
+                """You are an employee database assistant. Below is the employee database you have access to.
 
 StructuredFacts:
 {structured_facts}
 
 Context:
-{context}""",
+{context}
+
+RecentChatHistory:
+{recent_chat_history}
+
+RULES:
+- Answer the question using ONLY the StructuredFacts and Context above. Do NOT use outside knowledge.
+- All names in the question refer to employees in the data above, not famous people.
+- Match names partially and case-insensitively (e.g. "anouar" = "Anouar ABDALLAH").
+- If matching data exists, answer concisely from it.
+- If no matching data exists, reply exactly: "I don't have that information."
+- Answer only what was asked. Keep it short.
+
+Question: {standalone_query}""",
             ),
             ("human", "{input}"),
         ]
