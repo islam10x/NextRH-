@@ -5,9 +5,10 @@ import { TeamsController } from './teams.controller';
 import { Team } from './entities/team.entity';
 import { TeamMember } from './entities/team-member.entity';
 import { EmployeeProfile } from '../employees/entities/employee-profile.entity';
+import { User } from '../users/entities/user.entity';
 
 @Module({
-    imports: [TypeOrmModule.forFeature([Team, TeamMember, EmployeeProfile])],
+    imports: [TypeOrmModule.forFeature([Team, TeamMember, EmployeeProfile, User])],
     controllers: [TeamsController],
     providers: [TeamsService],
     exports: [TeamsService],

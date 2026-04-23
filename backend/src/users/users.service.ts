@@ -228,10 +228,17 @@ export class UsersService {
 
     getAvatarUrl(avatarPath?: string | null): string | null {
         if (!avatarPath) return null;
+        const normalizedAvatarPath = avatarPath.replace(/\\/g, '/').replace(/^\/+/, '');
+        const absoluteAvatarPath = path.join(this.getStorageRoot(), normalizedAvatarPath);
+        if (!existsSync(absoluteAvatarPath)) {
+            // Folder renames after CV parsing can invalidate stale stored avatar paths.
+            // Returning null avoids repeated frontend 404 fetches.
+            return null;
+        }
         const publicBaseUrl =
             this.configService.get<string>('BACKEND_PUBLIC_URL') ||
             `http://localhost:${this.configService.get<string>('PORT', '3000')}`;
-        return `${publicBaseUrl.replace(/\/+$/, '')}/public/cv-database/${avatarPath.replace(/^\/+/, '')}`;
+        return `${publicBaseUrl.replace(/\/+$/, '')}/public/cv-database/${normalizedAvatarPath}`;
     }
 
     toSafeUser(user: Partial<User> & { user_id?: string }) {

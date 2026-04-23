@@ -10,10 +10,20 @@ import { User } from '../users/entities/user.entity';
 import { TeamsModule } from '../teams/teams.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ScoringModule } from '../scoring/scoring.module';
+import { CrossTeamAssignmentRequest } from './entities/cross-team-assignment-request.entity';
+import { Team } from '../teams/entities/team.entity';
 
 @Module({
     imports: [
-        TypeOrmModule.forFeature([Project, ProjectParticipant, EmployeeProfile, Skill, User]),
+        TypeOrmModule.forFeature([
+            Project,
+            ProjectParticipant,
+            CrossTeamAssignmentRequest,
+            EmployeeProfile,
+            Skill,
+            User,
+            Team,
+        ]),
         TeamsModule,
         NotificationsModule,
         forwardRef(() => ScoringModule),

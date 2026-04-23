@@ -8,6 +8,7 @@ import { TeamsModule } from '../teams/teams.module';
 import { Certification } from './entities/certification.entity';
 import { EmployeeProfile } from '../employees/entities/employee-profile.entity';
 import { FileValidationModule } from '../file-validation/file-validation.module';
+import { ScoringModule } from '../scoring/scoring.module';
 
 @Module({
     imports: [
@@ -16,6 +17,7 @@ import { FileValidationModule } from '../file-validation/file-validation.module'
         RagModule,
         FileValidationModule,
         TeamsModule,
+        ScoringModule,
     ],
     controllers: [CertificationsController],
     providers: [CertificationsService],

@@ -1,4 +1,4 @@
-import { IsArray, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
 export class AssignProjectDto {
     @IsString()
@@ -28,16 +28,10 @@ export class AssignProjectDto {
     @IsOptional()
     technologies?: string[];
 
-    /** Default role for assignees (used when roles map doesn't specify) */
-    @IsString()
-    @IsOptional()
-    role?: string;
+    @IsEnum(['internal', 'external'])
+    projectType: 'internal' | 'external';
 
     @IsString()
     @IsOptional()
     complexity?: string;
-
-    /** Per-employee roles: { profileId: role } — overrides the default role */
-    @IsOptional()
-    roles?: Record<string, string>;
 }

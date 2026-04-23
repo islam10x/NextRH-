@@ -39,16 +39,31 @@ export class ProjectRecord {
   })
   complexity: 'low' | 'medium' | 'high';
 
-  @Column({
-    name: 'employee_role',
-    type: 'enum',
-    enum: ['contributor', 'technical_lead', 'project_lead'],
-    default: 'contributor',
-  })
-  employeeRole: 'contributor' | 'technical_lead' | 'project_lead';
-
   @Column({ name: 'pv_verified', type: 'boolean', default: false })
   pvVerified: boolean;
+
+  @Column({ name: 'individual_score', type: 'decimal', precision: 5, scale: 2, nullable: true })
+  individualScore: number | null;
+
+  @Column({
+    name: 'evaluation_status',
+    type: 'enum',
+    enum: ['scored_by_own_manager', 'pending_external_manager', 'scored_by_home_manager'],
+    default: 'scored_by_own_manager',
+  })
+  evaluationStatus: 'scored_by_own_manager' | 'pending_external_manager' | 'scored_by_home_manager';
+
+  @Column({ name: 'external_contribution_description', type: 'text', nullable: true })
+  externalContributionDescription: string | null;
+
+  @Column({ name: 'external_home_manager_id', type: 'uuid', nullable: true })
+  externalHomeManagerId: string | null;
+
+  @Column({ name: 'evaluated_by_manager_id', type: 'uuid', nullable: true })
+  evaluatedByManagerId: string | null;
+
+  @Column({ name: 'evaluated_at', type: 'timestamp', nullable: true })
+  evaluatedAt: Date | null;
 
   @Column({ name: 'submitted_by', type: 'uuid', nullable: true })
   submittedBy: string;

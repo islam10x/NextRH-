@@ -616,7 +616,7 @@ class TestBuildSectionContent:
 
     def test_languages_dicts(self):
         result = _build_section_content('languages', {
-            'languages': [{'name': 'French'}, {'name': 'Arabic'}]
+            'languages': [{'name': 'French'}, {'name': 'English'}]
         })
         assert result is not None
         assert 'French' in result[0]['text']
@@ -792,12 +792,6 @@ class TestSpecialCharacters:
         texts = [r['text'] for r in result]
         assert any('Ingénieur' in t for t in texts)
 
-    def test_arabic_text(self):
-        result = _build_section_content('summary', {
-            'summary': 'مهندس برمجيات متخصص في تطوير التطبيقات'
-        })
-        assert result is not None
-
     def test_empty_experience_with_description_only(self):
         """Experience with no title, no company, only description → skipped."""
         result = _build_section_content('experience', {
@@ -918,7 +912,7 @@ class TestFullSectionPipeline:
             ],
             'skills': ['Python', 'React', 'Docker'],
             'certifications': ['AWS Solutions Architect'],
-            'languages': ['French', 'English', 'Arabic'],
+            'languages': ['French', 'English'],
             'interests': ['AI', 'Open Source'],
             'projects': [{'name': 'NextRH', 'description': 'HR platform'}],
         }

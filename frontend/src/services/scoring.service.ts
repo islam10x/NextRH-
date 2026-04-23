@@ -1,7 +1,5 @@
 import api from './api';
 
-// ── Types ────────────────────────────────────────────────────────────────
-
 export interface ProjectRecord {
   record_id: string;
   profileId: string;
@@ -10,8 +8,13 @@ export interface ProjectRecord {
   projectDescription: string | null;
   completionDate: string | null;
   complexity: 'low' | 'medium' | 'high';
-  employeeRole: 'contributor' | 'technical_lead' | 'project_lead';
   pvVerified: boolean;
+  individualScore: number | null;
+  evaluationStatus: 'scored_by_own_manager' | 'pending_external_manager' | 'scored_by_home_manager';
+  externalContributionDescription: string | null;
+  externalHomeManagerId: string | null;
+  evaluatedByManagerId: string | null;
+  evaluatedAt: string | null;
   submittedBy: string | null;
   sourceFilename: string | null;
   createdAt: string;
@@ -38,11 +41,83 @@ export interface ScoringTarget {
   certificationTarget: number;
 }
 
-export interface ScoringWeights {
-  projectWeight: number;
-  certificationWeight: number;
-  trainingWeight: number;
-  formationWeight: number;
+export interface ProjectScoreDetail {
+  project_name: string;
+  complexity: 'low' | 'medium' | 'high';
+  completion_date: string | null;
+  pv_verified: boolean;
+  evaluation_status: 'scored_by_own_manager' | 'pending_external_manager' | 'scored_by_home_manager';
+  manager_score_raw: number | null;
+  manager_score_scale_max: number;
+  contribution_score: number;
+  scoring_method: 'manager_score_converted' | 'legacy_manager_score' | 'complexity_fallback';
+  explanation: string;
+}
+
+export interface ScoreDetails {
+  project_score: number;
+  certification_score: number;
+  training_score: number;
+  formation_score: number;
+  final_score: number;
+  score_formula: string;
+  manager_score_scale_max: number;
+  project_count: number;
+  pending_external_count: number;
+  scored_project_count: number;
+  evaluated_projects?: ProjectScoreDetail[];
+  pending_external_projects?: ProjectScoreDetail[];
+  headline?: {
+    tone: 'excellent' | 'strong' | 'developing' | 'starting';
+    title: string;
+    message: string;
+  };
+  scale?: {
+    manager_score_max: number;
+    pillar_score_max: number;
+    final_score_max: number;
+  };
+  formulas?: {
+    final?: string;
+    projects?: string;
+    certifications?: string;
+    trainings?: string;
+    formations?: string;
+  };
+  workflow?: {
+    scoring_year?: number;
+    pending_external_projects_use_provisional_complexity?: boolean;
+    next_actions?: string[];
+  };
+  pillars?: {
+    projects?: {
+      score: number;
+      total_projects_in_year: number;
+      scored_projects: number;
+      pending_external_projects: number;
+      items: ProjectScoreDetail[];
+    };
+    certifications?: {
+      score: number;
+      count: number;
+      target: number;
+      effective_target: number;
+      progress_percent: number;
+      explanation: string;
+    };
+    trainings?: {
+      score: number;
+      count: number;
+      points_per_completed_training: number;
+      explanation: string;
+    };
+    formations?: {
+      score: number;
+      count: number;
+      points_per_delivered_formation: number;
+      explanation: string;
+    };
+  };
 }
 
 export interface EmployeeScore {
@@ -57,7 +132,7 @@ export interface EmployeeScore {
   rankGlobal: number | null;
   rankInTeam: number | null;
   percentile: number | null;
-  scoreDetails: Record<string, any> | null;
+  scoreDetails: ScoreDetails | null;
 }
 
 export interface LeaderboardEntry {
@@ -80,7 +155,7 @@ export interface UploadResult {
   results?: Array<{
     profileId: string;
     employeeName: string;
-    status: 'created' | 'duplicate';
+    status: 'created' | 'updated' | 'duplicate';
     message?: string;
   }>;
 }
@@ -89,10 +164,43 @@ export interface AvailableProject {
   project_id: string;
   projectName: string;
   clientName: string | null;
+  projectType: 'internal' | 'external';
   complexity: string | null;
   startDate: string | null;
   endDate: string | null;
-  participants: { profileId: string; name: string; role: string }[];
+  participants: {
+    profileId: string;
+    name: string;
+    assignmentType: 'internal' | 'external';
+    homeManagerId: string | null;
+  }[];
+}
+
+export interface PvPreview {
+  document_type: string;
+  file_hash: string;
+  parsed_data: {
+    project_name?: string | null;
+    client_name?: string | null;
+    completion_date?: string | null;
+    team_members?: Array<{ name: string; role?: string }>;
+    completion_confirmed?: boolean;
+    assumptions?: string[];
+    complexity?: string | null;
+  };
+}
+
+export interface PendingExternalEvaluation {
+  recordId: string;
+  profileId: string;
+  projectName: string;
+  clientName: string | null;
+  complexity: string | null;
+  externalContributionDescription: string | null;
+  completionDate: string | null;
+  submittedBy: string | null;
+  createdAt: string;
+  employeeName: string;
 }
 
 const normalizeEmployeeScore = (score: any): EmployeeScore | null => {
@@ -109,36 +217,32 @@ const normalizeEmployeeScore = (score: any): EmployeeScore | null => {
   };
 };
 
-const normalizeWeights = (weights: any): ScoringWeights => ({
-  projectWeight: Number(weights?.projectWeight ?? 0),
-  certificationWeight: Number(weights?.certificationWeight ?? 0),
-  trainingWeight: Number(weights?.trainingWeight ?? 0),
-  formationWeight: Number(weights?.formationWeight ?? 0),
-});
-
-// ── Service ──────────────────────────────────────────────────────────────
-
 export const scoringService = {
-  // ── Upload ──────────────────────────────────────────────────────────
+  async previewPv(file: File): Promise<PvPreview> {
+    const formData = new FormData();
+    formData.append('file', file);
 
-  /** Team Manager uploads a PV for an employee */
+    const res = await api.post('/scoring/preview-pv', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return res.data;
+  },
+
   async uploadPv(
     file: File,
     profileIds: string[],
-    projectId?: string,
-    projectName?: string,
-    clientName?: string,
+    projectId: string,
     complexity?: string,
-    employeeRole?: string,
+    profileEvaluations?: Array<{ profileId: string; score?: number; contributionDescription?: string }>,
   ): Promise<UploadResult> {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('profileIds', JSON.stringify(profileIds));
-    if (projectId) formData.append('projectId', projectId);
-    if (projectName) formData.append('projectName', projectName);
-    if (clientName) formData.append('clientName', clientName);
+    formData.append('projectId', projectId);
     if (complexity) formData.append('complexity', complexity);
-    if (employeeRole) formData.append('employeeRole', employeeRole);
+    if (profileEvaluations?.length) {
+      formData.append('profileEvaluations', JSON.stringify(profileEvaluations));
+    }
 
     const res = await api.post('/scoring/upload-pv', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
@@ -146,7 +250,6 @@ export const scoringService = {
     return res.data;
   },
 
-  /** Employee uploads their own training sheet */
   async uploadTrainingSheet(file: File): Promise<UploadResult> {
     const formData = new FormData();
     formData.append('file', file);
@@ -156,8 +259,6 @@ export const scoringService = {
     });
     return res.data;
   },
-
-  // ── Targets ─────────────────────────────────────────────────────────
 
   async setTarget(profileId: string, targetYear: number, certificationTarget: number) {
     const res = await api.post('/scoring/targets', { profileId, targetYear, certificationTarget });
@@ -173,8 +274,6 @@ export const scoringService = {
     }
   },
 
-  // ── Score ───────────────────────────────────────────────────────────
-
   async computeScore(profileId: string, year: number) {
     const res = await api.post('/scoring/compute', { profileId, year });
     return res.data;
@@ -182,6 +281,11 @@ export const scoringService = {
 
   async computeTeamScores(year: number) {
     const res = await api.post('/scoring/compute-team', { year });
+    return res.data;
+  },
+
+  async computeAllScores(year: number) {
+    const res = await api.post('/scoring/compute-all', { year });
     return res.data;
   },
 
@@ -199,8 +303,6 @@ export const scoringService = {
     return (res.data || []).map((score: any) => normalizeEmployeeScore(score)).filter(Boolean);
   },
 
-  // ── Records ─────────────────────────────────────────────────────────
-
   async getProjectRecords(profileId: string): Promise<ProjectRecord[]> {
     const res = await api.get(`/scoring/project-records/${profileId}`);
     return res.data || [];
@@ -211,18 +313,25 @@ export const scoringService = {
     return res.data || [];
   },
 
-  async updateProjectRecord(recordId: string, data: { complexity?: string; employeeRole?: string }) {
+  async updateProjectRecord(recordId: string, data: { complexity?: string }) {
     const res = await api.patch(`/scoring/project-records/${recordId}`, data);
     return res.data;
   },
 
-  /** List all projects (for PV upload project selector) */
+  async listPendingExternalEvaluations(): Promise<PendingExternalEvaluation[]> {
+    const res = await api.get('/scoring/external-evaluations/pending');
+    return res.data || [];
+  },
+
+  async scoreExternalEvaluation(recordId: string, score: number) {
+    const res = await api.post(`/scoring/external-evaluations/${recordId}/score`, { score });
+    return res.data;
+  },
+
   async listProjects(): Promise<AvailableProject[]> {
     const res = await api.get('/scoring/projects');
     return res.data || [];
   },
-
-  // ── Leaderboard ─────────────────────────────────────────────────────
 
   async getLeaderboard(year: number, teamId?: string, limit?: number): Promise<LeaderboardEntry[]> {
     const params: Record<string, string> = { year: String(year) };
@@ -231,24 +340,5 @@ export const scoringService = {
 
     const res = await api.get('/scoring/leaderboard', { params });
     return res.data || [];
-  },
-
-  // ── Weights ─────────────────────────────────────────────────────────
-
-  async getWeights(teamId?: string) {
-    const params = teamId ? { teamId } : {};
-    const res = await api.get('/scoring/weights', { params });
-    return normalizeWeights(res.data);
-  },
-
-  async updateWeights(projectWeight: number, certificationWeight: number, trainingWeight: number, formationWeight: number, teamId?: string) {
-    const res = await api.patch('/scoring/weights', {
-      projectWeight,
-      certificationWeight,
-      trainingWeight,
-      formationWeight,
-      teamId,
-    });
-    return res.data;
   },
 };

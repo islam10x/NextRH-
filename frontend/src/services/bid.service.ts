@@ -51,12 +51,13 @@ export const bidService = {
     employeeId: string,
     templateFile: File,
     format: 'docx' | 'pdf' = 'docx',
+    language: 'en' | 'fr' = 'en',
   ): Promise<Blob> {
     const formData = new FormData();
     formData.append('template', templateFile);
     formData.append('employeeId', employeeId);
 
-    const res = await api.post(`/cv/generate?format=${format}`, formData, {
+    const res = await api.post(`/cv/generate?format=${format}&language=${language}`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
       responseType: 'blob',
     });

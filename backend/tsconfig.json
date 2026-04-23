@@ -9,6 +9,7 @@
         "target": "es2017",
         "sourceMap": true,
         "outDir": "./dist",
+        "tsBuildInfoFile": "./dist/tsconfig.tsbuildinfo",
         "baseUrl": "./",
         "incremental": true,
         "skipLibCheck": true,
@@ -17,5 +18,15 @@
         "strictBindCallApply": false,
         "forceConsistentCasingInFileNames": false,
         "noFallthroughCasesInSwitch": false
-    }
+    },
+    "include": [
+        "src/**/*.ts"
+    ],
+    "exclude": [
+        "node_modules",
+        "dist",
+        "test",
+        "**/*.spec.ts",
+        "create-password-hash.ts"
+    ]
 }

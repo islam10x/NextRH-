@@ -34,6 +34,7 @@ const CVGenerationPage: React.FC = () => {
   const [employees, setEmployees] = useState<DBUser[]>([]);
   const [isLoadingEmployees, setIsLoadingEmployees] = useState(true);
   const [templateFile, setTemplateFile] = useState<File | null>(null);
+  const [language, setLanguage] = useState<'en' | 'fr'>('en');
   const [isGenerating, setIsGenerating] = useState(false);
   
   // Generated files
@@ -121,8 +122,8 @@ const CVGenerationPage: React.FC = () => {
 
       // Generate DOCX for download and try PDF for preview in parallel
       const [docx, pdf] = await Promise.allSettled([
-        bidService.generateCv(selectedEmployee, templateFile, 'docx'),
-        bidService.generateCv(selectedEmployee, templateFile, 'pdf'),
+        bidService.generateCv(selectedEmployee, templateFile, 'docx', language),
+        bidService.generateCv(selectedEmployee, templateFile, 'pdf', language),
       ]);
 
       // Handle DOCX result
@@ -216,6 +217,20 @@ const CVGenerationPage: React.FC = () => {
                 </SelectContent>
               </Select>
             )}
+          </div>
+
+          {/* Template upload */}
+          <div className="space-y-2">
+            <Label>Output Language</Label>
+            <Select value={language} onValueChange={(v) => setLanguage(v as 'en' | 'fr')}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="en">English (original)</SelectItem>
+                <SelectItem value="fr">French — Français</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
           {/* Template upload */}

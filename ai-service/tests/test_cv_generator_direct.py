@@ -154,7 +154,7 @@ if __name__ == "__main__":
                 "description": "End-to-end ML system with automated feature engineering.",
             },
         ],
-        "languages": ["French (Fluent)", "Arabic (Fluent)", "English (Fluent)", "Spanish (Basic)"],
+        "languages": ["French (Fluent)", "English (Fluent)", "Spanish (Basic)"],
     }
     
     with tempfile.TemporaryDirectory() as tmpdir:

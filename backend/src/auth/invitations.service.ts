@@ -33,10 +33,11 @@ export class InvitationsService {
             if (existingUser.status === UserStatus.ACTIVE || existingUser.status === UserStatus.PENDING_INVITATION) {
                 if (isTeamManager) {
                     await this.teamsService.ensureMembership(invitedByUserId, existingUser.user_id);
+                    const managerName = manager
+                        ? `${manager.firstName || ''} ${manager.lastName || ''}`.trim() || manager.email
+                        : 'your manager';
 
                     // Notifications and Emails
-                    const managerName = manager ? `${manager.firstName || ''} ${manager.lastName || ''}`.trim() : 'a manager';
-
                     await this.notificationsService.create({
                         userId: existingUser.user_id,
                         type: 'team_added',

@@ -77,7 +77,7 @@ EMPLOYEE = {
             "description": "End-to-end ML system with automated feature engineering.",
         },
     ],
-    "languages": ["French (Fluent)", "Arabic (Fluent)", "English (Fluent)"],
+    "languages": ["French (Fluent)", "English (Fluent)"],
 }
 
 # ── Expected contact info in output ──────────────────────────────────────────

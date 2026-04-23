@@ -1,4 +1,5 @@
 import { Controller, Get, Req, UseGuards } from '@nestjs/common';
+import { Body, Patch } from '@nestjs/common';
 import { TeamsService } from './teams.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -22,5 +23,26 @@ export class TeamsController {
     async myTeamMembers(@Req() req: any) {
         const managerId = req.user?.userId || req.user?.user_id || req.user?.id;
         return this.teamsService.getMembersForManager(managerId);
+    }
+
+    @Get('other')
+    @Roles(UserRole.TEAM_MANAGER)
+    async listOtherTeams(@Req() req: any) {
+        const managerId = req.user?.userId || req.user?.user_id || req.user?.id;
+        return this.teamsService.listOtherTeamsForManager(managerId);
+    }
+
+    @Get('me')
+    @Roles(UserRole.TEAM_MANAGER)
+    async myTeam(@Req() req: any) {
+        const managerId = req.user?.userId || req.user?.user_id || req.user?.id;
+        return this.teamsService.getManagerTeam(managerId);
+    }
+
+    @Patch('me')
+    @Roles(UserRole.TEAM_MANAGER)
+    async updateMyTeam(@Req() req: any, @Body() body: { teamName?: string }) {
+        const managerId = req.user?.userId || req.user?.user_id || req.user?.id;
+        return this.teamsService.updateManagerTeamName(managerId, body?.teamName || '');
     }
 }

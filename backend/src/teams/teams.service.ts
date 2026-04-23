@@ -1,6 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Team } from './entities/team.entity';
 import { TeamMember } from './entities/team-member.entity';
 import { EmployeeProfile } from '../employees/entities/employee-profile.entity';
@@ -15,7 +15,74 @@ export class TeamsService {
         private readonly teamMemberRepo: Repository<TeamMember>,
         @InjectRepository(EmployeeProfile)
         private readonly profileRepo: Repository<EmployeeProfile>,
+        @InjectRepository(User)
+        private readonly userRepo: Repository<User>,
     ) { }
+
+    private normalizeTeamName(value: string): string {
+        return String(value || '')
+            .trim()
+            .replace(/\s+/g, ' ');
+    }
+
+    private defaultTeamNameForManager(manager?: User | null): string {
+        const firstName = (manager?.firstName || '').trim();
+        if (firstName) return `${firstName}'s Team`;
+        return 'Team';
+    }
+
+    private async findOrCreateManagerTeam(managerUserId: string, manager?: User | null): Promise<Team> {
+        let team = await this.teamRepo.findOne({
+            where: { manager: { user_id: managerUserId } },
+            relations: ['manager'],
+        });
+
+        if (!team) {
+            team = this.teamRepo.create({
+                teamName: this.defaultTeamNameForManager(manager),
+                manager: { user_id: managerUserId } as any,
+            });
+            team = await this.teamRepo.save(team);
+        }
+
+        return team;
+    }
+
+    async getManagerTeam(managerUserId: string) {
+        const manager = await this.userRepo.findOne({ where: { user_id: managerUserId } });
+        if (!manager || manager.role !== UserRole.TEAM_MANAGER) {
+            throw new BadRequestException('Only team managers can manage team settings');
+        }
+
+        const team = await this.findOrCreateManagerTeam(managerUserId, manager);
+        return {
+            teamId: team.team_id,
+            teamName: team.teamName,
+            managerId: managerUserId,
+        };
+    }
+
+    async updateManagerTeamName(managerUserId: string, teamName: string) {
+        const manager = await this.userRepo.findOne({ where: { user_id: managerUserId } });
+        if (!manager || manager.role !== UserRole.TEAM_MANAGER) {
+            throw new BadRequestException('Only team managers can manage team settings');
+        }
+
+        const normalized = this.normalizeTeamName(teamName);
+        if (normalized.length < 2 || normalized.length > 80) {
+            throw new BadRequestException('Team name must be between 2 and 80 characters');
+        }
+
+        const team = await this.findOrCreateManagerTeam(managerUserId, manager);
+        team.teamName = normalized;
+        const saved = await this.teamRepo.save(team);
+
+        return {
+            teamId: saved.team_id,
+            teamName: saved.teamName,
+            managerId: managerUserId,
+        };
+    }
 
     async getMembersForManager(managerUserId: string) {
         const team = await this.teamRepo.findOne({
@@ -86,32 +153,123 @@ export class TeamsService {
         return rows.map((r) => r.manager_id);
     }
 
+    async isProfileInManagerTeam(managerUserId: string, profileId: string): Promise<boolean> {
+        const row = await this.profileRepo
+            .createQueryBuilder('ep')
+            .innerJoin('team_members', 'tm', 'tm.employee_id = ep.user_id')
+            .innerJoin('teams', 't', 't.team_id = tm.team_id')
+            .where('t.manager_id = :managerId', { managerId: managerUserId })
+            .andWhere('ep.profile_id = :profileId', { profileId })
+            .select('ep.profile_id', 'profile_id')
+            .getRawOne();
+        return Boolean(row?.profile_id);
+    }
+
+    async listOtherTeamsForManager(managerUserId: string) {
+        const rows = await this.teamRepo
+            .createQueryBuilder('t')
+            .innerJoin('t.manager', 'm')
+            .where('m.user_id != :managerId', { managerId: managerUserId })
+            .select([
+                't.team_id as team_id',
+                't.team_name as team_name',
+                'm.user_id as manager_id',
+                'm.first_name as manager_first_name',
+                'm.last_name as manager_last_name',
+                'm.email as manager_email',
+            ])
+            .orderBy('t.team_name', 'ASC')
+            .getRawMany();
+
+        return rows.map((row) => ({
+            teamId: row.team_id,
+            teamName: row.team_name || 'Team',
+            managerId: row.manager_id,
+            managerName:
+                [row.manager_first_name, row.manager_last_name]
+                    .filter(Boolean)
+                    .join(' ')
+                    .trim() || row.manager_email,
+            managerEmail: row.manager_email,
+        }));
+    }
+
+    async getTeamNameForManager(managerUserId: string): Promise<string> {
+        const team = await this.teamRepo.findOne({
+            where: { manager: { user_id: managerUserId } },
+            relations: ['manager'],
+        });
+        if (team?.teamName?.trim()) return team.teamName.trim();
+
+        const manager = await this.userRepo.findOne({ where: { user_id: managerUserId } });
+        return this.defaultTeamNameForManager(manager);
+    }
+
+    async getTeamNamesForManagers(managerUserIds: string[]): Promise<Map<string, string>> {
+        const ids = Array.from(new Set(managerUserIds.filter(Boolean)));
+        const result = new Map<string, string>();
+        if (!ids.length) return result;
+
+        const teams = await this.teamRepo.find({
+            where: ids.map((id) => ({ manager: { user_id: id } })),
+            relations: ['manager'],
+        });
+        for (const team of teams) {
+            const managerId = team.manager?.user_id;
+            if (managerId && team.teamName?.trim()) {
+                result.set(managerId, team.teamName.trim());
+            }
+        }
+
+        const missing = ids.filter((id) => !result.has(id));
+        if (missing.length) {
+            const managers = await this.userRepo.find({ where: { user_id: In(missing) } });
+            for (const manager of managers) {
+                result.set(manager.user_id, this.defaultTeamNameForManager(manager));
+            }
+        }
+
+        return result;
+    }
+
+    async getTeamNamesForManagerEmails(managerEmails: string[]): Promise<Map<string, string>> {
+        const emails = Array.from(
+            new Set(
+                managerEmails
+                    .map((value) => String(value || '').trim().toLowerCase())
+                    .filter(Boolean),
+            ),
+        );
+        const result = new Map<string, string>();
+        if (!emails.length) return result;
+
+        const managers = await this.userRepo.find({ where: { email: In(emails) } });
+        const teamNamesByManagerId = await this.getTeamNamesForManagers(managers.map((m) => m.user_id));
+        for (const manager of managers) {
+            result.set(
+                manager.email,
+                teamNamesByManagerId.get(manager.user_id) || this.defaultTeamNameForManager(manager),
+            );
+        }
+
+        for (const email of emails) {
+            if (!result.has(email)) {
+                result.set(email, 'Team');
+            }
+        }
+
+        return result;
+    }
+
     async ensureMembership(managerUserId: string, employeeUserId: string): Promise<void> {
-        const userRepo = this.teamRepo.manager.getRepository(User);
-        const manager = await userRepo.findOne({ where: { user_id: managerUserId } });
+        const manager = await this.userRepo.findOne({ where: { user_id: managerUserId } });
         if (!manager || manager.role !== UserRole.TEAM_MANAGER) {
             // Only team managers own teams
             return;
         }
 
         // 1. Find or create the Team for this manager
-        let team = await this.teamRepo.findOne({
-            where: { manager: { user_id: managerUserId } },
-        });
-
-        if (!team) {
-            // Use manager details for team name
-            let teamName = 'Team';
-            if (manager.firstName) {
-                teamName = `${manager.firstName}'s Team`;
-            }
-
-            team = this.teamRepo.create({
-                teamName: teamName,
-                manager: { user_id: managerUserId } as any,
-            });
-            team = await this.teamRepo.save(team);
-        }
+        const team = await this.findOrCreateManagerTeam(managerUserId, manager);
 
         // 2. Check if the team member row already exists
         const existingMember = await this.teamMemberRepo.findOne({

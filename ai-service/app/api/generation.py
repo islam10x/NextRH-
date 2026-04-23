@@ -10,7 +10,7 @@ import os
 import shutil
 import tempfile
 import zipfile
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
@@ -21,6 +21,11 @@ from app.services.cv_errors import (
     CVIOError, CVRenderError, CVExportError,
 )
 from app.services.cv_io import validate_zip_members
+from app.services.translation_service import (
+    translate_cv_best_effort,
+    translate_docx_headings,
+    SUPPORTED_LANGUAGES,
+)
 from app.utils.logger import logger
 
 # Hard ceiling: reject templates bigger than 50 MB to avoid memory exhaustion.
@@ -35,6 +40,7 @@ async def generate_cv(
     employee_data: str = Form(...),
     output_format: Optional[str] = Form("docx"),
     debug: Optional[str] = Form("false"),
+    language: Optional[str] = Form("en"),
 ):
     """
     Generate a CV by replacing template fields with employee data.
@@ -62,6 +68,14 @@ async def generate_cv(
 
     if not isinstance(emp_data, dict):
         raise HTTPException(status_code=400, detail="employee_data must be a JSON object")
+
+    # Validate and normalise language code
+    target_lang = (language or "en").strip().lower()
+    if target_lang not in SUPPORTED_LANGUAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported language '{target_lang}'. Supported values: {sorted(SUPPORTED_LANGUAGES)}",
+        )
 
     # Validate required fields
     emp_name = (emp_data.get("name") or "").strip()
@@ -114,6 +128,13 @@ async def generate_cv(
         except CVTemplateError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
+        # ── Translation layer ─────────────────────────────────────────────
+        # Apply translation AFTER validation, BEFORE template rendering.
+        # Only translatable text fields (summary, descriptions) are touched.
+        # The template itself is never modified.
+        logger.info("Applying translation layer: target language = %s", target_lang)
+        emp_data = translate_cv_best_effort(emp_data, target_lang)
+
         # Generate CV (always DOCX first)
         docx_path = process_cv(
             template_path=template_path,
@@ -125,6 +146,12 @@ async def generate_cv(
 
         if not os.path.exists(docx_path):
             raise HTTPException(status_code=500, detail="CV generation failed — no output file")
+
+        # ── Translate section headings in generated DOCX ──────────────────
+        # The data fields (summary, descriptions) were already translated above.
+        # This pass replaces hardcoded template labels (e.g. "Education",
+        # "Professional Experience") using a static lookup table — no API call.
+        translate_docx_headings(docx_path, target_lang)
 
         # Handle output format
         output_format_lower = (output_format or "docx").lower()
@@ -189,3 +216,55 @@ async def generate_cv(
         shutil.rmtree(temp_dir, ignore_errors=True)
         logger.error(f"CV generation unexpected error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="CV generation failed (internal error)")
+
+
+# ─── Standalone multilingual CV translation endpoint ─────────────────────────
+
+from fastapi import Body
+from pydantic import BaseModel, field_validator
+
+
+class _TranslateRequest(BaseModel):
+    target_language: str
+    cv_data: Dict[str, Any]
+
+    @field_validator("target_language")
+    @classmethod
+    def _check_lang(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v not in SUPPORTED_LANGUAGES:
+            raise ValueError(
+                f"Unsupported target_language '{v}'. "
+                f"Supported values: {sorted(SUPPORTED_LANGUAGES)}"
+            )
+        return v
+
+    @field_validator("cv_data")
+    @classmethod
+    def _check_cv_data(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(value, dict) or not value:
+            raise ValueError("cv_data must be a non-empty JSON object")
+        return value
+
+
+@router.post("/cv/translate")
+async def translate_cv_endpoint(request: _TranslateRequest):
+    """
+    Translate a structured CV into a target language using Groq LLM.
+
+    Accepts a CV written in **any** language and returns the same JSON
+    structure with all human-readable fields translated into
+    ``target_language`` (``en`` or ``fr``).
+
+    - Semantic understanding is performed first, then translation.
+    - Proper names, company / school names, technical terms, and contact
+      data are **never** modified.
+    """
+    try:
+        translated = translate_cv_best_effort(request.cv_data, request.target_language)
+        return {"target_language": request.target_language, "cv_data": translated}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("CV translation endpoint error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="CV translation failed (internal error)")

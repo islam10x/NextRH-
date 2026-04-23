@@ -168,7 +168,7 @@ export class CvService {
             generatedTitle: p.project?.generatedTitle ?? null,
             client: p.project?.clientName ?? null,
             description: p.description || p.project?.projectDescription || '',
-            role: p.role,
+            role: null,
             skills: (p.project?.skills ?? []).map((s) => s.skillName),
             startDate: toDateString(p.project?.startDate),
             endDate: toDateString(p.project?.endDate),
@@ -558,20 +558,22 @@ export class CvService {
                     continue;
                 }
 
-                // Generate AI title for "Unknown Project" entries
+                // Do not block CV upload on AI title generation.
+                // Title backfill runs asynchronously here (and also via cron).
                 if (project.projectName?.toLowerCase() === 'unknown project' && !project.generatedTitle && projectDesc) {
-                    try {
-                        await this.aiGenerationService.generateAndStoreTitle(project);
-                    } catch (err) {
-                        this.logger.warn(`Failed to generate title for project ${project.project_id}: ${err?.message ?? err}`);
-                    }
+                    void this.aiGenerationService
+                        .generateAndStoreTitle(project)
+                        .catch((err) => {
+                            this.logger.warn(
+                                `Failed to generate title for project ${project.project_id}: ${err?.message ?? err}`,
+                            );
+                        });
                 }
 
                 const participant = this.participantRepository.create({
                     profile: profile,
                     project: project,
                     description: projectDesc,
-                    role: projectData.role || 'Contributor'
                 });
                 await this.participantRepository.save(participant);
                 processedProjectIds.add(project.project_id);
@@ -769,6 +771,7 @@ export class CvService {
         employeeId: string,
         templateFile: Express.Multer.File,
         outputFormat: 'docx' | 'pdf' = 'docx',
+        language: string = 'en',
     ): Promise<{ buffer: Buffer; filename: string; mimeType: string }> {
         // 1. Load employee profile data
         const profileData = await this.getMyProfile(employeeId);
@@ -829,6 +832,7 @@ export class CvService {
         formData.append('template', blob, templateFile.originalname);
         formData.append('employee_data', JSON.stringify(employeePayload));
         formData.append('output_format', outputFormat);
+        formData.append('language', language);
 
         const aiUrl = `${this.aiServiceBaseUrl}/api/v1/generation/cv`;
         this.logger.log(`Calling AI generation service: ${aiUrl} (format: ${outputFormat})`);
@@ -891,6 +895,7 @@ export class CvService {
         employeeId: string,
         targetEmployeeId: string,
         outputFormat: 'docx' | 'pdf' = 'docx',
+        language: string = 'en',
     ): Promise<{ buffer: Buffer; filename: string; mimeType: string }> {
         // Find the template employee's stored CV
         const baseDir = await this.fileStorageService.findBaseDirByOwner(employeeId);
@@ -929,6 +934,6 @@ export class CvService {
             path: '',
         };
 
-        return this.generateCv(targetEmployeeId, mockFile, outputFormat);
+        return this.generateCv(targetEmployeeId, mockFile, outputFormat, language);
     }
 }

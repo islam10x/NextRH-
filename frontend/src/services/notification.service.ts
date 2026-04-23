@@ -15,11 +15,25 @@ interface BackendNotification {
   priority?: number;
 }
 
+const repairMojibake = (value?: string | null): string => {
+  const text = String(value || '');
+  if (!text || !/[ÃÂâ]/.test(text)) {
+    return text;
+  }
+
+  try {
+    const bytes = Uint8Array.from(Array.from(text).map((char) => char.charCodeAt(0) & 0xff));
+    return new TextDecoder('utf-8').decode(bytes);
+  } catch {
+    return text;
+  }
+};
+
 const mapNotification = (n: BackendNotification): Notification => ({
   id: n.notification_id,
   userId: '',
-  title: n.title,
-  message: n.message || '',
+  title: repairMojibake(n.title),
+  message: repairMojibake(n.message || ''),
   type:
     n.priority && n.priority >= 3
       ? 'error'
@@ -37,7 +51,9 @@ const mapNotification = (n: BackendNotification): Notification => ({
 export const notificationService = {
   async listMine(): Promise<Notification[]> {
     const res = await api.get<BackendNotification[]>('/notifications/me');
-    return res.data.map(mapNotification);
+    return res.data
+      .filter((notification) => notification.notificationType !== 'external_member_score_submitted')
+      .map(mapNotification);
   },
 
   async getUnreadCount(): Promise<number> {

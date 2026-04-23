@@ -11,7 +11,6 @@ import { DocumentHash } from './entities/document-hash.entity';
 import { ProjectRecord } from './entities/project-record.entity';
 import { TrainingRecord } from './entities/training-record.entity';
 import { ScoringTarget } from './entities/scoring-target.entity';
-import { ScoringWeight } from './entities/scoring-weight.entity';
 import { EmployeeScore } from './entities/employee-score.entity';
 
 import { EmployeeProfile } from '../employees/entities/employee-profile.entity';
@@ -31,7 +30,6 @@ import { Project } from '../projects/entities/project.entity';
       ProjectRecord,
       TrainingRecord,
       ScoringTarget,
-      ScoringWeight,
       EmployeeScore,
       EmployeeProfile,
       Certification,

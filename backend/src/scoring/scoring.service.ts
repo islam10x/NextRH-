@@ -4,6 +4,7 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, Not } from 'typeorm';
@@ -15,13 +16,12 @@ import { DocumentHash } from './entities/document-hash.entity';
 import { ProjectRecord } from './entities/project-record.entity';
 import { TrainingRecord } from './entities/training-record.entity';
 import { ScoringTarget } from './entities/scoring-target.entity';
-import { ScoringWeight } from './entities/scoring-weight.entity';
 import { EmployeeScore } from './entities/employee-score.entity';
 import { EmployeeProfile } from '../employees/entities/employee-profile.entity';
 import { Certification } from '../certifications/entities/certification.entity';
 import { User, UserRole } from '../users/entities/user.entity';
 import { TrainingSession } from '../training/training-session.entity';
-import { ProjectParticipant, ParticipantRole } from '../projects/entities/participant.entity';
+import { ProjectParticipant } from '../projects/entities/participant.entity';
 import { Project } from '../projects/entities/project.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 
@@ -39,8 +39,6 @@ export class ScoringService {
     private readonly trainingRecordRepo: Repository<TrainingRecord>,
     @InjectRepository(ScoringTarget)
     private readonly targetRepo: Repository<ScoringTarget>,
-    @InjectRepository(ScoringWeight)
-    private readonly weightRepo: Repository<ScoringWeight>,
     @InjectRepository(EmployeeScore)
     private readonly scoreRepo: Repository<EmployeeScore>,
     @InjectRepository(EmployeeProfile)
@@ -64,21 +62,55 @@ export class ScoringService {
 
   // ── PV Upload (Team Manager → employee's profile) ──────────────────
 
+  async previewPv(file: Express.Multer.File, userId: string) {
+    const formData = new FormData();
+    formData.append('file', file.buffer, {
+      filename: file.originalname,
+      contentType: file.mimetype,
+    });
+    formData.append('user_id', userId);
+
+    try {
+      const aiResponse = await axios.post(
+        `${this.aiServiceBaseUrl}/api/v1/scoring/parse-document`,
+        formData,
+        { headers: formData.getHeaders() },
+      );
+      return aiResponse.data;
+    } catch (err: any) {
+      const errorText = err?.response?.data ?? err?.message ?? 'unknown';
+      this.logger.error(`AI preview parse failed: ${JSON.stringify(errorText)}`);
+      throw new BadRequestException(
+        `Erreur lors de l'analyse du document: ${JSON.stringify(errorText)}`,
+      );
+    }
+  }
+
   async uploadPv(
     file: Express.Multer.File,
     profileIds: string[],
     managerUserId: string,
     projectId?: string,
-    projectName?: string,
-    clientName?: string,
     complexity?: 'low' | 'medium' | 'high',
-    employeeRole?: 'contributor' | 'technical_lead' | 'project_lead',
+    profileEvaluations?: Array<{
+      profileId: string;
+      score?: number;
+      contributionDescription?: string;
+    }>,
   ) {
     if (profileIds.length === 0) {
-      throw new BadRequestException('Aucun employé sélectionné pour cet import PV');
+      throw new BadRequestException('Aucun employÃ© sÃ©lectionnÃ© pour cet import PV');
+    }
+    if (!projectId) {
+      throw new BadRequestException('Le projet est obligatoire pour importer un PV.');
     }
 
-    // 1. Validate profiles exist
+    const managerUser = await this.userRepo.findOne({ where: { user_id: managerUserId } });
+    const managerName = managerUser
+      ? `${managerUser.firstName || ''} ${managerUser.lastName || ''}`.trim() || managerUser.email
+      : 'Votre manager';
+    const isBidManager = managerUser?.role === UserRole.BID_MANAGER;
+
     const profiles = await this.profileRepo.find({
       where: profileIds.map((profileId) => ({ profile_id: profileId })),
       relations: ['user'],
@@ -89,78 +121,84 @@ export class ScoringService {
       throw new NotFoundException(`Profils introuvables: ${missingProfileIds.join(', ')}`);
     }
 
-    // 2. Resolve the project (existing or new)
-    let resolvedProjectName: string;
-    let resolvedClientName: string | null = null;
-    let resolvedComplexity = complexity || 'medium';
-    let resolvedCompletionDate: Date | null = null;
-    const roleByProfileId = new Map<string, 'contributor' | 'technical_lead' | 'project_lead'>();
-
-    if (projectId) {
-      // Link to an existing project in the system
-      const existingProject = await this.projectRepo.findOne({
-        where: { project_id: projectId },
+    const project = await this.projectRepo.findOne({ where: { project_id: projectId } });
+    if (!project) {
+      throw new NotFoundException(`Projet ${projectId} non trouvÃ©`);
+    }
+    if (!isBidManager && project.createdBy && project.createdBy !== managerUserId) {
+      throw new ForbiddenException('Vous pouvez importer un PV uniquement pour vos propres projets.');
+    }
+    const participants = await this.participantRepo.find({
+      where: profileIds.map((profileId) => ({
+        project: { project_id: projectId },
+        profile: { profile_id: profileId },
+      })),
+      relations: ['profile'],
+    });
+    const participantMap = new Map(
+      participants.map((participant) => [participant.profile.profile_id, participant]),
+    );
+    const invalidProfileIds = profileIds.filter((profileId) => !participantMap.has(profileId));
+    if (invalidProfileIds.length > 0) {
+      const invalidNames = invalidProfileIds.map((profileId) => {
+        const profile = profileMap.get(profileId);
+        return profile?.user
+          ? `${profile.user.firstName || ''} ${profile.user.lastName || ''}`.trim() || profile.user.email
+          : profileId;
       });
-      if (!existingProject) {
-        throw new NotFoundException(`Projet ${projectId} non trouvé`);
-      }
-      resolvedProjectName = existingProject.projectName;
-      resolvedClientName = existingProject.clientName || null;
-      resolvedComplexity = (existingProject.complexity as any) || resolvedComplexity;
-      resolvedCompletionDate = existingProject.endDate || null;
-
-      const participants = await this.participantRepo.find({
-        where: profileIds.map((profileId) => ({
-          project: { project_id: projectId },
-          profile: { profile_id: profileId },
-        })),
-        relations: ['profile'],
-      });
-
-      const participantMap = new Map(
-        participants.map((participant) => [participant.profile.profile_id, participant]),
+      throw new BadRequestException(
+        `Vous pouvez sÃ©lectionner uniquement les employÃ©s assignÃ©s au projet: ${invalidNames.join(', ')}`,
       );
+    }
 
-      const invalidProfileIds = profileIds.filter((profileId) => !participantMap.has(profileId));
-      if (invalidProfileIds.length > 0) {
-        const invalidNames = invalidProfileIds.map((profileId) => {
-          const profile = profileMap.get(profileId);
-          return profile?.user
-            ? `${profile.user.firstName || ''} ${profile.user.lastName || ''}`.trim() || profile.user.email
-            : profileId;
-        });
+    const evaluationByProfile = new Map<
+      string,
+      { score?: number; contributionDescription?: string }
+    >();
+    for (const item of profileEvaluations || []) {
+      if (!item?.profileId || !profileIds.includes(item.profileId)) {
+        continue;
+      }
+      const parsedScore =
+        item.score === null || item.score === undefined
+          ? undefined
+          : Number(item.score);
+      if (parsedScore !== undefined && (!Number.isFinite(parsedScore) || parsedScore < 0 || parsedScore > 20)) {
+        throw new BadRequestException('La note individuelle doit etre comprise entre 0 et 20.');
+      }
+      evaluationByProfile.set(item.profileId, {
+        score: Number.isFinite(parsedScore) ? parsedScore : undefined,
+        contributionDescription: String(item.contributionDescription || '').trim() || undefined,
+      });
+    }
 
-        this.logger.warn(
-          `PV upload rejected for project ${projectId}: selected employees are not assigned to the project: ${invalidNames.join(', ')}`,
+    for (const profileId of profileIds) {
+      const participant = participantMap.get(profileId);
+      if (!participant) continue;
+
+      const evaluation = evaluationByProfile.get(profileId);
+      const isOwnTeamMember =
+        participant.assignmentType !== 'external' || participant.homeManagerId === managerUserId;
+
+      if (!isBidManager && evaluation?.score !== undefined && !isOwnTeamMember) {
+        throw new ForbiddenException(
+          'Vous ne pouvez attribuer une note qu\'aux membres de votre propre Ã©quipe.',
         );
+      }
+
+      if (
+        !isBidManager &&
+        participant.assignmentType === 'external' &&
+        !evaluation?.contributionDescription
+      ) {
         throw new BadRequestException(
-          `Pour un projet déjà assigné, vous pouvez sélectionner uniquement les employés assignés au projet: ${invalidNames.join(', ')}`,
+          'La description de contribution est obligatoire pour un membre externe.',
         );
-      }
-
-      for (const participant of participants) {
-        const participantProfileId = participant.profile.profile_id;
-        roleByProfileId.set(
-          participantProfileId,
-          (participant.role as any) || employeeRole || 'contributor',
-        );
-      }
-    } else {
-      // New project not in the system — name is required
-      if (!projectName) {
-        throw new BadRequestException(
-          'Veuillez sélectionner un projet existant ou fournir un nom de projet',
-        );
-      }
-      resolvedProjectName = projectName;
-      resolvedClientName = clientName || null;
-
-      for (const profileId of profileIds) {
-        roleByProfileId.set(profileId, employeeRole || 'contributor');
       }
     }
 
-    // 3. Call AI service to parse the PDF (for hash + any extra data)
+    let resolvedComplexity = complexity || (project.complexity as any) || 'medium';
+
     const formData = new FormData();
     formData.append('file', file.buffer, {
       filename: file.originalname,
@@ -184,60 +222,104 @@ export class ScoringService {
       );
     }
 
-    // 4. Reuse or create document hash once for the whole upload
+    const parsedComplexity = String(parsed?.parsed_data?.complexity || '').toLowerCase();
+    if (!complexity && ['low', 'medium', 'high'].includes(parsedComplexity)) {
+      resolvedComplexity = parsedComplexity as any;
+    }
+    if (project.complexity !== resolvedComplexity) {
+      project.complexity = resolvedComplexity;
+      await this.projectRepo.save(project);
+    }
+
     const existingHash = await this.docHashRepo.findOne({
       where: { fileHash: parsed.file_hash },
     });
-
-    if (!existingHash) {
-      const docHash = this.docHashRepo.create({
-        fileHash: parsed.file_hash,
-        documentType: parsed.document_type,
-        originalFilename: file.originalname,
-        uploadedBy: managerUserId,
-      });
-      await this.docHashRepo.save(docHash);
-    } else {
-      this.logger.log(
-        `Reusing existing PV document hash ${parsed.file_hash.slice(0, 12)}... for ${profileIds.length} employee(s)`,
+    if (existingHash) {
+      throw new ConflictException(
+        'Ce PV a deja ete importe. Le document a ete bloque pour eviter un doublon.',
       );
     }
 
-    // 5. Save one project record per selected employee
+    const docHash = this.docHashRepo.create({
+      fileHash: parsed.file_hash,
+      documentType: parsed.document_type,
+      originalFilename: file.originalname,
+      uploadedBy: managerUserId,
+    });
+    await this.docHashRepo.save(docHash);
+
     const currentYear = new Date().getFullYear();
     const results: Array<{
       profileId: string;
       employeeName: string;
-      status: 'created' | 'duplicate';
+      status: 'created' | 'updated' | 'duplicate';
       message?: string;
       record?: any;
     }> = [];
 
+    const recomputeProjectScore = async (profileId: string, projectRecord?: any) => {
+      await this.computeScore(profileId, currentYear);
+
+      if (projectRecord?.completionDate) {
+        const pvYear = new Date(projectRecord.completionDate).getFullYear();
+        if (pvYear !== currentYear) {
+          await this.computeScore(profileId, pvYear);
+        }
+      }
+    };
+
     for (const profileId of profileIds) {
       const profile = profileMap.get(profileId)!;
-      const resolvedRole = roleByProfileId.get(profileId) || employeeRole || 'contributor';
+      const participant = participantMap.get(profileId)!;
+      const evaluation = evaluationByProfile.get(profileId);
+      const hasScore = evaluation?.score !== undefined;
+      const isExternal = participant.assignmentType === 'external';
+      const shouldEscalateToHomeManager = isExternal && !isBidManager;
+
+      const evaluationPayload = shouldEscalateToHomeManager
+        ? {
+            individualScore: null,
+            evaluationStatus: 'pending_external_manager' as const,
+            externalContributionDescription: evaluation?.contributionDescription || null,
+            externalHomeManagerId: participant.homeManagerId || null,
+            evaluatedByManagerId: null,
+            evaluatedAt: null,
+          }
+        : {
+            individualScore: hasScore ? Number(evaluation?.score) : null,
+            evaluationStatus: 'scored_by_own_manager' as const,
+            externalContributionDescription: null,
+            externalHomeManagerId: null,
+            evaluatedByManagerId: hasScore ? managerUserId : null,
+            evaluatedAt: hasScore ? new Date() : null,
+          };
+
       const savedRecord = await this.saveProjectRecord(
         profileId,
         {
           ...parsed.parsed_data,
-          project_name: resolvedProjectName,
-          client_name: resolvedClientName,
+          project_name: project.projectName,
+          client_name: project.clientName || null,
           completion_date:
-            this.formatDateForScoring(resolvedCompletionDate) || parsed.parsed_data?.completion_date || null,
+            this.formatDateForScoring(project.endDate) || parsed.parsed_data?.completion_date || null,
         },
         parsed.file_hash,
         file.originalname,
         resolvedComplexity,
-        resolvedRole,
         true,
         managerUserId,
+        evaluationPayload,
       );
 
       const employeeName = profile.user
         ? `${profile.user.firstName || ''} ${profile.user.lastName || ''}`.trim() || profile.user.email
         : profileId;
-      const resultStatus: 'created' | 'duplicate' =
-        savedRecord.status === 'duplicate' ? 'duplicate' : 'created';
+      const resultStatus: 'created' | 'updated' | 'duplicate' =
+        savedRecord.status === 'duplicate'
+          ? 'duplicate'
+          : savedRecord.status === 'updated'
+            ? 'updated'
+            : 'created';
 
       results.push({
         profileId,
@@ -247,7 +329,13 @@ export class ScoringService {
         record: savedRecord.record,
       });
 
-      if (resultStatus !== 'created') {
+      if (resultStatus === 'duplicate') {
+        try {
+          await recomputeProjectScore(profileId, savedRecord.record);
+          this.logger.log(`Auto-recomputed score for duplicate PV record on profile ${profileId}`);
+        } catch (err: any) {
+          this.logger.warn(`Auto-recompute for duplicate PV on profile ${profileId} failed: ${err.message}`);
+        }
         continue;
       }
 
@@ -255,15 +343,39 @@ export class ScoringService {
         await this.notificationsService.create({
           userId: profile.user.user_id,
           type: 'pv_uploaded',
-          title: 'PV importé pour votre projet',
-          message: `Un PV a été importé pour le projet "${resolvedProjectName}". Votre score sera mis à jour.`,
+          title: 'PV importe pour votre projet',
+          message: `${managerName} a importe un PV pour le projet "${project.projectName}".`,
           relatedEntityType: 'project_record',
           relatedEntityId: savedRecord?.record?.record_id,
         }).catch((err) => this.logger.warn(`Notification PV failed for ${profileId}: ${err.message}`));
       }
 
+      if (evaluationPayload.evaluationStatus === 'pending_external_manager') {
+        if (evaluationPayload.externalHomeManagerId) {
+          await this.notificationsService.create({
+            userId: evaluationPayload.externalHomeManagerId,
+            type: 'external_member_evaluation_requested',
+            title: 'Evaluation externe requise',
+            message: `Merci d'evaluer votre collaborateur sur "${project.projectName}".`,
+            relatedEntityType: 'project_record',
+            relatedEntityId: savedRecord?.record?.record_id,
+          }).catch((err) =>
+            this.logger.warn(`External evaluation notification failed for ${profileId}: ${err.message}`),
+          );
+        }
+        // Recompute score immediately so project complexity is reflected while the
+        // home manager's individual evaluation is still pending.
+        try {
+          await recomputeProjectScore(profileId, savedRecord.record);
+          this.logger.log(`Auto-recomputed score for external member ${profileId} after PV upload (complexity applied)`);
+        } catch (err: any) {
+          this.logger.warn(`Auto-recompute for external member ${profileId} after PV upload failed: ${err.message}`);
+        }
+        continue;
+      }
+
       try {
-        await this.computeScore(profileId, currentYear);
+        await recomputeProjectScore(profileId, savedRecord.record);
         this.logger.log(`Auto-recomputed score for profile ${profileId} after PV upload`);
 
         if (profile.user) {
@@ -273,8 +385,8 @@ export class ScoringService {
           await this.notificationsService.create({
             userId: profile.user.user_id,
             type: 'score_updated',
-            title: 'Score mis à jour',
-            message: `Votre score a été recalculé : ${Number(updatedScore?.finalScore ?? 0).toFixed(1)} pts.`,
+            title: 'Score mis a jour',
+            message: `Votre score a ete recalcule : ${Number(updatedScore?.finalScore ?? 0).toFixed(1)} pts.`,
             relatedEntityType: 'employee_score',
             relatedEntityId: updatedScore?.score_id,
           }).catch((err) => this.logger.warn(`Notification score failed for ${profileId}: ${err.message}`));
@@ -285,20 +397,22 @@ export class ScoringService {
     }
 
     const createdCount = results.filter((result) => result.status === 'created').length;
-    const duplicateCount = results.length - createdCount;
+    const updatedCount = results.filter((result) => result.status === 'updated').length;
+    const duplicateCount = results.length - createdCount - updatedCount;
+    const importedCount = createdCount + updatedCount;
 
     return {
-      status: createdCount > 0 ? 'created' : 'duplicate',
+      status: importedCount > 0 ? 'created' : 'duplicate',
       message:
-        duplicateCount > 0
-          ? `PV importé pour ${createdCount} employé(s), ${duplicateCount} doublon(s) ignoré(s).`
-          : `PV importé pour ${createdCount} employé(s).`,
+        importedCount === 0
+          ? 'This PV already exists for the selected participant(s). Upload skipped.'
+          : duplicateCount > 0
+            ? `PV imported for ${importedCount} participant(s). ${duplicateCount} duplicate(s) were skipped because they already exist.`
+            : `PV imported for ${importedCount} participant(s).`,
       parsed_data: parsed.parsed_data,
       results,
     };
   }
-
-  // ── Training Sheet Upload (Employee → own profile) ────────────────────
 
   async uploadTrainingSheet(
     file: Express.Multer.File,
@@ -438,45 +552,123 @@ export class ScoringService {
     fileHash: string,
     filename: string,
     complexity?: string,
-    employeeRole?: string,
     pvVerified: boolean = false,
     submittedBy?: string,
+    evaluation?: {
+      individualScore?: number | null;
+      evaluationStatus?: 'scored_by_own_manager' | 'pending_external_manager' | 'scored_by_home_manager';
+      externalContributionDescription?: string | null;
+      externalHomeManagerId?: string | null;
+      evaluatedByManagerId?: string | null;
+      evaluatedAt?: Date | null;
+    },
   ) {
-    const projectName = parsedData.project_name || 'Projet non identifié';
+    const projectName = parsedData.project_name || 'Projet non identifie';
     const clientName = parsedData.client_name || null;
-    const completionDate = parsedData.completion_date
+    const parsedCompletionDate = parsedData.completion_date
       ? new Date(parsedData.completion_date)
       : null;
+    const completionDate =
+      parsedCompletionDate && !Number.isNaN(parsedCompletionDate.getTime())
+        ? parsedCompletionDate
+        : new Date();
 
-    // Semantic dedup: check same project+client+date for this employee
-    const existingQuery: any = {
-      profileId,
-      projectName,
-      clientName: clientName || IsNull() as any,
-    };
-    if (completionDate) {
-      existingQuery.completionDate = completionDate;
-    }
-    const existing = await this.projectRecordRepo.findOne({
-      where: existingQuery,
+    const clientFilter = clientName || (IsNull() as any);
+    const exactMatch = await this.projectRecordRepo.findOne({
+      where: { profileId, projectName, clientName: clientFilter, completionDate },
     });
+    if (exactMatch) {
+      let changed = false;
 
-    if (existing) {
-      this.logger.warn(
-        `Projet en double (sémantique): ${projectName} / ${clientName} pour profil ${profileId}`,
-      );
+      if (complexity && exactMatch.complexity !== complexity) {
+        exactMatch.complexity = complexity as any;
+        changed = true;
+      }
+      if (evaluation) {
+        if (evaluation.individualScore !== undefined) {
+          exactMatch.individualScore = evaluation.individualScore as any;
+          changed = true;
+        }
+        if (evaluation.evaluationStatus && exactMatch.evaluationStatus !== evaluation.evaluationStatus) {
+          exactMatch.evaluationStatus = evaluation.evaluationStatus as any;
+          changed = true;
+        }
+        if (evaluation.externalContributionDescription !== undefined) {
+          exactMatch.externalContributionDescription = evaluation.externalContributionDescription;
+          changed = true;
+        }
+        if (evaluation.externalHomeManagerId !== undefined) {
+          exactMatch.externalHomeManagerId = evaluation.externalHomeManagerId;
+          changed = true;
+        }
+        if (evaluation.evaluatedByManagerId !== undefined) {
+          exactMatch.evaluatedByManagerId = evaluation.evaluatedByManagerId;
+          changed = true;
+        }
+        if (evaluation.evaluatedAt !== undefined) {
+          exactMatch.evaluatedAt = evaluation.evaluatedAt;
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        exactMatch.parsedData = parsedData;
+        exactMatch.sourceFilename = filename;
+        exactMatch.documentHash = fileHash;
+        const updated = await this.projectRecordRepo.save(exactMatch);
+        return {
+          status: 'updated',
+          record: updated,
+          message: `Projet (${projectName}) mis a jour`,
+        };
+      }
+
       return {
         status: 'duplicate',
-        message: `Ce projet (${projectName}) est déjà enregistré pour cet employé à cette date`,
-        existing_record: existing,
+        message: `Ce projet (${projectName}) est deja enregistre pour cet employe a cette date`,
+        record: exactMatch,
       };
     }
 
-    // Determine role from parsed data if not provided
-    let resolvedRole = employeeRole || 'contributor';
-    if (!employeeRole && parsedData.team_members) {
-      // Try to find this employee's role from team members
-      // (would need name matching — use provided role for now)
+    const nullDateMatch = await this.projectRecordRepo.findOne({
+      where: {
+        profileId,
+        projectName,
+        clientName: clientFilter,
+        completionDate: IsNull() as any,
+      },
+    });
+    if (nullDateMatch) {
+      nullDateMatch.completionDate = completionDate;
+      if (complexity) nullDateMatch.complexity = complexity as any;
+      if (evaluation?.individualScore !== undefined) {
+        nullDateMatch.individualScore = evaluation.individualScore as any;
+      }
+      if (evaluation?.evaluationStatus) {
+        nullDateMatch.evaluationStatus = evaluation.evaluationStatus as any;
+      }
+      if (evaluation?.externalContributionDescription !== undefined) {
+        nullDateMatch.externalContributionDescription = evaluation.externalContributionDescription;
+      }
+      if (evaluation?.externalHomeManagerId !== undefined) {
+        nullDateMatch.externalHomeManagerId = evaluation.externalHomeManagerId;
+      }
+      if (evaluation?.evaluatedByManagerId !== undefined) {
+        nullDateMatch.evaluatedByManagerId = evaluation.evaluatedByManagerId;
+      }
+      if (evaluation?.evaluatedAt !== undefined) {
+        nullDateMatch.evaluatedAt = evaluation.evaluatedAt;
+      }
+      nullDateMatch.parsedData = parsedData;
+      nullDateMatch.sourceFilename = filename;
+      nullDateMatch.documentHash = fileHash;
+
+      const migrated = await this.projectRecordRepo.save(nullDateMatch);
+      return {
+        status: 'updated',
+        record: migrated,
+        message: `Date de completion mise a jour pour le projet (${projectName})`,
+      };
     }
 
     const record = this.projectRecordRepo.create({
@@ -486,8 +678,13 @@ export class ScoringService {
       projectDescription: parsedData.organization_context || null,
       completionDate,
       complexity: (complexity as any) || 'medium',
-      employeeRole: resolvedRole as any,
       pvVerified,
+      individualScore: evaluation?.individualScore ?? null,
+      evaluationStatus: evaluation?.evaluationStatus || 'scored_by_own_manager',
+      externalContributionDescription: evaluation?.externalContributionDescription ?? null,
+      externalHomeManagerId: evaluation?.externalHomeManagerId ?? null,
+      evaluatedByManagerId: evaluation?.evaluatedByManagerId ?? null,
+      evaluatedAt: evaluation?.evaluatedAt ?? null,
       submittedBy: submittedBy || null,
       documentHash: fileHash,
       sourceFilename: filename,
@@ -675,185 +872,163 @@ export class ScoringService {
     });
   }
 
-  // ── Weights ───────────────────────────────────────────────────────────
-
-  async getWeights(): Promise<ScoringWeight> {
-    let global = await this.weightRepo.findOne({
-      where: { teamId: IsNull() as any },
-    });
-
-    if (!global) {
-      global = this.weightRepo.create({
-        teamId: null,
-        projectWeight: 0.35,
-        certificationWeight: 0.25,
-        trainingWeight: 0.20,
-        formationWeight: 0.20,
-      });
-      global = await this.weightRepo.save(global);
-    }
-
-    // Sanitize legacy data: if any weight is > 1, they were stored as whole numbers
-    // (e.g. 5, 8, 4, 6) — normalize by dividing by their sum
-    const pw = Number(global.projectWeight);
-    const cw = Number(global.certificationWeight);
-    const tw = Number(global.trainingWeight);
-    const fw = Number(global.formationWeight);
-    if (pw > 1 || cw > 1 || tw > 1 || fw > 1) {
-      const sum = pw + cw + tw + fw;
-      if (sum > 0) {
-        global.projectWeight = Math.round((pw / sum) * 100) / 100;
-        global.certificationWeight = Math.round((cw / sum) * 100) / 100;
-        global.trainingWeight = Math.round((tw / sum) * 100) / 100;
-        global.formationWeight = Math.round((fw / sum) * 100) / 100;
-        await this.weightRepo.save(global);
-        this.logger.log(`Sanitized legacy weights: ${pw},${cw},${tw},${fw} → ${global.projectWeight},${global.certificationWeight},${global.trainingWeight},${global.formationWeight}`);
-      }
-    }
-
-    return global;
-  }
-
-  async updateWeights(
-    projectWeight: number,
-    certWeight: number,
-    trainingWeight: number,
-    formationWeight: number,
-    updatedBy?: string,
-  ) {
-    // Validate: all weights must be 0-1 and sum must be ~1.0
-    const weights = [projectWeight, certWeight, trainingWeight, formationWeight];
-    if (weights.some((w) => w < 0 || w > 1)) {
-      throw new BadRequestException('Each weight must be between 0 and 1');
-    }
-    const sum = weights.reduce((a, b) => a + b, 0);
-    if (Math.abs(sum - 1) > 0.05) {
-      throw new BadRequestException(`Weights must sum to 1.0 (got ${sum.toFixed(2)})`);
-    }
-
-    let weight = await this.weightRepo.findOne({ where: { teamId: IsNull() as any } });
-
-    if (weight) {
-      weight.projectWeight = projectWeight;
-      weight.certificationWeight = certWeight;
-      weight.trainingWeight = trainingWeight;
-      weight.formationWeight = formationWeight;
-      weight.updatedBy = updatedBy || null;
-    } else {
-      weight = this.weightRepo.create({
-        teamId: null,
-        projectWeight,
-        certificationWeight: certWeight,
-        trainingWeight,
-        formationWeight,
-        updatedBy,
-      });
-    }
-
-    const savedWeight = await this.weightRepo.save(weight);
-
-    const currentYear = new Date().getFullYear();
-    const existingScores = await this.scoreRepo.find({
-      where: { scoreYear: currentYear },
-    });
-
-    for (const score of existingScores) {
-      try {
-        await this.computeScore(score.profileId, currentYear);
-      } catch (err: any) {
-        this.logger.warn(`Failed to recompute score for ${score.profileId} after weight update: ${err.message}`);
-      }
-    }
-
-    return savedWeight;
-  }
-
   // ── Score Computation ─────────────────────────────────────────────────
 
   async computeScore(profileId: string, year: number) {
-    // ── 1. PROJETS : lire depuis project_participants + projects ──────
-    //    On récupère uniquement les projets assignés par un manager (assigned_by IS NOT NULL).
-    //    Les projets provenant du CV parsing (assigned_by = NULL) ne comptent pas dans le scoring.
-    //    Ensuite on enrichit avec les PV uploadés (bonus vérification).
-
     const participations = await this.participantRepo.find({
       where: { profile: { profile_id: profileId }, assignedBy: Not(IsNull()) },
       relations: ['project'],
     });
 
-    // Récupérer les PV vérifiés pour ce profil (par nom de projet)
     const pvRecords = await this.projectRecordRepo.find({
       where: { profileId, pvVerified: true },
     });
-    const pvProjectNames = new Set(
-      pvRecords.map((pv) => pv.projectName?.toLowerCase().trim()),
-    );
 
-    const projects = participations.map((p) => {
-      const proj = p.project;
-      const projectNameLower = proj?.projectName?.toLowerCase().trim() || '';
-      const hasPv = pvProjectNames.has(projectNameLower);
+    const normalizeProjectName = (value?: string | null) =>
+      String(value || '')
+        .trim()
+        .toLowerCase();
 
-      // Role is now an enum — normalize to lowercase for AI service compatibility
-      const rawRole: string = p.role || ParticipantRole.CONTRIBUTOR;
-      const scoringRole: string = rawRole.toLowerCase();
+    const projects: Array<{
+      project_name: string;
+      complexity: 'low' | 'medium' | 'high';
+      completion_date: string | null;
+      pv_verified: boolean;
+      individual_score: number | null;
+      evaluation_status: 'scored_by_own_manager' | 'pending_external_manager' | 'scored_by_home_manager';
+    }> = [];
 
-      const relevantProjectDate = proj?.endDate || proj?.startDate || null;
+    for (const participation of participations) {
+      const proj = participation.project;
+      const projectName = proj?.projectName || 'Projet inconnu';
+      const projectKey = normalizeProjectName(projectName);
+      const matchingPv = pvRecords
+        .filter((pv) => normalizeProjectName(pv.projectName) === projectKey)
+        .sort((a, b) => {
+          const aDate = a.completionDate ? new Date(a.completionDate).getTime() : 0;
+          const bDate = b.completionDate ? new Date(b.completionDate).getTime() : 0;
+          return bDate - aDate;
+        })[0];
 
-      return {
-        project_name: proj?.projectName || 'Projet inconnu',
-        complexity: ((proj?.complexity || 'medium') as string).toLowerCase(),
-        role: scoringRole,
-        completion_date: relevantProjectDate
-          ? new Date(relevantProjectDate).toISOString().split('T')[0]
-          : null,
-        pv_verified: hasPv,
-      };
-    });
+      const completionDate = matchingPv?.completionDate || proj?.endDate || proj?.startDate || null;
+      const normalizedComplexity = String(matchingPv?.complexity || proj?.complexity || 'medium')
+        .toLowerCase();
+      const complexity: 'low' | 'medium' | 'high' =
+        normalizedComplexity === 'low' || normalizedComplexity === 'high' ? normalizedComplexity : 'medium';
 
-    // Enrichir la complexité et le rôle depuis les PV quand disponible
-    for (const proj of projects) {
-      const matchingPv = pvRecords.find(
-        (pv) => pv.projectName?.toLowerCase().trim() === proj.project_name.toLowerCase().trim(),
-      );
-      if (matchingPv) {
-        proj.complexity = (matchingPv.complexity || proj.complexity).toLowerCase();
-        proj.role = ((matchingPv.employeeRole || proj.role) as string).toLowerCase();
-        if (!proj.completion_date && matchingPv.completionDate) {
-          proj.completion_date = matchingPv.completionDate.toISOString().split('T')[0];
-        }
-      }
+      projects.push({
+        project_name: projectName,
+        complexity,
+        completion_date: completionDate ? new Date(completionDate).toISOString().split('T')[0] : null,
+        pv_verified: Boolean(matchingPv),
+        individual_score:
+          matchingPv?.individualScore === null || matchingPv?.individualScore === undefined
+            ? null
+            : Number(matchingPv.individualScore),
+        evaluation_status: (matchingPv?.evaluationStatus || 'scored_by_own_manager') as any,
+      });
     }
 
-    // Ajouter aussi les projets PV qui ne sont pas dans project_participants
     const participatedNames = new Set(
-      projects.map((p) => p.project_name.toLowerCase().trim()),
+      projects.map((p) => normalizeProjectName(p.project_name)),
     );
     for (const pv of pvRecords) {
-      const pvName = pv.projectName?.toLowerCase().trim() || '';
-      if (!participatedNames.has(pvName)) {
-        projects.push({
-          project_name: pv.projectName,
-          complexity: (pv.complexity || 'medium').toLowerCase(),
-          role: ((pv.employeeRole || 'contributor') as string).toLowerCase(),
-          completion_date: pv.completionDate
-            ? pv.completionDate.toISOString().split('T')[0]
-            : null,
-          pv_verified: true,
-        });
+      const key = normalizeProjectName(pv.projectName);
+      if (participatedNames.has(key)) {
+        continue;
       }
+      const normalizedComplexity = String(pv.complexity || 'medium').toLowerCase();
+      const complexity: 'low' | 'medium' | 'high' =
+        normalizedComplexity === 'low' || normalizedComplexity === 'high' ? normalizedComplexity : 'medium';
+      projects.push({
+        project_name: pv.projectName || 'Projet inconnu',
+        complexity,
+        completion_date: pv.completionDate
+          ? pv.completionDate.toISOString().split('T')[0]
+          : pv.createdAt
+            ? pv.createdAt.toISOString().split('T')[0]
+            : null,
+        pv_verified: true,
+        individual_score:
+          pv.individualScore === null || pv.individualScore === undefined
+            ? null
+            : Number(pv.individualScore),
+        evaluation_status: (pv.evaluationStatus || 'scored_by_own_manager') as any,
+      });
     }
 
-    const scoredProjects = projects.filter((project) => {
-      if (!project.completion_date) {
-        return false;
-      }
-
+    const yearProjects = projects.filter((project) => {
+      if (!project.completion_date) return false;
       return new Date(project.completion_date).getFullYear() === year;
     });
+    const pendingExternalProjects = yearProjects.filter(
+      (project) => project.evaluation_status === 'pending_external_manager',
+    );
+    const scoredProjects = yearProjects.filter(
+      (project) => project.evaluation_status !== 'pending_external_manager',
+    );
 
-    // ── 2. CERTIFICATIONS : depuis la table certifications ───────────
-    //    Seules les certifications obtenues l'année du scoring comptent.
+    const complexityBase: Record<'low' | 'medium' | 'high', number> = {
+      low: 45,
+      medium: 65,
+      high: 85,
+    };
+    const roundScore = (value: number) => Math.round(value * 100) / 100;
+    const projectItems = yearProjects.map((project) => {
+      const managerScoreRaw =
+        project.evaluation_status === 'pending_external_manager'
+          ? null
+          : project.individual_score;
+      const pvBonus = project.pv_verified ? 10 : 0;
+      const complexityScore = Math.max(
+        0,
+        Math.min(100, complexityBase[project.complexity] + pvBonus),
+      );
+
+      let contributionScore = complexityScore;
+      let scoringMethod:
+        | 'manager_score_converted'
+        | 'legacy_manager_score'
+        | 'complexity_fallback' = 'complexity_fallback';
+      let explanation = project.evaluation_status === 'pending_external_manager'
+        ? `Awaiting the employee's home manager review. The current provisional score uses ${project.complexity} complexity (${complexityBase[project.complexity]}/100)${project.pv_verified ? ' plus the verified PV bonus (+10).' : '.'}`
+        : `No manager score was found, so the score uses ${project.complexity} complexity (${complexityBase[project.complexity]}/100)${project.pv_verified ? ' plus the verified PV bonus (+10).' : '.'}`;
+
+      if (managerScoreRaw !== null && managerScoreRaw !== undefined) {
+        const numericManagerScore = Number(managerScoreRaw);
+        if (numericManagerScore > 20) {
+          contributionScore = Math.max(0, Math.min(100, numericManagerScore));
+          scoringMethod = 'legacy_manager_score';
+          explanation = `Legacy manager score kept on a /100 scale: ${roundScore(contributionScore)}/100.`;
+        } else {
+          const managerScoreOver20 = Math.max(0, Math.min(20, numericManagerScore));
+          contributionScore = roundScore((managerScoreOver20 / 20) * 100);
+          scoringMethod = 'manager_score_converted';
+          explanation = `Manager score ${roundScore(managerScoreOver20)}/20 converted to ${roundScore(contributionScore)}/100.`;
+        }
+      }
+
+      return {
+        project_name: project.project_name,
+        complexity: project.complexity,
+        completion_date: project.completion_date,
+        pv_verified: project.pv_verified,
+        evaluation_status: project.evaluation_status,
+        manager_score_raw:
+          managerScoreRaw === null || managerScoreRaw === undefined
+            ? null
+            : roundScore(Number(managerScoreRaw)),
+        manager_score_scale_max: 20,
+        contribution_score: roundScore(contributionScore),
+        scoring_method: scoringMethod,
+        explanation,
+      };
+    });
+    // All year projects contribute to the score.
+    // Pending external projects (awaiting home manager score) use the complexity-based score
+    // so that external employees benefit from project complexity immediately upon PV upload.
+    const projectContributions = projectItems.map((project) => project.contribution_score);
+    const projectScore = projectContributions.reduce((sum, value) => sum + value, 0);
 
     const certCount = await this.certRepo
       .createQueryBuilder('c')
@@ -861,11 +1036,6 @@ export class ScoringService {
       .andWhere('c.status = :status', { status: 'active' })
       .andWhere('EXTRACT(YEAR FROM c.issue_date) = :year', { year })
       .getCount();
-
-    // ── 3. TRAININGS : depuis la table training_sessions ───────────────
-    //    Seuls les trainings assignés+complétés l'année du scoring comptent.
-    //    COALESCE fallback: end_date → start_date → due_date → updated_at
-    //    (dates are often NULL; updated_at is always set when status changes)
 
     const trainingCount = await this.trainingSessionRepo
       .createQueryBuilder('ts')
@@ -877,10 +1047,6 @@ export class ScoringService {
       )
       .getCount();
 
-    // ── 4. FORMATIONS DISPENSÉES POUR CLIENTS : depuis la table training_records
-    //    L'employé a dispensé des formations pour les clients (attestation de formateur).
-    //    Comptées par année de start_date ou end_date.
-
     const formationCount = await this.trainingRecordRepo
       .createQueryBuilder('tr')
       .where('tr.profile_id = :profileId', { profileId })
@@ -890,73 +1056,137 @@ export class ScoringService {
       )
       .getCount();
 
-    // 4. Get targets (only certification target matters for scoring)
     const targets = await this.getTargets(profileId, year);
     const certTarget = targets?.certificationTarget ?? 2;
 
-    // 5. Get weights (try team-specific, fall back to global)
-    const weights = await this.getWeights();
+    const effectiveTarget = Math.max(certTarget, 1);
+    const certificationScore = Math.min(100, (certCount / effectiveTarget) * 100);
+    const trainingScore = trainingCount * 20;
+    const formationScore = formationCount * 25;
 
-    // 6. Build AI scoring input
-    const scoringInput = {
-      profile_id: profileId,
-      score_year: year,
-      projects: scoredProjects,
-      certification_count: certCount,
-      certification_target: certTarget,
-      training_count: trainingCount,
-      formation_count: formationCount,
-      weights: {
-        project_weight: Number(weights.projectWeight),
-        certification_weight: Number(weights.certificationWeight),
-        training_weight: Number(weights.trainingWeight),
-        formation_weight: Number(weights.formationWeight),
+    const finalScore =
+      (projectScore + certificationScore + trainingScore + formationScore) / 4;
+
+    const headline =
+      finalScore >= 85
+        ? {
+            tone: 'excellent',
+            title: 'Excellent momentum',
+            message: 'Your current year is tracking at a very high level across the scoring pillars.',
+          }
+        : finalScore >= 65
+          ? {
+              tone: 'strong',
+              title: 'Strong progress',
+              message: 'You have a solid score foundation and a clear path to move higher.',
+            }
+          : finalScore >= 40
+            ? {
+                tone: 'developing',
+                title: 'Good base to build on',
+                message: 'You already have visible progress. The next actions below can lift your score quickly.',
+              }
+            : {
+                tone: 'starting',
+                title: 'Your score is just getting started',
+                message: 'More validated activity this year will quickly improve your score.',
+              };
+
+    const nextActions: string[] = [];
+    if (pendingExternalProjects.length > 0) {
+      nextActions.push(
+        `${pendingExternalProjects.length} external project(s) are currently counted with a provisional complexity-based score until your home manager finalizes the review.`,
+      );
+    }
+    if (certCount < effectiveTarget) {
+      nextActions.push(
+        `You have ${certCount} certification(s) for a target of ${effectiveTarget}. One more certification will increase this pillar immediately.`,
+      );
+    }
+    if (trainingCount < 5) {
+      nextActions.push(
+        `Each completed training adds 20 points to the training pillar until it reaches 100.`,
+      );
+    }
+    if (formationCount < 4) {
+      nextActions.push(
+        `Each delivered formation adds 25 points to the formation pillar until it reaches 100.`,
+      );
+    }
+    if (projectItems.length === 0) {
+      nextActions.push('No in-year project is currently counted. Projects only contribute once they fall inside the scoring year.');
+    }
+
+    const breakdown = {
+      project_score: roundScore(projectScore),
+      certification_score: roundScore(certificationScore),
+      training_score: roundScore(trainingScore),
+      formation_score: roundScore(formationScore),
+      final_score: roundScore(finalScore),
+      score_formula: 'unweighted_average_of_4_pillars',
+      manager_score_scale_max: 20,
+      project_count: yearProjects.length,
+      pending_external_count: pendingExternalProjects.length,
+      scored_project_count: scoredProjects.length,
+      evaluated_projects: projectItems.filter(
+        (project) => project.evaluation_status !== 'pending_external_manager',
+      ),
+      pending_external_projects: projectItems.filter(
+        (project) => project.evaluation_status === 'pending_external_manager',
+      ),
+      headline,
+      scale: {
+        manager_score_max: 20,
+        pillar_score_max: 100,
+        final_score_max: 100,
+      },
+      formulas: {
+        final: 'Final score = (Projects + Certifications + Trainings + Formations) / 4',
+        projects:
+          'Each validated project adds its own contribution. Manager score projects use (score / 20) x 100. Without a manager score, the system uses complexity plus a verified PV bonus.',
+        certifications: `Certification score = min(100, (${certCount} / ${effectiveTarget}) x 100)`,
+        trainings: `Training score = ${trainingCount} x 20`,
+        formations: `Formation score = ${formationCount} x 25`,
+      },
+      workflow: {
+        scoring_year: year,
+        pending_external_projects_use_provisional_complexity: true,
+        next_actions: nextActions,
+      },
+      pillars: {
+        projects: {
+          score: roundScore(projectScore),
+          total_projects_in_year: yearProjects.length,
+          scored_projects: scoredProjects.length,
+          pending_external_projects: pendingExternalProjects.length,
+          items: projectItems,
+        },
+        certifications: {
+          score: roundScore(certificationScore),
+          count: certCount,
+          target: certTarget,
+          effective_target: effectiveTarget,
+          progress_percent: roundScore((certCount / effectiveTarget) * 100),
+          explanation:
+            certTarget > 0
+              ? `${certCount} certification(s) counted for a target of ${certTarget}.`
+              : `${certCount} certification(s) counted. A minimum target of 1 is used internally to avoid division by zero.`,
+        },
+        trainings: {
+          score: roundScore(trainingScore),
+          count: trainingCount,
+          points_per_completed_training: 20,
+          explanation: `${trainingCount} completed training(s) counted this year. This pillar is not capped.`,
+        },
+        formations: {
+          score: roundScore(formationScore),
+          count: formationCount,
+          points_per_delivered_formation: 25,
+          explanation: `${formationCount} delivered formation(s) counted this year. This pillar is not capped.`,
+        },
       },
     };
 
-    // 7. Call AI scoring engine
-    let breakdown: any;
-    try {
-      const aiResponse = await axios.post(
-        `${this.aiServiceBaseUrl}/api/v1/scoring/compute-score`,
-        scoringInput,
-      );
-      breakdown = aiResponse.data;
-    } catch (err: any) {
-      const errorText = err?.response?.data ?? err?.message ?? 'unknown';
-      this.logger.warn(`AI score computation failed: ${JSON.stringify(errorText)}. Falling back to local scoring calculation.`);
-      
-      // Fallback: Local Scoring Calculation
-      const projScore = scoredProjects.reduce((sum, p) => {
-        const cMultiplier = p.complexity === 'high' ? 3.5 : p.complexity === 'low' ? 1.0 : 2.0;
-        const rMultiplier = p.role === 'project_lead' ? 1.5 : p.role === 'technical_lead' ? 1.3 : 1.0;
-        const pvBonus = p.pv_verified ? 1.25 : 1.0;
-
-        return sum + (10 * cMultiplier * rMultiplier * pvBonus);
-      }, 0);
-      
-      const effectiveTarget = Math.max(certTarget, 1);
-      const certScore = (certCount / effectiveTarget) * 100;
-      const trainScore = trainingCount * 10;
-      const formScore = formationCount * 10;
-      
-      const wP = Number(weights.projectWeight);
-      const wC = Number(weights.certificationWeight);
-      const wT = Number(weights.trainingWeight);
-      const wF = Number(weights.formationWeight);
-      
-      const finalS = (wP * projScore) + (wC * certScore) + (wT * trainScore) + (wF * formScore);
-      
-      breakdown = {
-        project_score: Math.round(projScore * 100) / 100,
-        certification_score: Math.round(certScore * 100) / 100,
-        training_score: Math.round(trainScore * 100) / 100,
-        formation_score: Math.round(formScore * 100) / 100,
-        final_score: Math.round(finalS * 100) / 100,
-      };
-    }
-
-    // 8. Upsert score record
     let scoreRecord = await this.scoreRepo.findOne({
       where: { profileId, scoreYear: year },
     });
@@ -983,7 +1213,6 @@ export class ScoringService {
 
     const saved = await this.scoreRepo.save(scoreRecord);
 
-    // Keep rankings up-to-date after every individual recompute
     try {
       await this.updateRankings(year);
     } catch (err: any) {
@@ -995,8 +1224,6 @@ export class ScoringService {
       breakdown,
     };
   }
-
-  // ── Batch Compute (Team / All) ────────────────────────────────────────
 
   async computeTeamScores(managerUserId: string, year: number) {
     // Get the manager's team members
@@ -1032,6 +1259,25 @@ export class ScoringService {
     // Update rankings
     await this.updateRankings(year);
 
+    return results;
+  }
+
+  /** Recompute scores for ALL employee profiles (bid_manager action). */
+  async computeAllScores(year: number) {
+    const profiles = await this.profileRepo.find();
+    const results = [];
+    for (const profile of profiles) {
+      try {
+        const result = await this.computeScore(profile.profile_id, year);
+        results.push(result);
+      } catch (error) {
+        this.logger.error(
+          `Score computation failed for ${profile.profile_id}: ${error.message}`,
+        );
+        results.push({ profileId: profile.profile_id, error: error.message });
+      }
+    }
+    await this.updateRankings(year);
     return results;
   }
 
@@ -1155,82 +1401,144 @@ export class ScoringService {
   async updateProjectRecord(
     recordId: string,
     complexity?: string,
-    employeeRole?: string,
   ) {
     const record = await this.projectRecordRepo.findOne({
       where: { record_id: recordId },
     });
-    if (!record)
-      throw new NotFoundException(`Enregistrement projet ${recordId} non trouvé`);
+    if (!record) {
+      throw new NotFoundException(`Enregistrement projet ${recordId} non trouve`);
+    }
 
     if (complexity) record.complexity = complexity as any;
-    if (employeeRole) record.employeeRole = employeeRole as any;
 
     const saved = await this.projectRecordRepo.save(record);
 
-    // Auto-recompute score for the current year after modifying the project record
     const currentYear = new Date().getFullYear();
     try {
       await this.computeScore(record.profileId, currentYear);
-      this.logger.log(
-        `Score recomputed for ${record.profileId} after project record update`,
-      );
-    } catch (err) {
-      this.logger.warn(
-        `Failed to recompute score after project update: ${err.message}`,
-      );
+      this.logger.log(`Score recomputed for ${record.profileId} after project record update`);
+    } catch (err: any) {
+      this.logger.warn(`Failed to recompute score after project update: ${err.message}`);
+    }
+
+    return saved;
+  }
+
+  async listPendingExternalEvaluations(managerUserId: string) {
+    const rows = await this.projectRecordRepo
+      .createQueryBuilder('pr')
+      .leftJoin('pr.profile', 'ep')
+      .leftJoin('ep.user', 'u')
+      .where('pr.evaluation_status = :status', { status: 'pending_external_manager' })
+      .andWhere('pr.external_home_manager_id = :managerUserId', { managerUserId })
+      .orderBy('pr.created_at', 'DESC')
+      .select('pr.record_id', 'recordId')
+      .addSelect('pr.profile_id', 'profileId')
+      .addSelect('pr.project_name', 'projectName')
+      .addSelect('pr.client_name', 'clientName')
+      .addSelect('pr.complexity', 'complexity')
+      .addSelect('pr.external_contribution_description', 'externalContributionDescription')
+      .addSelect('pr.completion_date', 'completionDate')
+      .addSelect('pr.submitted_by', 'submittedBy')
+      .addSelect('pr.created_at', 'createdAt')
+      .addSelect("CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))", 'employeeName')
+      .addSelect('u.email', 'employeeEmail')
+      .getRawMany();
+
+    return rows.map((row: any) => ({
+      recordId: row.recordId,
+      profileId: row.profileId,
+      projectName: row.projectName,
+      clientName: row.clientName,
+      complexity: row.complexity,
+      externalContributionDescription: row.externalContributionDescription,
+      completionDate: row.completionDate,
+      submittedBy: row.submittedBy,
+      createdAt: row.createdAt,
+      employeeName: String(row.employeeName || '').trim() || row.employeeEmail || 'Employee',
+    }));
+  }
+
+  async scoreExternalEvaluation(recordId: string, managerUserId: string, score: number) {
+    if (!Number.isFinite(score) || score < 0 || score > 20) {
+      throw new BadRequestException('Le score doit etre compris entre 0 et 20.');
+    }
+
+    const record = await this.projectRecordRepo.findOne({
+      where: { record_id: recordId },
+    });
+    if (!record) {
+      throw new NotFoundException(`Enregistrement projet ${recordId} non trouve`);
+    }
+    if (record.evaluationStatus !== 'pending_external_manager') {
+      throw new BadRequestException('Cette evaluation externe a deja ete traitee.');
+    }
+    if (record.externalHomeManagerId !== managerUserId) {
+      throw new ForbiddenException('Vous ne pouvez evaluer que les membres de votre equipe.');
+    }
+    if (!(await this.isManagerOfProfile(managerUserId, record.profileId))) {
+      throw new ForbiddenException('Ce collaborateur ne fait pas partie de votre equipe.');
+    }
+
+    record.individualScore = score as any;
+    record.evaluationStatus = 'scored_by_home_manager';
+    record.evaluatedByManagerId = managerUserId;
+    record.evaluatedAt = new Date();
+    const saved = await this.projectRecordRepo.save(record);
+
+    const completionYear = saved.completionDate
+      ? new Date(saved.completionDate).getFullYear()
+      : new Date().getFullYear();
+    await this.computeScore(saved.profileId, completionYear);
+    if (completionYear !== new Date().getFullYear()) {
+      await this.computeScore(saved.profileId, new Date().getFullYear());
+    }
+
+    const profile = await this.profileRepo.findOne({
+      where: { profile_id: saved.profileId },
+      relations: ['user'],
+    });
+    if (profile?.user?.user_id) {
+      await this.notificationsService.create({
+        userId: profile.user.user_id,
+        type: 'score_updated',
+        title: 'Score mis a jour',
+        message: 'Votre evaluation externe a ete finalisee.',
+        relatedEntityType: 'project_record',
+        relatedEntityId: saved.record_id,
+      }).catch((err) => this.logger.warn(`Employee external score notification failed: ${err.message}`));
     }
 
     return saved;
   }
 
   async listProjects(requestUserId: string, role?: string) {
-    let profileIds: string[] = [];
-
-    if (role === UserRole.BID_MANAGER) {
-      const profileRows = await this.profileRepo
-        .createQueryBuilder('ep')
-        .innerJoin('ep.user', 'u')
-        .where('u.role = :role', { role: UserRole.EMPLOYEE })
-        .andWhere('u.status = :status', { status: 'active' })
-        .select('ep.profile_id', 'profile_id')
-        .getRawMany();
-
-      profileIds = profileRows.map((r: any) => r.profile_id);
-    } else {
-      const teamRows = await this.profileRepo
-        .createQueryBuilder('ep')
-        .innerJoin('team_members', 'tm', 'tm.employee_id = ep.user_id')
-        .innerJoin('teams', 't', 't.team_id = tm.team_id')
-        .where('t.manager_id = :managerId', { managerId: requestUserId })
-        .select('ep.profile_id', 'profile_id')
-        .getRawMany();
-
-      profileIds = teamRows.map((r: any) => r.profile_id);
-    }
-
-    if (profileIds.length === 0) return [];
-
-    // Step 2: fetch participants for projects that include at least one team member
-    const rows = await this.participantRepo
+    const query = this.participantRepo
       .createQueryBuilder('pp')
       .innerJoin('pp.project', 'proj')
       .innerJoin('pp.profile', 'emp')
       .innerJoin('emp.user', 'u')
-      .where('pp.profile_id IN (:...profileIds)', { profileIds })
+      .andWhere('LOWER(proj.projectName) != :unknown', { unknown: 'unknown project' })
       .select('proj.project_id', 'project_id')
       .addSelect('proj.projectName', 'projectName')
       .addSelect('proj.clientName', 'clientName')
+      .addSelect('proj.projectType', 'projectType')
       .addSelect('proj.complexity', 'complexity')
       .addSelect('proj.startDate', 'startDate')
       .addSelect('proj.endDate', 'endDate')
       .addSelect('pp.profile_id', 'profileId')
-      .addSelect('pp.role', 'role')
-      .addSelect("CONCAT(u.first_name, ' ', u.last_name)", 'participantName')
-      .orderBy('proj.projectName', 'ASC')
-      .getRawMany();
+      .addSelect('pp.assignment_type', 'assignmentType')
+      .addSelect('pp.home_manager_id', 'homeManagerId')
+      .addSelect("CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))", 'participantName')
+      .addSelect('u.email', 'participantEmail')
+      .orderBy('proj.projectName', 'ASC');
 
-    // Step 3: group rows by project
+    if (role !== UserRole.BID_MANAGER) {
+      query.andWhere('proj.createdBy = :managerId', { managerId: requestUserId });
+    }
+
+    const rows = await query.getRawMany();
+
     const projectMap = new Map<string, any>();
     for (const row of rows) {
       if (!projectMap.has(row.project_id)) {
@@ -1238,6 +1546,7 @@ export class ScoringService {
           project_id: row.project_id,
           projectName: row.projectName,
           clientName: row.clientName,
+          projectType: row.projectType || 'internal',
           complexity: row.complexity,
           startDate: row.startDate,
           endDate: row.endDate,
@@ -1246,8 +1555,9 @@ export class ScoringService {
       }
       projectMap.get(row.project_id).participants.push({
         profileId: row.profileId,
-        role: row.role,
-        name: row.participantName,
+        assignmentType: row.assignmentType || 'internal',
+        homeManagerId: row.homeManagerId || null,
+        name: String(row.participantName || '').trim() || row.participantEmail || 'Employee',
       });
     }
 
@@ -1267,6 +1577,18 @@ export class ScoringService {
    * Get the team ID for an employee by their profile ID.
    * Returns null if the employee is not assigned to any team.
    */
+  private async isManagerOfProfile(managerUserId: string, profileId: string): Promise<boolean> {
+    const row = await this.profileRepo
+      .createQueryBuilder('ep')
+      .innerJoin('team_members', 'tm', 'tm.employee_id = ep.user_id')
+      .innerJoin('teams', 't', 't.team_id = tm.team_id')
+      .where('ep.profile_id = :profileId', { profileId })
+      .andWhere('t.manager_id = :managerUserId', { managerUserId })
+      .select('ep.profile_id', 'profile_id')
+      .getRawOne();
+    return Boolean(row?.profile_id);
+  }
+
   private async getEmployeeTeamId(profileId: string): Promise<string | null> {
     const result = await this.profileRepo
       .createQueryBuilder('ep')

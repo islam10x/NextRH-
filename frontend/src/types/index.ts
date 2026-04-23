@@ -56,6 +56,7 @@ export interface Training {
 // Project
 export interface Project {
   id: string;
+  projectId?: string;
   employeeId: string;
   name: string;
   client: string;
@@ -63,7 +64,10 @@ export interface Project {
   endDate?: string;
   technologies: string[];
   description: string;
-  role: string;
+  role?: string | null;
+  projectType?: 'internal' | 'external';
+  assignmentType?: 'internal' | 'external';
+  homeManagerId?: string | null;
   assigneeName?: string;
   assigneeEmail?: string;
   assigneeProfileId?: string;

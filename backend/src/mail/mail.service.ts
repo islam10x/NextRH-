@@ -167,6 +167,7 @@ export class MailService {
         const systemFrom =
             this.configService.get<string>('MAIL_FROM_ADDRESS') ||
             this.configService.get<string>('SMTP_FROM');
+        const displayManagerName = managerName || 'your manager';
         const fromDisplayName = managerName ? `${managerName} via CV Manager` : 'CV Manager';
         const frontend = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173';
 
@@ -174,11 +175,11 @@ export class MailService {
             from: `"${fromDisplayName}" <${systemFrom}>`,
             to,
             replyTo: managerEmail ?? undefined,
-            subject: `You've been added to ${managerName}'s team`,
+            subject: `You've been added to ${displayManagerName}'s team`,
             html: `
                 <div style="font-family: Arial, sans-serif; max-width: 640px; margin: auto; padding: 20px; border: 1px solid #eaeaea; border-radius: 10px;">
                     <h2 style="color: #3b82f6; margin-bottom: 12px;">Welcome to the Team!</h2>
-                    <p style="margin: 6px 0;">You have been added to <strong>${managerName}'s</strong> team on CV Manager.</p>
+                    <p style="margin: 6px 0;">You have been added to <strong>${displayManagerName}'s</strong> team on CV Manager.</p>
                     <div style="text-align: center; margin: 22px 0;">
                         <a href="${frontend}/employee/dashboard" style="background-color: #3b82f6; color: white; padding: 12px 22px; text-decoration: none; border-radius: 6px; font-weight: 600;">Go to Dashboard</a>
                     </div>

@@ -128,6 +128,7 @@ export class CvController {
         @UploadedFile() template: Express.Multer.File,
         @Body('employeeId') employeeId: string,
         @Query('format') format: string,
+        @Query('language') language: string,
         @Res() res: Response,
     ) {
         if (!template) {
@@ -144,7 +145,10 @@ export class CvController {
         }
 
         const outputFormat = format === 'pdf' ? 'pdf' : 'docx';
-        const result = await this.cvService.generateCv(employeeId, template, outputFormat);
+        const targetLang = ['fr'].includes((language || '').toLowerCase())
+            ? language.toLowerCase()
+            : 'en';
+        const result = await this.cvService.generateCv(employeeId, template, outputFormat, targetLang);
 
         res.set({
             'Content-Type': result.mimeType,
@@ -165,6 +169,7 @@ export class CvController {
     async generateFromStored(
         @Body() body: { templateEmployeeId: string; targetEmployeeId: string },
         @Query('format') format: string,
+        @Query('language') language: string,
         @Res() res: Response,
     ) {
         if (!body.templateEmployeeId || !body.targetEmployeeId) {
@@ -177,10 +182,14 @@ export class CvController {
         }
 
         const outputFormat = format === 'pdf' ? 'pdf' : 'docx';
+        const targetLang = ['fr'].includes((language || '').toLowerCase())
+            ? language.toLowerCase()
+            : 'en';
         const result = await this.cvService.generateCvFromStoredTemplate(
             body.templateEmployeeId,
             body.targetEmployeeId,
             outputFormat,
+            targetLang,
         );
 
         res.set({

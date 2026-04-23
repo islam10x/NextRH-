@@ -61,6 +61,8 @@ def _xml_safe_text(text: str) -> str:
     return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text)
 
 
+
+
 @contextmanager
 def _atomic_docx_write(docx_path: str):
     """Context manager for safe DOCX modification via extract→edit→repack.
@@ -1328,11 +1330,12 @@ def _build_replacements(
         if det_domain and emp_domain and det_domain != emp_domain:
             pairs.append((det_domain, emp_domain))
 
-    # Phone
-    if detected.get('phone') and employee.get('phone'):
-        pairs.append((detected['phone'], employee['phone']))
+    # Phone — replace with employee's, or clear if employee has none
+    if detected.get('phone'):
+        if employee.get('phone'):
+            pairs.append((detected['phone'], employee['phone']))
 
-        # Fragment pairs: TXBX templates split phone digits across paragraphs.
+            # Fragment pairs: TXBX templates split phone digits across paragraphs.
         # The last digit group (≥4 chars, usually unique) is safe to replace.
         # Shorter groups (area code etc.) risk false matches so we skip them.
         det_phone = detected['phone']
@@ -1351,6 +1354,11 @@ def _build_replacements(
                     emp_last = emp_groups[-1] if emp_groups else ''
                     if last_g != emp_last:
                         pairs.append((last_g, emp_last))
+        else:
+            # Employee has no phone — erase the template's phone so it
+            # doesn't appear in the generated CV as someone else's number.
+            pairs.append((detected['phone'], ''))
+            logger.debug("Clearing template phone (employee has none): %r", detected['phone'])
 
     # Placeholder phone label (e.g. 'Telephone', 'Téléphone') — no real number detected
     if detected.get('_ph_phone') and not detected.get('phone') and employee.get('phone'):
@@ -1400,10 +1408,11 @@ def _build_replacements(
         if not detected.get('linkedin'):  # only if real URL not already handled
             pairs.append((ph_li, new_li))
 
-    # Address / location — keep full address (no smart shortening)
-    if detected.get('address') and employee.get('address'):
-        det_addr = detected['address']
-        emp_addr = employee['address']
+    # Address / location — replace with employee's, or clear if employee has none
+    if detected.get('address'):
+        if employee.get('address'):
+            det_addr = detected['address']
+            emp_addr = employee['address']
         pairs.append((det_addr, emp_addr))
 
         # Fragment pairs: TXBX templates split "City, Country" into
@@ -1430,6 +1439,20 @@ def _build_replacements(
                 # Also handle " Country" alone (no comma prefix in paragraph)
                 if det_parts[1] != emp_parts_addr[1]:
                     pairs.append((det_parts[1], emp_parts_addr[1]))
+        else:
+            # Employee has no address — erase every address fragment so
+            # the previous employee's address does not bleed through.
+            det_addr = detected['address']
+            pairs.append((det_addr, ''))
+            logger.debug("Clearing template address (employee has none): %r", det_addr)
+            # Also clear fragment parts if simple City, Country format
+            if det_addr.count(',') == 1:
+                det_parts = [p.strip() for p in det_addr.split(',', 1)]
+                if det_parts[0]:
+                    pairs.append((det_parts[0], ''))
+                if det_parts[1]:
+                    pairs.append((', ' + det_parts[1], ''))
+                    pairs.append((det_parts[1], ''))
 
     # Clear preceding street line (e.g. "234 5th Ave,") when the address
     # was detected from a US-format "City, ST ZIP" on the next paragraph.
@@ -3845,7 +3868,7 @@ def _build_full_replacement_map(
 # ── Known language names for textbox blanking ────────────────────────────
 _KNOWN_LANGUAGE_NAMES: set = {
     'anglais', 'english', 'français', 'french', 'espagnol', 'spanish',
-    'allemand', 'german', 'arabe', 'arabic', 'italien', 'italian',
+    'allemand', 'german', 'italien', 'italian',
     'portugais', 'portuguese', 'néerlandais', 'dutch', 'chinois', 'chinese',
     'japonais', 'japanese', 'russe', 'russian', 'coréen', 'korean',
     'turc', 'turkish', 'hindi', 'mandarin', 'cantonais', 'cantonese',
@@ -5562,7 +5585,7 @@ Your task:
 Return a JSON object with two keys:
 
 "replacements": array of objects {{"old": "...", "new": "..."}} — one per piece of
-  personal data found in the template that must change.
+  personal or professional data found in the template.
   Rules:
   - "old" must be the EXACT string as it appears in the template text (copy-paste).
   - Cover ALL contact / personal info: first name alone, last name alone,
@@ -5573,6 +5596,10 @@ Return a JSON object with two keys:
     Even if first name and last name live in separate text boxes, the replacement engine
     will handle merging them into a single wider textbox automatically.
     Copy the EXACT "FIRST LAST" string as it appears in the template (with a space between).
+  - Also cover template-specific fields such as department, direction, title suffix,
+    nationality, marital status, or any other personal/professional data label+value that
+    appears in the template but does NOT correspond to anything in the employee JSON.
+    For those unmatched fields use {{"old": "<exact template text>", "new": ""}} to CLEAR them.
   - For multi-part values (e.g. phone split as "555-555-5555"), use the joined form.
   - Do NOT replace section headings (Expérience, Formation, Compétences, Langues…).
   - Do NOT replace company names, school names, or dates from past experience.
@@ -5751,18 +5778,23 @@ def _ai_get_replacements(
         if not isinstance(item, dict):
             continue
         old = (item.get("old") or "").strip()
-        new = (item.get("new") or "").strip()
-        if old and new and old != new:
-            if old in full_text:
-                pairs.append((old, new))
-            else:
-                for para in paragraphs:
-                    if old.lower() in para.lower():
-                        real_idx = para.lower().find(old.lower())
-                        real_old = para[real_idx: real_idx + len(old)]
-                        if real_old and real_old not in [p[0] for p in pairs]:
-                            pairs.append((real_old, new))
-                        break
+        # Allow new="" (clearing unmatched template fields) — only require old to be non-empty
+        new_raw = item.get("new")
+        new = (new_raw or "").strip() if new_raw is not None else (item.get("new") or "").strip()
+        if not old:
+            continue
+        if old == new:
+            continue
+        if old in full_text:
+            pairs.append((old, new))
+        else:
+            for para in paragraphs:
+                if old.lower() in para.lower():
+                    real_idx = para.lower().find(old.lower())
+                    real_old = para[real_idx: real_idx + len(old)]
+                    if real_old and real_old not in [p[0] for p in pairs]:
+                        pairs.append((real_old, new))
+                    break
 
     pairs.sort(key=lambda x: len(x[0]), reverse=True)
 

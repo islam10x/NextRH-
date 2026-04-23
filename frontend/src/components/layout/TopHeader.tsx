@@ -11,6 +11,9 @@ import {
   FileText,
   CheckCheck,
   Briefcase,
+  Users,
+  UserPlus,
+  X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -36,11 +39,11 @@ interface TopHeaderProps {
 function timeAgo(dateStr: string): string {
   const now = new Date();
   const normalized = dateStr.replace(' ', 'T');
-  const hasTimezone = /[zZ]|[+-]\d{2}:\d{2}$/.test(normalized);
-  const date = new Date(hasTimezone ? normalized : `${normalized}Z`);
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return '';
   const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
 
-  if (seconds < 60) return 'just now';
+  if (seconds < 60) return `${Math.max(seconds, 1)}s ago`;
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
@@ -67,6 +70,14 @@ function getNotificationIcon(type?: string) {
       return <Briefcase className="h-4 w-4 text-blue-500 shrink-0" />;
     case 'project_updated':
       return <Briefcase className="h-4 w-4 text-indigo-500 shrink-0" />;
+    case 'cross_team_member_requested':
+      return <UserPlus className="h-4 w-4 text-purple-500 shrink-0" />;
+    case 'cross_team_member_selected':
+      return <Users className="h-4 w-4 text-green-500 shrink-0" />;
+    case 'cross_team_member_rejected':
+      return <Users className="h-4 w-4 text-red-500 shrink-0" />;
+    case 'external_member_evaluation_requested':
+      return <FileText className="h-4 w-4 text-amber-500 shrink-0" />;
     case 'cv_update_needed':
       return <FileText className="h-4 w-4 text-orange-500 shrink-0" />;
     default:
@@ -135,6 +146,12 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ title, showSearch = false 
     const isProject =
       notification.notificationType === 'project_assigned' ||
       notification.notificationType === 'project_updated';
+    const isCrossTeam =
+      notification.notificationType === 'cross_team_member_requested' ||
+      notification.notificationType === 'cross_team_member_selected' ||
+      notification.notificationType === 'cross_team_member_rejected';
+    const isExternalEval =
+      notification.notificationType === 'external_member_evaluation_requested';
 
     if (isCert) {
       navigate(
@@ -154,6 +171,15 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ title, showSearch = false 
           ? '/manager/projects'
           : '/employee/training-projects?tab=projects',
       );
+    } else if (isCrossTeam) {
+      navigate('/manager/projects?tab=cross-team');
+    } else if (isExternalEval) {
+      const params = new URLSearchParams();
+      if (notification.relatedEntityId) {
+        params.set('recordId', notification.relatedEntityId);
+        params.set('panel', 'external-review');
+      }
+      navigate(`/manager/scoring${params.toString() ? `?${params.toString()}` : ''}`);
     }
   };
 
@@ -200,11 +226,6 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ title, showSearch = false 
               <span>Notifications</span>
               <div className="flex items-center gap-2">
                 {unreadCount > 0 && (
-                  <Badge variant="secondary" className="text-xs">
-                    {unreadCount} new
-                  </Badge>
-                )}
-                {unreadCount > 0 && (
                   <Button
                     size="sm"
                     variant="ghost"
@@ -231,57 +252,84 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ title, showSearch = false 
               notifications.slice(0, 8).map((notification) => (
                 <DropdownMenuItem
                   key={notification.id}
-                  className={`flex items-start gap-3 p-3 cursor-pointer rounded-md transition-colors ${
-                    !notification.read
-                      ? 'bg-muted/60 hover:bg-muted/80'
-                      : 'hover:bg-muted/30'
+                  className={`cursor-pointer rounded-xl p-0 transition-colors focus:bg-transparent ${
+                    notification.notificationType === 'cross_team_member_requested'
+                      ? !notification.read
+                        ? 'bg-transparent'
+                        : 'bg-transparent'
+                      : !notification.read
+                        ? 'bg-transparent'
+                        : 'bg-transparent'
                   }`}
                   onSelect={() => {
                     markAsRead(notification.id);
                     navigateForNotification(notification);
                   }}
                 >
-                  <div className="mt-0.5">
-                    {getNotificationIcon(notification.notificationType)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <span
-                        className={`text-sm truncate ${
-                          !notification.read
-                            ? 'font-semibold text-foreground'
-                            : 'font-normal text-muted-foreground'
-                        }`}
-                      >
-                        {notification.title}
-                      </span>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-5 w-5 p-0 text-muted-foreground hover:text-destructive shrink-0"
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          try {
-                            await notificationService.remove(notification.id);
-                            setNotifications((prev) =>
-                              prev.filter((n) => n.id !== notification.id),
-                            );
-                            if (!notification.read) {
-                              setUnreadCount((c) => Math.max(0, c - 1));
-                            }
-                            window.dispatchEvent(new Event('notifications:updated'));
-                          } catch {}
-                        }}
-                      >
-                        x
-                      </Button>
+                  <div
+                    className={`flex w-full items-start gap-3 rounded-xl border p-3 shadow-sm transition-colors ${
+                      notification.notificationType === 'cross_team_member_requested'
+                        ? !notification.read
+                          ? 'border-purple-200 bg-purple-50 hover:bg-purple-100/70 dark:border-purple-800 dark:bg-purple-950/30 dark:hover:bg-purple-900/40'
+                          : 'border-transparent bg-purple-50/50 hover:bg-purple-100/50 dark:bg-purple-950/20 dark:hover:bg-purple-900/30'
+                        : !notification.read
+                          ? 'border-primary/15 bg-muted/70 hover:bg-muted'
+                          : 'border-transparent bg-background hover:bg-muted/40'
+                    }`}
+                  >
+                    <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-background/80 shadow-sm">
+                      {getNotificationIcon(notification.notificationType)}
                     </div>
-                    <span className="text-xs text-muted-foreground line-clamp-2 mt-0.5">
-                      {notification.message}
-                    </span>
-                    <span className="text-[10px] text-muted-foreground/60 mt-1 block">
-                      {timeAgo(notification.createdAt)}
-                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 min-w-0">
+                            {!notification.read && (
+                              <span className="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-primary" />
+                            )}
+                            <span
+                              className={`line-clamp-1 text-sm ${
+                                !notification.read
+                                  ? 'font-semibold text-foreground'
+                                  : 'font-medium text-foreground/90'
+                              }`}
+                            >
+                              {notification.title}
+                            </span>
+                          </div>
+                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                            {notification.message}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 items-start gap-2">
+                          <span className="rounded-full bg-background px-2 py-1 text-[10px] font-medium text-muted-foreground shadow-sm">
+                            {timeAgo(notification.createdAt)}
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 w-7 rounded-full p-0 text-muted-foreground hover:text-destructive shrink-0"
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              try {
+                                await notificationService.remove(notification.id);
+                                setNotifications((prev) =>
+                                  prev.filter((n) => n.id !== notification.id),
+                                );
+                                if (!notification.read) {
+                                  setUnreadCount((c) => Math.max(0, c - 1));
+                                }
+                                window.dispatchEvent(new Event('notifications:updated'));
+                                } catch {
+                                  loadNotifications();
+                                }
+                            }}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </DropdownMenuItem>
               ))

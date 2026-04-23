@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Select,
   SelectContent,
@@ -22,106 +22,117 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { Upload, Trophy, Calculator, FileCheck, TrendingUp, Settings } from 'lucide-react';
-import { scoringService, LeaderboardEntry, ProjectRecord, AvailableProject } from '@/services/scoring.service';
+import { Upload, Trophy, Calculator, FileCheck, ClipboardList, ArrowRight, Info, Eye, BriefcaseBusiness, UserRound, CalendarClock } from 'lucide-react';
+import {
+  scoringService,
+  LeaderboardEntry,
+  AvailableProject,
+  PendingExternalEvaluation,
+} from '@/services/scoring.service';
 import { teamService } from '@/services/team.service';
 import { useAuth } from '@/contexts/AuthContext';
-import api from '@/services/api';
+import { useSearchParams } from 'react-router-dom';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
 const currentYear = new Date().getFullYear();
 
-const complexityLabel: Record<string, string> = { low: 'Basse', medium: 'Moyenne', high: 'Haute' };
+const complexityLabel: Record<string, string> = { low: 'Low', medium: 'Medium', high: 'High' };
 const complexityColor: Record<string, string> = {
-  low: 'bg-green-100 text-green-800',
-  medium: 'bg-yellow-100 text-yellow-800',
-  high: 'bg-red-100 text-red-800',
+  low: 'border border-emerald-200 bg-emerald-50 text-emerald-700',
+  medium: 'border border-sky-200 bg-sky-50 text-sky-700',
+  high: 'border border-rose-200 bg-rose-50 text-rose-700',
 };
-const roleLabel: Record<string, string> = {
-  contributor: 'Contributeur',
-  technical_lead: 'Chef de projet technique',
-  project_lead: 'Chef de projet',
+
+const formatDate = (dateString?: string | null) => {
+  if (!dateString) return 'No date';
+  const parsed = new Date(dateString);
+  if (Number.isNaN(parsed.getTime())) return dateString;
+  return parsed.toLocaleDateString();
+};
+
+const getApiErrorMessage = (error: unknown, fallback: string) => {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'response' in error &&
+    typeof (error as { response?: unknown }).response === 'object' &&
+    (error as { response?: { data?: { message?: string } } }).response?.data?.message
+  ) {
+    return (error as { response?: { data?: { message?: string } } }).response?.data?.message || fallback;
+  }
+
+  return fallback;
+};
+
+const getApiErrorStatus = (error: unknown) => {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'response' in error &&
+    typeof (error as { response?: unknown }).response === 'object'
+  ) {
+    return (error as { response?: { status?: number } }).response?.status;
+  }
+
+  return undefined;
 };
 
 const ManagerScoringPage: React.FC = () => {
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [members, setMembers] = useState<{ userId: string; profileId: string | null; name: string; email: string }[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [year, setYear] = useState(currentYear);
 
-  // Upload PV state
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadProjectId, setUploadProjectId] = useState('');
+  const [uploadComplexity, setUploadComplexity] = useState<'low' | 'medium' | 'high'>('medium');
   const [uploadProfileIds, setUploadProfileIds] = useState<string[]>([]);
-  const [uploadProjectId, setUploadProjectId] = useState('');        // existing project or '__new__'
-  const [uploadProjectName, setUploadProjectName] = useState('');    // new project name
-  const [uploadClientName, setUploadClientName] = useState('');      // new project client
-  const [uploadComplexity, setUploadComplexity] = useState('medium');
-  const [uploadRole, setUploadRole] = useState('contributor');
+  const [uploadScores, setUploadScores] = useState<Record<string, string>>({});
+  const [uploadContributions, setUploadContributions] = useState<Record<string, string>>({});
   const [uploading, setUploading] = useState(false);
   const [availableProjects, setAvailableProjects] = useState<AvailableProject[]>([]);
-  const [projectFilteredMembers, setProjectFilteredMembers] = useState<{ userId: string; profileId: string | null; name: string; email: string }[]>([]);
+  const [pendingExternalEvaluations, setPendingExternalEvaluations] = useState<PendingExternalEvaluation[]>([]);
+  const [externalScores, setExternalScores] = useState<Record<string, string>>({});
+  const [submittingExternal, setSubmittingExternal] = useState<string | null>(null);
 
-  // Target state
   const [targetOpen, setTargetOpen] = useState(false);
   const [targetProfileId, setTargetProfileId] = useState('');
   const [targetCertValue, setTargetCertValue] = useState(2);
   const [settingTarget, setSettingTarget] = useState(false);
+  const [leaderboardOpen, setLeaderboardOpen] = useState(false);
 
-  // Score detail state
-  const [detailOpen, setDetailOpen] = useState(false);
-  const [detailProjects, setDetailProjects] = useState<ProjectRecord[]>([]);
-  const [detailName, setDetailName] = useState('');
+  const selectedProject = useMemo(
+    () => availableProjects.find((project) => project.project_id === uploadProjectId),
+    [availableProjects, uploadProjectId],
+  );
+  const selectedParticipants = useMemo(() => selectedProject?.participants || [], [selectedProject]);
+  const focusedRecordId = searchParams.get('recordId');
 
-  // Weights config state
-  const [weightsOpen, setWeightsOpen] = useState(false);
-  const [wProject, setWProject] = useState(35);
-  const [wCert, setWCert] = useState(25);
-  const [wTraining, setWTraining] = useState(20);
-  const [wFormation, setWFormation] = useState(20);
-  const [savingWeights, setSavingWeights] = useState(false);
+  const orderedPendingEvaluations = useMemo(() => {
+    if (!focusedRecordId) return pendingExternalEvaluations;
+    return [...pendingExternalEvaluations].sort((left, right) => {
+      if (left.recordId === focusedRecordId) return -1;
+      if (right.recordId === focusedRecordId) return 1;
+      return 0;
+    });
+  }, [focusedRecordId, pendingExternalEvaluations]);
 
   const loadMembers = async () => {
     try {
-      if (user?.role === 'bid_manager') {
-        const usersResponse = await api.get<any[]>('/users');
-        const employees = usersResponse.data.filter((u) => u.role === 'employee' && u.status === 'active');
-
-        const profiles = await Promise.all(
-          employees.map(async (employee) => {
-            try {
-              const profileResponse = await api.get(`/cv/profile/${employee.user_id}`);
-              return {
-                userId: employee.user_id,
-                profileId: profileResponse.data?.profile_id || profileResponse.data?.profileId || null,
-                name: [employee.firstName, employee.lastName].filter(Boolean).join(' ') || employee.email,
-                email: employee.email,
-              };
-            } catch {
-              return {
-                userId: employee.user_id,
-                profileId: null,
-                name: [employee.firstName, employee.lastName].filter(Boolean).join(' ') || employee.email,
-                email: employee.email,
-              };
-            }
-          }),
-        );
-
-        setMembers(profiles);
-      } else {
-        const data = await teamService.listMyMembers();
-        setMembers(
-          data.map((m) => ({
-            userId: m.userId,
-            profileId: m.profileId,
-            name: [m.firstName, m.lastName].filter(Boolean).join(' ') || m.email,
-            email: m.email,
-          })),
-        );
-      }
+      const data = await teamService.listMyMembers();
+      setMembers(
+        data.map((m) => ({
+          userId: m.userId,
+          profileId: m.profileId,
+          name: [m.firstName, m.lastName].filter(Boolean).join(' ') || m.email,
+          email: m.email,
+        })),
+      );
     } catch {
-      toast.error('Impossible de charger les membres');
+      toast.error('Failed to load team members');
     }
   };
 
@@ -131,14 +142,35 @@ const ManagerScoringPage: React.FC = () => {
       const data = await scoringService.getLeaderboard(year);
       setLeaderboard(data);
     } catch {
-      // No scores yet — that's fine
       setLeaderboard([]);
     } finally {
       setLoading(false);
     }
   };
 
-  /** Build a full team view: scored members from leaderboard + unscored members at 0 */
+  const loadPendingExternalEvaluations = async () => {
+    if (user?.role !== 'team_manager') {
+      setPendingExternalEvaluations([]);
+      return;
+    }
+
+    try {
+      const rows = await scoringService.listPendingExternalEvaluations();
+      setPendingExternalEvaluations(rows);
+    } catch {
+      setPendingExternalEvaluations([]);
+    }
+  };
+
+  useEffect(() => {
+    loadMembers();
+  }, []);
+
+  useEffect(() => {
+    loadLeaderboard();
+    loadPendingExternalEvaluations();
+  }, [year, user?.role]);
+
   const getFullTeamScores = (): LeaderboardEntry[] => {
     const scoredProfileIds = new Set(leaderboard.map((e) => e.profileId));
     const unscoredMembers: LeaderboardEntry[] = members
@@ -158,95 +190,18 @@ const ManagerScoringPage: React.FC = () => {
   };
 
   const fullTeamScores = getFullTeamScores();
-
-  const openWeightsDialog = async () => {
-    try {
-      const w = await scoringService.getWeights();
-      setWProject(Math.round(Number(w.projectWeight) * 100));
-      setWCert(Math.round(Number(w.certificationWeight) * 100));
-      setWTraining(Math.round(Number(w.trainingWeight) * 100));
-      setWFormation(Math.round(Number(w.formationWeight) * 100));
-    } catch {
-      // keep defaults
-    }
-    setWeightsOpen(true);
-  };
-
-  const handleSaveWeights = async () => {
-    setSavingWeights(true);
-    try {
-      await scoringService.updateWeights(wProject / 100, wCert / 100, wTraining / 100, wFormation / 100);
-      await loadLeaderboard();
-      toast.success('Poids mis à jour');
-      setWeightsOpen(false);
-    } catch (err: any) {
-      if (err?.response?.status === 403) {
-        toast.error('Vous n\'êtes pas autorisé à modifier les poids');
-      } else {
-        toast.error(err?.response?.data?.message || 'Erreur lors de la mise à jour des poids');
-      }
-    } finally {
-      setSavingWeights(false);
-    }
-  };
-
-  useEffect(() => {
-    loadMembers();
-  }, []);
-
-  useEffect(() => {
-    loadLeaderboard();
-  }, [year]);
-
-  const handleUploadPv = async () => {
-    if (!uploadFile || uploadProfileIds.length === 0) {
-      toast.error('Veuillez sélectionner un fichier et au moins un employé');
-      return;
-    }
-    if (!uploadProjectId) {
-      toast.error('Veuillez sélectionner un projet');
-      return;
-    }
-    if (uploadProjectId === '__new__' && !uploadProjectName.trim()) {
-      toast.error('Veuillez saisir le nom du projet');
-      return;
-    }
-    setUploading(true);
-    try {
-      const isNew = uploadProjectId === '__new__';
-      const result = await scoringService.uploadPv(
-        uploadFile,
-        uploadProfileIds,
-        isNew ? undefined : uploadProjectId,
-        isNew ? uploadProjectName : undefined,
-        isNew ? uploadClientName : undefined,
-        isNew ? uploadComplexity : undefined,
-        isNew ? uploadRole : undefined,
-      );
-      if (result.status === 'duplicate') {
-        toast.warning(result.message || 'Aucun nouvel enregistrement créé');
-      } else {
-        toast.success(result.message || 'PV importé avec succès');
-        await loadLeaderboard();
-      }
-      setUploadOpen(false);
-      setUploadFile(null);
-      setUploadProjectId('');
-      setUploadProfileIds([]);
-      setUploadProjectName('');
-      setUploadClientName('');
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message || "Erreur lors de l'import du PV");
-    } finally {
-      setUploading(false);
-    }
-  };
+  const scoredMembersCount = leaderboard.length;
+  const pendingReviewsCount = orderedPendingEvaluations.length;
+  const totalMembersCount = fullTeamScores.length;
 
   const openUploadDialog = async () => {
     setUploadOpen(true);
+    setUploadFile(null);
     setUploadProjectId('');
+    setUploadComplexity('medium');
     setUploadProfileIds([]);
-    setProjectFilteredMembers([]);
+    setUploadScores({});
+    setUploadContributions({});
     try {
       const projects = await scoringService.listProjects();
       setAvailableProjects(projects);
@@ -257,26 +212,104 @@ const ManagerScoringPage: React.FC = () => {
 
   const handleProjectChange = (projectId: string) => {
     setUploadProjectId(projectId);
-    setUploadProfileIds([]); // reset selected employees when project changes
-    if (projectId === '__new__') {
-      setProjectFilteredMembers(members);
-    } else {
-      const project = availableProjects.find((p) => p.project_id === projectId);
-      if (project) {
-        const participantIds = new Set(project.participants.map((p) => p.profileId));
-        setProjectFilteredMembers(members.filter((m) => m.profileId && participantIds.has(m.profileId)));
-      } else {
-        setProjectFilteredMembers([]);
-      }
+    setUploadScores({});
+    setUploadContributions({});
+    const selected = availableProjects.find((project) => project.project_id === projectId);
+    const participantIds = (selected?.participants || []).map((participant) => participant.profileId);
+    setUploadProfileIds(participantIds);
+    const nextComplexity = (selected?.complexity || 'medium').toLowerCase();
+    if (nextComplexity === 'low' || nextComplexity === 'high') {
+      setUploadComplexity(nextComplexity);
+      return;
     }
+    setUploadComplexity('medium');
   };
 
-  const toggleUploadProfile = (profileId: string) => {
-    setUploadProfileIds((current) =>
-      current.includes(profileId)
-        ? current.filter((id) => id !== profileId)
-        : [...current, profileId],
+  const handleUploadPv = async () => {
+    if (!uploadFile) {
+      toast.error('Select a PV file');
+      return;
+    }
+    if (!uploadProjectId) {
+      toast.error('Select a project');
+      return;
+    }
+    if (!uploadComplexity) {
+      toast.error('Select project complexity');
+      return;
+    }
+    if (uploadProfileIds.length === 0) {
+      toast.error('Select at least one participant');
+      return;
+    }
+
+    const participantsById = new Map(
+      selectedParticipants.map((participant) => [participant.profileId, participant]),
     );
+    for (const profileId of uploadProfileIds) {
+      const participant = participantsById.get(profileId);
+      if (!participant) continue;
+      const internalRawScore = uploadScores[profileId];
+      if (participant.assignmentType === 'internal' && internalRawScore !== undefined && internalRawScore !== '') {
+        const internalScore = Number(internalRawScore);
+        if (!Number.isFinite(internalScore) || internalScore < 0 || internalScore > 20) {
+          toast.error('Individual score must be between 0 and 20.');
+          return;
+        }
+      }
+      if (participant.assignmentType === 'external' && !uploadContributions[profileId]?.trim()) {
+        toast.error('Contribution description is required for external members.');
+        return;
+      }
+    }
+
+    setUploading(true);
+    try {
+      const profileEvaluations = uploadProfileIds.map((profileId) => {
+        const participant = participantsById.get(profileId);
+        const rawScore = uploadScores[profileId];
+        const parsedScore = rawScore === undefined || rawScore === '' ? undefined : Number(rawScore);
+        return {
+          profileId,
+          score:
+            participant?.assignmentType === 'internal' && Number.isFinite(parsedScore)
+              ? parsedScore
+              : undefined,
+          contributionDescription:
+            participant?.assignmentType === 'external'
+              ? uploadContributions[profileId]?.trim() || undefined
+              : undefined,
+        };
+      });
+
+      const result = await scoringService.uploadPv(
+        uploadFile,
+        uploadProfileIds,
+        uploadProjectId,
+        uploadComplexity,
+        profileEvaluations,
+      );
+      const hasDuplicate = result.status === 'duplicate' || result.results?.some((item) => item.status === 'duplicate');
+      if (hasDuplicate) {
+        toast.warning(result.message || 'This PV already exists. Upload skipped.');
+      } else {
+        toast.success(result.message || 'PV uploaded successfully');
+      }
+
+      if (result.status !== 'duplicate') {
+        setUploadOpen(false);
+      }
+      await loadLeaderboard();
+      await loadPendingExternalEvaluations();
+    } catch (error: unknown) {
+      if (getApiErrorStatus(error) === 409) {
+        toast.warning(getApiErrorMessage(error, 'This PV was already submitted.'));
+      } else {
+        toast.error(getApiErrorMessage(error, 'PV upload failed'));
+      }
+    } finally {
+      setUploading(false);
+    }
   };
 
   const handleSetTarget = async () => {
@@ -284,12 +317,11 @@ const ManagerScoringPage: React.FC = () => {
     setSettingTarget(true);
     try {
       await scoringService.setTarget(targetProfileId, year, targetCertValue);
-      toast.success('Objectif certification défini');
+      toast.success('Certification target updated');
       setTargetOpen(false);
-      // Reload leaderboard since target change triggers score recomputation
       await loadLeaderboard();
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message || "Erreur lors de la définition de l'objectif");
+    } catch (error: unknown) {
+      toast.error(getApiErrorMessage(error, 'Failed to set target'));
     } finally {
       setSettingTarget(false);
     }
@@ -299,23 +331,40 @@ const ManagerScoringPage: React.FC = () => {
     setLoading(true);
     try {
       await scoringService.computeTeamScores(year);
-      toast.success('Scores de l\'équipe calculés');
+      toast.success('Team scores computed');
       await loadLeaderboard();
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message || 'Erreur lors du calcul');
+    } catch (error: unknown) {
+      toast.error(getApiErrorMessage(error, 'Score calculation failed'));
     } finally {
       setLoading(false);
     }
   };
 
-  const showDetail = async (profileId: string, name: string) => {
+  const handleSubmitExternalScore = async (recordId: string) => {
+    const rawScore = externalScores[recordId];
+    const numericScore = Number(rawScore);
+    if (!Number.isFinite(numericScore) || numericScore < 0 || numericScore > 20) {
+      toast.error('Enter a score between 0 and 20.');
+      return;
+    }
+
+    setSubmittingExternal(recordId);
     try {
-      const projects = await scoringService.getProjectRecords(profileId);
-      setDetailProjects(projects);
-      setDetailName(name);
-      setDetailOpen(true);
-    } catch {
-      toast.error('Impossible de charger les détails');
+      await scoringService.scoreExternalEvaluation(recordId, numericScore);
+      toast.success('External evaluation saved and added to the score');
+      setExternalScores((prev) => ({ ...prev, [recordId]: '' }));
+      await Promise.all([loadPendingExternalEvaluations(), loadLeaderboard()]);
+
+      if (focusedRecordId === recordId) {
+        const next = new URLSearchParams(searchParams.toString());
+        next.delete('recordId');
+        next.delete('panel');
+        setSearchParams(next, { replace: true });
+      }
+    } catch (error: unknown) {
+      toast.error(getApiErrorMessage(error, 'Failed to submit external score'));
+    } finally {
+      setSubmittingExternal(null);
     }
   };
 
@@ -323,12 +372,8 @@ const ManagerScoringPage: React.FC = () => {
     <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Scoring Employés</h1>
-          <p className="text-muted-foreground">
-            {user?.role === 'bid_manager'
-              ? 'Évaluez et classez tous les employés.'
-              : 'Évaluez et classez les membres de votre équipe'}
-          </p>
+          <h1 className="text-2xl font-bold">Team Scoring</h1>
+          <p className="text-muted-foreground">Upload PVs, score your members, and track team performance.</p>
         </div>
         <div className="flex items-center gap-3">
           <Select value={String(year)} onValueChange={(v) => setYear(Number(v))}>
@@ -346,251 +391,396 @@ const ManagerScoringPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Actions */}
       <div className="flex gap-3 flex-wrap">
         <Button onClick={openUploadDialog}>
-          <Upload className="mr-2 h-4 w-4" /> Importer un PV
+          <Upload className="mr-2 h-4 w-4" /> Upload PV
         </Button>
         <Button variant="outline" onClick={() => setTargetOpen(true)}>
-          <FileCheck className="mr-2 h-4 w-4" /> Définir objectif certification
+          <FileCheck className="mr-2 h-4 w-4" /> Set Certification Target
         </Button>
-        {user?.role === 'team_manager' && (
-          <Button variant="secondary" onClick={handleComputeTeam} disabled={loading}>
-            <Calculator className="mr-2 h-4 w-4" />
-            {loading ? 'Calcul en cours...' : 'Calculer les scores'}
-          </Button>
-        )}
-        {user?.role === 'bid_manager' && (
-          <Button variant="ghost" onClick={openWeightsDialog}>
-            <Settings className="mr-2 h-4 w-4" /> Configurer les poids
-          </Button>
-        )}
+        <Button variant="secondary" onClick={handleComputeTeam} disabled={loading}>
+          <Calculator className="mr-2 h-4 w-4" />
+          {loading ? 'Computing...' : 'Compute Scores'}
+        </Button>
+        <Button variant="outline" onClick={() => setLeaderboardOpen(true)}>
+          <Eye className="mr-2 h-4 w-4" /> View Team Ranking
+        </Button>
       </div>
 
-      {/* Leaderboard */}
-      <Tabs defaultValue="leaderboard">
-        <TabsList>
-          <TabsTrigger value="leaderboard">
-            <Trophy className="mr-2 h-4 w-4" /> Classement
-          </TabsTrigger>
-        </TabsList>
+      <div className="grid gap-4 xl:grid-cols-[1.45fr_0.95fr]">
+        <Alert className="border-slate-200 bg-gradient-to-r from-slate-50 via-white to-slate-100">
+          <Info className="h-4 w-4 text-sky-700" />
+          <AlertTitle>Scoring workflow for managers</AlertTitle>
+          <AlertDescription className="space-y-2">
+            <p>
+              Internal team members are scored directly by you on a 0 to 20 scale, then automatically converted into the project pillar on a 0 to 100 scale.
+            </p>
+            <p>
+              External members receive an immediate provisional score from project complexity and verified PV status, then their home manager finalizes the score after reading your contribution description.
+            </p>
+          </AlertDescription>
+        </Alert>
 
-        <TabsContent value="leaderboard">
-          <Card>
-            <CardHeader>
-              <CardTitle>Classement {year}</CardTitle>
-              <CardDescription>
-                {user?.role === 'team_manager'
-                  ? 'Classement de votre équipe.'
-                  : 'Classement de tous les employés.'}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {fullTeamScores.length === 0 ? (
-                <p className="text-muted-foreground text-center py-8">
-                  Aucun membre dans l'équipe.
-                </p>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-16">Rang</TableHead>
-                      <TableHead>Employé</TableHead>
-                      <TableHead className="text-right">Projets</TableHead>
-                      <TableHead className="text-right">Certif.</TableHead>
-                      <TableHead className="text-right">Trainings</TableHead>
-                      <TableHead className="text-right">Format.</TableHead>
-                      <TableHead className="text-right">Score Final</TableHead>
-                      <TableHead></TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {fullTeamScores.map((entry) => (
-                      <TableRow key={entry.profileId}>
-                        <TableCell>
-                          {entry.rank > 0 ? (
-                            <Badge
-                              variant={entry.rank <= 3 ? 'default' : 'secondary'}
-                              className={entry.rank === 1 ? 'bg-yellow-500' : entry.rank === 2 ? 'bg-gray-400' : entry.rank === 3 ? 'bg-amber-600' : ''}
-                            >
-                              #{entry.rank}
-                            </Badge>
-                          ) : (
-                            <Badge variant="outline">—</Badge>
-                          )}
-                        </TableCell>
-                        <TableCell className="font-medium">{entry.employeeName}</TableCell>
-                        <TableCell className="text-right">{entry.projectScore.toFixed(1)}</TableCell>
-                        <TableCell className="text-right">{entry.certificationScore.toFixed(1)}</TableCell>
-                        <TableCell className="text-right">{entry.trainingScore.toFixed(1)}</TableCell>
-                        <TableCell className="text-right">{(entry.formationScore ?? 0).toFixed(1)}</TableCell>
-                        <TableCell className="text-right font-bold">{entry.finalScore.toFixed(1)}</TableCell>
-                        <TableCell>
-                          {entry.rank > 0 && (
-                            <Button size="sm" variant="ghost" onClick={() => showDetail(entry.profileId, entry.employeeName)}>
-                              <TrendingUp className="h-4 w-4" />
-                            </Button>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+        <Card className="border-slate-200 bg-white shadow-sm">
+          <CardHeader className="pb-4">
+            <CardTitle className="text-lg">Scoring Overview</CardTitle>
+            <CardDescription>Use this space to upload evidence, review pending requests, and open ranking only when you need it.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Pending reviews</p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">{pendingReviewsCount}</p>
+              <p className="mt-1 text-sm text-slate-600">Requests waiting for a home manager decision.</p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Scored members</p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">{scoredMembersCount}</p>
+              <p className="mt-1 text-sm text-slate-600">Employees already visible in the current ranking.</p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Team members</p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">{totalMembersCount}</p>
+              <p className="mt-1 text-sm text-slate-600">All members currently in your team perimeter.</p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
 
-      {/* Upload PV Dialog */}
-      <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
-        <DialogContent className="max-w-md">
+      {user?.role === 'team_manager' && (orderedPendingEvaluations.length > 0 || focusedRecordId) && (
+        <Card className="border-slate-200 bg-white shadow-sm">
+          <CardHeader className="pb-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div className="space-y-1">
+                <CardTitle className="flex items-center gap-2 text-xl">
+                  <ClipboardList className="h-5 w-5 text-slate-700" />
+                  Incoming Review Requests
+                </CardTitle>
+                <CardDescription>
+                  Each card below is one pending decision. Identity, project context, manager notes, and scoring action are separated so you can review faster with less visual noise.
+                </CardDescription>
+              </div>
+              <Badge className="w-fit bg-sky-600 text-white hover:bg-sky-600">
+                {orderedPendingEvaluations.length} pending
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {orderedPendingEvaluations.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-white/70 p-4 text-sm text-muted-foreground">
+                This external evaluation is no longer pending.
+              </div>
+            ) : (
+              orderedPendingEvaluations.map((item) => {
+                const isFocused = item.recordId === focusedRecordId;
+                return (
+                  <div
+                    key={item.recordId}
+                    className={`rounded-2xl border p-4 shadow-sm transition-colors ${
+                      isFocused
+                        ? 'border-sky-300 bg-sky-50/30 ring-2 ring-sky-100'
+                        : 'border-slate-200 bg-white'
+                    }`}
+                  >
+                    <div className="grid gap-4 xl:grid-cols-[1.15fr_1fr_320px]">
+                      <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-lg font-semibold text-slate-950">{item.employeeName}</p>
+                          <Badge className={complexityColor[item.complexity || 'medium'] || complexityColor.medium}>
+                            {complexityLabel[item.complexity || 'medium'] || 'Medium'} complexity
+                          </Badge>
+                          {isFocused && <Badge className="border border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-50">Opened from notification</Badge>}
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <div className="rounded-xl border border-slate-200 bg-white p-3">
+                            <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                              <UserRound className="h-3.5 w-3.5" /> Employee
+                            </p>
+                            <p className="font-medium text-slate-900">{item.employeeName}</p>
+                            <p className="text-sm text-slate-600">External member review pending final decision.</p>
+                          </div>
+                          <div className="rounded-xl border border-slate-200 bg-white p-3">
+                            <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                              <BriefcaseBusiness className="h-3.5 w-3.5" /> Project
+                            </p>
+                            <p className="font-medium text-slate-900">{item.projectName}</p>
+                            <p className="text-sm text-slate-600">{item.clientName || 'No client specified'}</p>
+                          </div>
+                          <div className="rounded-xl border border-slate-200 bg-white p-3 sm:col-span-2">
+                            <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                              <CalendarClock className="h-3.5 w-3.5" /> Timing
+                            </p>
+                            <p className="text-sm text-slate-700">Submitted {formatDate(item.createdAt)} and linked to PV dated {formatDate(item.completionDate)}.</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Project manager summary
+                        </p>
+                        <p className="text-sm leading-6 text-slate-800">
+                          {item.externalContributionDescription || 'No contribution description was provided.'}
+                        </p>
+                      </div>
+
+                      <div className="w-full space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <div>
+                          <Label className="text-sm font-semibold">Final score (/20)</Label>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            This score is converted to /100 and becomes the definitive project contribution for the employee.
+                          </p>
+                        </div>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={20}
+                          step="0.5"
+                          placeholder="Example: 16.5"
+                          value={externalScores[item.recordId] || ''}
+                          onChange={(e) =>
+                            setExternalScores((prev) => ({ ...prev, [item.recordId]: e.target.value }))
+                          }
+                        />
+                        <Button
+                          className="w-full"
+                          onClick={() => handleSubmitExternalScore(item.recordId)}
+                          disabled={submittingExternal === item.recordId}
+                        >
+                          {submittingExternal === item.recordId ? 'Saving...' : 'Submit score and update ranking'}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      <Dialog open={leaderboardOpen} onOpenChange={setLeaderboardOpen}>
+        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Importer un PV</DialogTitle>
+            <DialogTitle>Team Ranking {year}</DialogTitle>
             <DialogDescription>
-              Importez une Attestation de Bonne Exécution (PDF) pour un ou plusieurs employés de votre équipe.
+              Open the ranking when you need comparison details, without keeping it in the main workspace all the time.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label>Projet</Label>
-              <Select value={uploadProjectId} onValueChange={handleProjectChange}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Sélectionner un projet" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableProjects.map((p) => (
-                    <SelectItem key={p.project_id} value={p.project_id}>
-                      {p.projectName}{p.clientName ? ` — ${p.clientName}` : ''}
-                    </SelectItem>
+          {fullTeamScores.length === 0 ? (
+            <p className="py-8 text-center text-muted-foreground">No team members available.</p>
+          ) : (
+            <div className="rounded-2xl border border-slate-200 bg-white">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-16">Rank</TableHead>
+                    <TableHead>Employee</TableHead>
+                    <TableHead className="text-right">Projects</TableHead>
+                    <TableHead className="text-right">Cert.</TableHead>
+                    <TableHead className="text-right">Training</TableHead>
+                    <TableHead className="text-right">Formation</TableHead>
+                    <TableHead className="text-right">Final</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {fullTeamScores.map((entry) => (
+                    <TableRow key={entry.profileId}>
+                      <TableCell>
+                        {entry.rank > 0 ? (
+                          <Badge variant={entry.rank <= 3 ? 'default' : 'secondary'}>
+                            #{entry.rank}
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline">—</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="font-medium">{entry.employeeName}</TableCell>
+                      <TableCell className="text-right">{entry.projectScore.toFixed(1)}</TableCell>
+                      <TableCell className="text-right">{entry.certificationScore.toFixed(1)}</TableCell>
+                      <TableCell className="text-right">{entry.trainingScore.toFixed(1)}</TableCell>
+                      <TableCell className="text-right">{(entry.formationScore ?? 0).toFixed(1)}</TableCell>
+                      <TableCell className="text-right font-bold">{entry.finalScore.toFixed(1)}</TableCell>
+                    </TableRow>
                   ))}
-                  <SelectItem value="__new__">➕ Nouveau projet (hors système)</SelectItem>
-                </SelectContent>
-              </Select>
+                </TableBody>
+              </Table>
             </div>
-            <div>
-              <Label>Employés</Label>
-              <div className={`rounded-md border p-3 space-y-2 ${!uploadProjectId ? 'opacity-60' : ''}`}>
-                {!uploadProjectId ? (
-                  <p className="text-sm text-muted-foreground">Choisir d'abord un projet</p>
-                ) : projectFilteredMembers.filter((m) => m.profileId).length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    {uploadProjectId === '__new__'
-                      ? 'Aucun employé disponible dans votre équipe.'
-                      : 'Aucun employé de votre équipe n\'est assigné à ce projet.'}
-                  </p>
-                ) : (
-                  <>
-                    <p className="text-xs text-muted-foreground">
-                      {uploadProjectId === '__new__'
-                        ? 'Vous pouvez sélectionner un ou plusieurs employés de votre équipe.'
-                        : 'Pour un projet assigné, vous pouvez sélectionner uniquement les employés assignés à ce projet.'}
-                    </p>
-                    <div className="max-h-44 overflow-y-auto space-y-2 pr-1">
-                      {projectFilteredMembers
-                        .filter((m) => m.profileId)
-                        .map((m) => (
-                          <label key={m.profileId!} className="flex items-center gap-2 text-sm cursor-pointer">
-                            <input
-                              type="checkbox"
-                              className="h-4 w-4"
-                              checked={uploadProfileIds.includes(m.profileId!)}
-                              onChange={() => toggleUploadProfile(m.profileId!)}
-                            />
-                            <span>{m.name}</span>
-                          </label>
-                        ))}
-                    </div>
-                    {uploadProfileIds.length > 0 && (
-                      <p className="text-xs text-muted-foreground">
-                        {uploadProfileIds.length} employé(s) sélectionné(s)
-                      </p>
-                    )}
-                  </>
-                )}
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Upload PV</DialogTitle>
+            <DialogDescription>
+              For internal members, give a manager score out of 20. For external members, add a concise contribution summary for the home manager review.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>PV File (PDF)</Label>
+              <Input type="file" accept=".pdf" onChange={(e) => setUploadFile(e.target.files?.[0] || null)} />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Project</Label>
+                <Select value={uploadProjectId} onValueChange={handleProjectChange}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select project" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableProjects.map((project) => (
+                      <SelectItem key={project.project_id} value={project.project_id}>
+                        {project.projectName} ({project.projectType}){project.startDate ? ` - ${project.startDate}` : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Project Complexity</Label>
+                <Select
+                  value={uploadComplexity}
+                  onValueChange={(value: 'low' | 'medium' | 'high') => setUploadComplexity(value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="low">Low</SelectItem>
+                    <SelectItem value="medium">Medium</SelectItem>
+                    <SelectItem value="high">High</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
-            {uploadProjectId === '__new__' && (
-              <>
-                <div>
-                  <Label>Nom du projet</Label>
-                  <Input
-                    placeholder="Ex: Projet Alpha"
-                    value={uploadProjectName}
-                    onChange={(e) => setUploadProjectName(e.target.value)}
-                  />
+
+            {selectedProject && (
+              <div className="rounded-md border bg-muted/40 p-3">
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="font-medium">{selectedProject.projectName}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {selectedProject.clientName || 'No client'}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant="secondary">{selectedProject.projectType}</Badge>
+                    <Badge variant="outline">
+                      {selectedProject.participants.length} participant{selectedProject.participants.length === 1 ? '' : 's'}
+                    </Badge>
+                    {selectedProject.startDate && (
+                      <Badge variant="outline">Assigned {formatDate(selectedProject.startDate)}</Badge>
+                    )}
+                  </div>
                 </div>
-                <div>
-                  <Label>Client</Label>
-                  <Input
-                    placeholder="Nom du client (optionnel)"
-                    value={uploadClientName}
-                    onChange={(e) => setUploadClientName(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <Label>Complexité du projet</Label>
-                  <Select value={uploadComplexity} onValueChange={setUploadComplexity}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="low">Basse</SelectItem>
-                      <SelectItem value="medium">Moyenne</SelectItem>
-                      <SelectItem value="high">Haute</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label>Rôle de l'employé</Label>
-                  <Select value={uploadRole} onValueChange={setUploadRole}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="contributor">Contributeur</SelectItem>
-                      <SelectItem value="technical_lead">Lead Technique</SelectItem>
-                      <SelectItem value="project_lead">Chef de Projet</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </>
+              </div>
             )}
-            <div>
-              <Label>Fichier PDF</Label>
-              <Input
-                type="file"
-                accept=".pdf"
-                onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
-              />
+
+            <div className="space-y-2">
+              <Label>Participants</Label>
+              {selectedParticipants.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  Select a project to load participants.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {selectedParticipants.map((participant) => {
+                    const member = members.find((m) => m.profileId === participant.profileId);
+                    const displayName = member?.name || participant.name;
+                    const isExternal = participant.assignmentType === 'external';
+                    return (
+                      <div key={participant.profileId} className="rounded-md border p-3 space-y-2">
+                        <label className="flex items-center gap-2 text-sm">
+                          <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                            included
+                          </span>
+                          <span className="font-medium">{displayName}</span>
+                          <Badge variant="outline">{participant.assignmentType}</Badge>
+                          {isExternal && (
+                            <span className="text-xs text-amber-600 font-normal">
+                              describe contribution only
+                            </span>
+                          )}
+                        </label>
+
+                        {participant.assignmentType === 'internal' && (
+                          <div className="space-y-2 rounded-md border border-sky-200 bg-sky-50/70 p-3">
+                            <div className="space-y-1">
+                              <Label className="text-xs">Individual score (0-20)</Label>
+                              <p className="text-xs text-sky-900">
+                                This manager score is converted to /100 for the project pillar: for example 16/20 becomes 80/100.
+                              </p>
+                            </div>
+                            <Input
+                              type="number"
+                              min={0}
+                              max={20}
+                              value={uploadScores[participant.profileId] || ''}
+                              onChange={(e) =>
+                                setUploadScores((prev) => ({ ...prev, [participant.profileId]: e.target.value }))
+                              }
+                            />
+                            <div className="flex items-center gap-2 text-[11px] text-sky-900">
+                              <ArrowRight className="h-3.5 w-3.5" />
+                              Encourage consistency: use the same standard across team members so employees can trust the scoring process.
+                            </div>
+                          </div>
+                        )}
+
+                        {participant.assignmentType === 'external' && (
+                          <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50/70 p-3">
+                            <Label className="text-xs font-semibold text-amber-950">
+                              What did this external member actually do?
+                            </Label>
+                            <Textarea
+                              value={uploadContributions[participant.profileId] || ''}
+                              onChange={(e) =>
+                                setUploadContributions((prev) => ({
+                                  ...prev,
+                                  [participant.profileId]: e.target.value,
+                                }))
+                              }
+                              placeholder="Example: owned the API integration, coordinated testing with the client, resolved deployment blockers, and delivered the production-ready script used for release."
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setUploadOpen(false)}>
-              Annuler
+              Cancel
             </Button>
-            <Button onClick={handleUploadPv} disabled={uploading || !uploadFile || uploadProfileIds.length === 0 || !uploadProjectId}>
-              {uploading ? 'Import en cours...' : 'Importer'}
+            <Button onClick={handleUploadPv} disabled={uploading}>
+              {uploading ? 'Uploading...' : 'Upload PV'}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Set Target Dialog */}
       <Dialog open={targetOpen} onOpenChange={setTargetOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Objectif Certification {year}</DialogTitle>
+            <DialogTitle>Certification Target {year}</DialogTitle>
             <DialogDescription>
-              Définissez le nombre de certifications attendues pour un employé cette année.
+              Set yearly certification target for one member in your team.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label>Employé</Label>
+              <Label>Employee</Label>
               <Select value={targetProfileId} onValueChange={setTargetProfileId}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Sélectionner un employé" />
+                  <SelectValue placeholder="Select employee" />
                 </SelectTrigger>
                 <SelectContent>
                   {members
@@ -604,7 +794,7 @@ const ManagerScoringPage: React.FC = () => {
               </Select>
             </div>
             <div>
-              <Label>Nombre de certifications</Label>
+              <Label>Certification count</Label>
               <Input
                 type="number"
                 min={0}
@@ -616,97 +806,10 @@ const ManagerScoringPage: React.FC = () => {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setTargetOpen(false)}>
-              Annuler
+              Cancel
             </Button>
             <Button onClick={handleSetTarget} disabled={settingTarget || !targetProfileId}>
-              {settingTarget ? 'Enregistrement...' : 'Enregistrer'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Project Records Detail Dialog */}
-      <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Détails projets — {detailName}</DialogTitle>
-          </DialogHeader>
-          {detailProjects.length === 0 ? (
-            <p className="text-muted-foreground text-center py-4">Aucun projet enregistré</p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Projet</TableHead>
-                  <TableHead>Client</TableHead>
-                  <TableHead>Complexité</TableHead>
-                  <TableHead>Rôle</TableHead>
-                  <TableHead>PV</TableHead>
-                  <TableHead>Date</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {detailProjects.map((p) => (
-                  <TableRow key={p.record_id}>
-                    <TableCell className="font-medium">{p.projectName}</TableCell>
-                    <TableCell>{p.clientName || '—'}</TableCell>
-                    <TableCell>
-                      <Badge className={complexityColor[p.complexity]}>
-                        {complexityLabel[p.complexity]}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>{roleLabel[p.employeeRole]}</TableCell>
-                    <TableCell>
-                      {p.pvVerified ? (
-                        <Badge className="bg-green-100 text-green-800">✓ Vérifié</Badge>
-                      ) : (
-                        <Badge variant="secondary">Non</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell>{p.completionDate || '—'}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* Weights Config Dialog */}
-      <Dialog open={weightsOpen} onOpenChange={setWeightsOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Configurer les poids de scoring</DialogTitle>
-            <DialogDescription>
-              Chaque poids représente le pourcentage du score final (ex : 35 pour les projets = 35%). La somme des poids doit être 100%.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label>Poids Projets ({wProject}%)</Label>
-              <Input type="number" min={0} max={100} step={5} value={wProject} onChange={(e) => setWProject(Number(e.target.value))} />
-            </div>
-            <div>
-              <Label>Poids Certifications ({wCert}%)</Label>
-              <Input type="number" min={0} max={100} step={5} value={wCert} onChange={(e) => setWCert(Number(e.target.value))} />
-            </div>
-            <div>
-              <Label>Poids Trainings ({wTraining}%)</Label>
-              <Input type="number" min={0} max={100} step={5} value={wTraining} onChange={(e) => setWTraining(Number(e.target.value))} />
-            </div>
-            <div>
-              <Label>Poids Formations ({wFormation}%)</Label>
-              <Input type="number" min={0} max={100} step={5} value={wFormation} onChange={(e) => setWFormation(Number(e.target.value))} />
-            </div>
-            <p className={`text-sm ${Math.abs(wProject + wCert + wTraining + wFormation - 100) > 1 ? 'text-red-500 font-medium' : 'text-muted-foreground'}`}>
-              Total : {wProject + wCert + wTraining + wFormation}%
-              {Math.abs(wProject + wCert + wTraining + wFormation - 100) > 1 && ' ⚠ La somme doit être 100%'}
-            </p>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setWeightsOpen(false)}>Annuler</Button>
-            <Button onClick={handleSaveWeights} disabled={savingWeights || Math.abs(wProject + wCert + wTraining + wFormation - 100) > 1}>
-              {savingWeights ? 'Enregistrement...' : 'Enregistrer'}
+              {settingTarget ? 'Saving...' : 'Save'}
             </Button>
           </DialogFooter>
         </DialogContent>

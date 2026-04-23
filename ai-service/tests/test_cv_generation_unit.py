@@ -41,6 +41,8 @@ from app.services.cv_generator import (
     _detect_template_mode,
     _build_context_from_employee,
     _compute_input_hash,
+    _make_para_elem,
+    NS_W,
     cleanEmployeeData,
 )
 
@@ -85,7 +87,7 @@ def sample_employee() -> Dict[str, Any]:
             },
         ],
         "certifications": ["AWS Solutions Architect", "Python Advanced"],
-        "languages": ["French", "English", "Arabic"],
+        "languages": ["French", "English"],
     }
 
 
@@ -259,6 +261,28 @@ class TestInputValidation:
         long_name = "A" * 200
         data, _ = validate_employee_data({"name": long_name})
         assert len(data["name"]) <= 81  # 80 + possible "…"
+
+
+class TestFontInheritance:
+    def test_make_para_elem_preserves_template_run_fonts(self):
+        ref_rpr = etree.fromstring(
+            f'''
+            <w:rPr xmlns:w="{NS_W}">
+                <w:rFonts w:ascii="Aptos" w:hAnsi="Aptos" w:cs="Aptos"/>
+                <w:sz w:val="24"/>
+            </w:rPr>
+            '''
+        )
+
+        paragraph = _make_para_elem("Aya Ben Jemaa", ref_rpr=ref_rpr)
+        run_props = paragraph.find(f"{{{NS_W}}}r/{{{NS_W}}}rPr")
+
+        assert run_props is not None
+        rfonts = run_props.find(f"{{{NS_W}}}rFonts")
+        assert rfonts is not None
+        assert rfonts.get(f"{{{NS_W}}}ascii") == "Aptos"
+        assert rfonts.get(f"{{{NS_W}}}hAnsi") == "Aptos"
+        assert rfonts.get(f"{{{NS_W}}}cs") == "Aptos"
 
     def test_long_summary_truncated(self):
         long_summary = "Word " * 500

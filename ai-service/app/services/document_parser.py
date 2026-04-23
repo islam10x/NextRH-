@@ -426,6 +426,7 @@ class DocumentParser:
             not parsed.project_name
             or not parsed.client_name
             or not parsed.completion_date
+            or not parsed.team_members
         )
 
     def _training_needs_llm(self, parsed: ParsedTrainingSheet) -> bool:
@@ -451,9 +452,16 @@ class DocumentParser:
                 "Voici le texte extrait d'un PV (Attestation de Bonne Exécution).\n"
                 "Extrais les informations suivantes en JSON :\n"
                 '- "project_name": nom du projet (null si inconnu)\n'
-                '- "client_name": nom du client/société (null si inconnu)\n'
+                '- "client_name": nom du client/société qui a commandé le projet (null si inconnu)\n'
                 '- "completion_date": date au format YYYY-MM-DD (null si inconnue)\n'
-                '- "organization_context": contexte organisationnel (null si inconnu)\n\n'
+                '- "organization_context": contexte organisationnel (null si inconnu)\n'
+                '- "team_members": liste des membres de l\'équipe qui ont réalisé le projet.\n'
+                '  Format: [{"name": "Prénom NOM", "role": "project_lead|technical_lead|contributor"}]\n'
+                '  Règles de classification du rôle :\n'
+                '  - "chef de projet" (sans "technique") → "project_lead"\n'
+                '  - "chef de projet technique" → "technical_lead"\n'
+                '  - "intervenant", "intervenante" ou tout autre rôle → "contributor"\n'
+                '  Retourne [] si aucun membre trouvé.\n\n'
                 "Retourne UNIQUEMENT un objet JSON valide, sans markdown ni backticks.\n\n"
                 f"Texte du document :\n{text[:3000]}"
             )
@@ -483,6 +491,23 @@ class DocumentParser:
                     pass
             if not current.organization_context and data.get("organization_context"):
                 current.organization_context = data["organization_context"]
+            # Always merge team_members from LLM if regex found nothing
+            if not current.team_members and data.get("team_members"):
+                members_raw = data["team_members"]
+                if isinstance(members_raw, list):
+                    valid_roles = {"project_lead", "technical_lead", "contributor"}
+                    current.team_members = [
+                        {
+                            "name": m.get("name", "").strip(),
+                            "role": m.get("role", "contributor")
+                            if m.get("role") in valid_roles
+                            else "contributor",
+                        }
+                        for m in members_raw
+                        if isinstance(m, dict) and m.get("name")
+                    ]
+                    if current.team_members:
+                        current.assumptions.append("Membres d'équipe inférés par IA")
 
             return current
         except Exception as e:

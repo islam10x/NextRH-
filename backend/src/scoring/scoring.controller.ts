@@ -24,10 +24,10 @@ import {
   UploadPvDto,
   UploadTrainingSheetDto,
   SetTargetsDto,
-  UpdateWeightsDto,
   UpdateProjectRecordDto,
   ComputeScoreDto,
   ComputeTeamScoresDto,
+  ScoreExternalEvaluationDto,
 } from './dto/scoring.dto';
 
 @Controller('scoring')
@@ -37,6 +37,18 @@ export class ScoringController {
     private readonly scoringService: ScoringService,
     private readonly teamsService: TeamsService,
   ) {}
+
+  // ── PV Preview (parse only, no save) ──────────────────────────────
+
+  @Post('preview-pv')
+  @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
+  @UseInterceptors(FileInterceptor('file'))
+  async previewPv(
+    @UploadedFile() file: Express.Multer.File,
+    @Req() req: any,
+  ) {
+    return this.scoringService.previewPv(file, req.user.id);
+  }
 
   // ── PV Upload (Team Manager uploads for an employee) ───────────────
 
@@ -58,15 +70,24 @@ export class ScoringController {
       throw new BadRequestException('Veuillez sélectionner au moins un employé');
     }
 
+    let parsedProfileEvaluations:
+      | Array<{ profileId: string; score?: number; contributionDescription?: string }>
+      | undefined;
+    if (dto.profileEvaluations) {
+      try {
+        parsedProfileEvaluations = JSON.parse(dto.profileEvaluations);
+      } catch {
+        // ignore invalid JSON
+      }
+    }
+
     return this.scoringService.uploadPv(
       file,
       targetProfileIds,
       req.user.id,
       dto.projectId,
-      dto.projectName,
-      dto.clientName,
       dto.complexity,
-      dto.employeeRole,
+      parsedProfileEvaluations,
     );
   }
 
@@ -88,7 +109,7 @@ export class ScoringController {
   // ── Targets ───────────────────────────────────────────────────────────
 
   @Post('targets')
-  @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
+  @Roles(UserRole.TEAM_MANAGER)
   async setTargets(@Body() dto: SetTargetsDto, @Req() req: any) {
     return this.scoringService.setTargets(
       dto.profileId,
@@ -109,26 +130,6 @@ export class ScoringController {
 
   // ── Weights ───────────────────────────────────────────────────────────
 
-  @Get('weights')
-  @Roles(UserRole.EMPLOYEE, UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
-  async getWeights() {
-    return this.scoringService.getWeights();
-  }
-
-  @Patch('weights')
-  @Roles(UserRole.BID_MANAGER)
-  async updateWeights(@Body() dto: UpdateWeightsDto, @Req() req: any) {
-    const userId = req.user?.id || req.user?.userId || req.user?.user_id;
-
-    return this.scoringService.updateWeights(
-      dto.projectWeight,
-      dto.certificationWeight,
-      dto.trainingWeight,
-      dto.formationWeight,
-      userId,
-    );
-  }
-
   // ── Score Computation ─────────────────────────────────────────────────
 
   @Post('compute')
@@ -148,6 +149,12 @@ export class ScoringController {
     @Req() req: any,
   ) {
     return this.scoringService.computeTeamScores(req.user.id, dto.year);
+  }
+
+  @Post('compute-all')
+  @Roles(UserRole.BID_MANAGER)
+  async computeAllScores(@Body() dto: ComputeTeamScoresDto) {
+    return this.scoringService.computeAllScores(dto.year);
   }
 
   // ── Data Access ───────────────────────────────────────────────────────
@@ -188,8 +195,25 @@ export class ScoringController {
     return this.scoringService.updateProjectRecord(
       recordId,
       dto.complexity,
-      dto.employeeRole,
     );
+  }
+
+  @Get('external-evaluations/pending')
+  @Roles(UserRole.TEAM_MANAGER)
+  async listPendingExternalEvaluations(@Req() req: any) {
+    const managerId = req.user?.id || req.user?.userId || req.user?.user_id;
+    return this.scoringService.listPendingExternalEvaluations(managerId);
+  }
+
+  @Post('external-evaluations/:recordId/score')
+  @Roles(UserRole.TEAM_MANAGER)
+  async scoreExternalEvaluation(
+    @Param('recordId') recordId: string,
+    @Body() dto: ScoreExternalEvaluationDto,
+    @Req() req: any,
+  ) {
+    const managerId = req.user?.id || req.user?.userId || req.user?.user_id;
+    return this.scoringService.scoreExternalEvaluation(recordId, managerId, dto.score);
   }
 
   // ── List projects for PV selector ─────────────────────────────────────

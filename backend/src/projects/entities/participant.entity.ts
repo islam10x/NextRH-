@@ -2,11 +2,7 @@ import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 't
 import { Project } from './project.entity';
 import { EmployeeProfile } from '../../employees/entities/employee-profile.entity';
 
-export enum ParticipantRole {
-  CONTRIBUTOR = 'contributor',
-  TECHNICAL_LEAD = 'technical_lead',
-  PROJECT_LEAD = 'project_lead',
-}
+export type ParticipantAssignmentType = 'internal' | 'external';
 
 @Entity('project_participants')
 export class ProjectParticipant {
@@ -21,16 +17,23 @@ export class ProjectParticipant {
     @JoinColumn({ name: 'profile_id' })
     profile: EmployeeProfile;
 
-    @Column({
-      type: 'enum',
-      enum: ParticipantRole,
-      default: ParticipantRole.CONTRIBUTOR,
-    })
-    role: ParticipantRole;
-
     @Column({ type: 'text' })
     description: string;
 
     @Column({ name: 'assigned_by', type: 'uuid', nullable: true })
     assignedBy: string | null;
+
+    @Column({
+      name: 'assignment_type',
+      type: 'enum',
+      enum: ['internal', 'external'],
+      default: 'internal',
+    })
+    assignmentType: ParticipantAssignmentType;
+
+    @Column({ name: 'home_manager_id', type: 'uuid', nullable: true })
+    homeManagerId: string | null;
+
+    @Column({ name: 'cross_team_request_id', type: 'uuid', nullable: true })
+    crossTeamRequestId: string | null;
 }

@@ -64,8 +64,8 @@ export class TrainingService {
             ? await this.usersRepo.findOne({ where: { user_id: managerUserId } })
             : null;
         const managerName = assignedBy
-            ? [assignedBy.firstName, assignedBy.lastName].filter(Boolean).join(' ')
-            : null;
+            ? [assignedBy.firstName, assignedBy.lastName].filter(Boolean).join(' ').trim() || assignedBy.email
+            : managerEmail || 'Your manager';
 
         const rows = profiles.map((profile) =>
             this.trainingRepo.create({
@@ -89,7 +89,7 @@ export class TrainingService {
                     userId: row.profile?.user?.user_id || '',
                     type: 'training_assigned',
                     title: 'New training assigned',
-                    message: `${row.trainingTitle}${row.dueDate ? ` - Due ${row.dueDate}` : ''}${managerName ? ` - Assigned by ${managerName}` : ''}`,
+                    message: `${row.trainingTitle}${row.dueDate ? ` - Due ${row.dueDate}` : ''} - Assigned by ${managerName}`,
                     relatedEntityType: 'training_session',
                     relatedEntityId: row.training_id,
                 })
@@ -123,19 +123,20 @@ export class TrainingService {
         const managerEmails = Array.from(
             new Set(rows.map((row) => row.assignedBy).filter(Boolean) as string[])
         );
-        const managers = managerEmails.length
-            ? await this.usersRepo.find({ where: { email: In(managerEmails) } })
-            : [];
-        const managerNameByEmail = new Map(
-            managers.map((mgr) => [
-                mgr.email,
-                [mgr.firstName, mgr.lastName].filter(Boolean).join(' ') || mgr.email,
-            ]),
-        );
+        const managerNameByEmail = new Map<string, string>();
+        if (managerEmails.length) {
+            const managers = await this.usersRepo.find({ where: { email: In(managerEmails) } });
+            for (const manager of managers) {
+                managerNameByEmail.set(
+                    manager.email.toLowerCase(),
+                    [manager.firstName, manager.lastName].filter(Boolean).join(' ').trim() || manager.email,
+                );
+            }
+        }
 
         return rows.map((row) => ({
             ...row,
-            assignedByName: row.assignedBy ? managerNameByEmail.get(row.assignedBy) || row.assignedBy : null,
+            assignedByName: row.assignedBy ? managerNameByEmail.get(row.assignedBy.toLowerCase()) || 'Manager' : null,
         }));
     }
 

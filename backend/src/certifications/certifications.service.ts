@@ -9,6 +9,7 @@ import { RagService } from '../rag/rag.service';
 import { FileValidationService } from '../file-validation/file-validation.service';
 import { formatIsoDate, normalizeFlexibleDate } from '../utils/date-normalizer';
 import { TeamsService } from '../teams/teams.service';
+import { ScoringService } from '../scoring/scoring.service';
 
 @Injectable()
 export class CertificationsService {
@@ -25,6 +26,7 @@ export class CertificationsService {
         private readonly ragService: RagService,
         private readonly fileValidationService: FileValidationService,
         private readonly teamsService: TeamsService,
+        private readonly scoringService: ScoringService,
     ) {
         this.aiServiceBaseUrl =
             this.configService.get<string>('AI_SERVICE_URL')?.replace(/\/+$/, '') ||
@@ -157,6 +159,16 @@ export class CertificationsService {
 
         // Trigger RAG Sync
         await this.ragService.triggerUserSync(userId);
+
+        // Trigger score recomputation so the certification is immediately reflected.
+        // Use the cert's issue year if available, else current year.
+        const certYear = parsedIssueDate?.getFullYear() ?? new Date().getFullYear();
+        try {
+            await this.scoringService.computeScore(profile.profile_id, certYear);
+            this.logger.log(`Score recomputed for profile ${profile.profile_id} after certification upload (year ${certYear})`);
+        } catch (err: any) {
+            this.logger.warn(`Score recompute failed after certification upload for ${profile.profile_id}: ${err.message}`);
+        }
     }
 
     /**

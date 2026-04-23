@@ -1,18 +1,15 @@
 import {
-  IsString,
-  IsOptional,
+  IsArray,
   IsEnum,
-  IsUUID,
   IsInt,
   IsNumber,
-  IsArray,
-  Min,
+  IsOptional,
+  IsString,
+  IsUUID,
   Max,
-  ValidateNested,
+  Min,
 } from 'class-validator';
-import { Transform, Type } from 'class-transformer';
-
-// ── Upload PV DTO (Team Manager uploads for an employee) ─────────────────────────
+import { Transform } from 'class-transformer';
 
 export class UploadPvDto {
   @IsOptional()
@@ -37,37 +34,21 @@ export class UploadPvDto {
   @IsUUID(undefined, { each: true })
   profileIds?: string[];
 
-  /** Existing project ID — if provided, links PV to this project */
-  @IsOptional()
   @IsUUID()
-  projectId?: string;
-
-  /** If no projectId → new project name */
-  @IsOptional()
-  @IsString()
-  projectName?: string;
-
-  /** If no projectId → new project client */
-  @IsOptional()
-  @IsString()
-  clientName?: string;
+  projectId: string;
 
   @IsOptional()
   @IsEnum(['low', 'medium', 'high'])
   complexity?: 'low' | 'medium' | 'high';
 
   @IsOptional()
-  @IsEnum(['contributor', 'technical_lead', 'project_lead'])
-  employeeRole?: 'contributor' | 'technical_lead' | 'project_lead';
+  @IsString()
+  profileEvaluations?: string;
 }
-
-// ── Upload Training Sheet DTO (Employee uploads for themselves) ───────────
 
 export class UploadTrainingSheetDto {
-  // No profileId needed — derived from the authenticated user
+  // profile is derived from authenticated user
 }
-
-// ── Set Targets DTO ─────────────────────────────────────────────────────────
 
 export class SetTargetsDto {
   @IsUUID()
@@ -84,47 +65,11 @@ export class SetTargetsDto {
   certificationTarget?: number;
 }
 
-// ── Update Weights DTO ──────────────────────────────────────────────────────
-
-export class UpdateWeightsDto {
-  @IsOptional()
-  @IsUUID()
-  teamId?: string;
-
-  @IsNumber()
-  @Min(0)
-  @Max(1)
-  projectWeight: number;
-
-  @IsNumber()
-  @Min(0)
-  @Max(1)
-  certificationWeight: number;
-
-  @IsNumber()
-  @Min(0)
-  @Max(1)
-  trainingWeight: number;
-
-  @IsNumber()
-  @Min(0)
-  @Max(1)
-  formationWeight: number;
-}
-
-// ── Update Record Complexity/Role ───────────────────────────────────────────
-
 export class UpdateProjectRecordDto {
   @IsOptional()
   @IsEnum(['low', 'medium', 'high'])
   complexity?: 'low' | 'medium' | 'high';
-
-  @IsOptional()
-  @IsEnum(['contributor', 'technical_lead', 'project_lead'])
-  employeeRole?: 'contributor' | 'technical_lead' | 'project_lead';
 }
-
-// ── Compute Score Request ───────────────────────────────────────────────────
 
 export class ComputeScoreDto {
   @IsUUID()
@@ -136,16 +81,12 @@ export class ComputeScoreDto {
   year: number;
 }
 
-// ── Batch Compute ───────────────────────────────────────────────────────────
-
 export class ComputeTeamScoresDto {
   @IsInt()
   @Min(2000)
   @Max(2100)
   year: number;
 }
-
-// ── Leaderboard Query ───────────────────────────────────────────────────────
 
 export class LeaderboardQueryDto {
   @IsInt()
@@ -162,4 +103,11 @@ export class LeaderboardQueryDto {
   @Min(1)
   @Max(100)
   limit?: number;
+}
+
+export class ScoreExternalEvaluationDto {
+  @IsNumber()
+  @Min(0)
+  @Max(20)
+  score: number;
 }

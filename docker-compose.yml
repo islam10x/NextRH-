@@ -74,7 +74,7 @@ services:
       - ./file-storage:/app/file-storage
       - ./ai-service/app:/app/app
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     networks:
       - cv-network
     depends_on:
@@ -159,6 +159,7 @@ services:
       - N8N_PORT=5678
       - N8N_PROTOCOL=http
       - WEBHOOK_URL=http://localhost:5678/
+      - N8N_RUNNERS_MODE=external
       - GENERIC_TIMEZONE=Europe/Paris
     volumes:
       - n8n-data:/home/node/.n8n

@@ -3,6 +3,8 @@ import { EmployeeProfile } from '../../employees/entities/employee-profile.entit
 import { Skill } from '../../skills/entities/skill.entity';
 import { ProjectParticipant } from './participant.entity';
 
+export type ProjectType = 'internal' | 'external';
+
 @Entity('projects')
 export class Project {
     @PrimaryGeneratedColumn('uuid')
@@ -36,6 +38,17 @@ export class Project {
 
     @Column({ name: 'complexity', length: 20, nullable: true, default: 'medium' })
     complexity: string | null;
+
+    @Column({
+        name: 'project_type',
+        type: 'enum',
+        enum: ['internal', 'external'],
+        default: 'internal',
+    })
+    projectType: ProjectType;
+
+    @Column({ name: 'created_by', type: 'uuid', nullable: true })
+    createdBy: string | null;
 
     @Column({ name: 'generated_title', length: 255, nullable: true })
     generatedTitle: string | null;
