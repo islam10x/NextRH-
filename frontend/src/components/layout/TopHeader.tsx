@@ -130,7 +130,9 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ title, showSearch = false 
   };
 
   const markAllAsRead = async () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    // Clear the badge count but keep individual notification read-state intact visually
+    // so the user can still see which ones are new (bold) when the dropdown opens.
+    // The backend is notified; on next poll they will no longer appear unread.
     setUnreadCount(0);
     notificationService.markAllRead().catch(() => {});
   };
@@ -172,7 +174,9 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ title, showSearch = false 
           : '/employee/training-projects?tab=projects',
       );
     } else if (isCrossTeam) {
-      navigate('/manager/projects?tab=cross-team');
+      const params = new URLSearchParams({ tab: 'cross-team' });
+      if (notification.relatedEntityId) params.set('requestId', notification.relatedEntityId);
+      navigate(`/manager/projects?${params.toString()}`);
     } else if (isExternalEval) {
       const params = new URLSearchParams();
       if (notification.relatedEntityId) {
@@ -207,7 +211,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ title, showSearch = false 
       )}
 
       <div className="flex items-center gap-2 ml-auto">
-        <DropdownMenu>
+        <DropdownMenu onOpenChange={(open) => { if (open) markAllAsRead(); }}>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" className="relative">
               <Bell className="h-5 w-5" />
@@ -249,7 +253,9 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ title, showSearch = false 
                 No notifications
               </div>
             ) : (
-              notifications.slice(0, 8).map((notification) => (
+              [...notifications.filter((notification) => !notification.read), ...notifications.filter((notification) => notification.read)]
+                .slice(0, 8)
+                .map((notification) => (
                 <DropdownMenuItem
                   key={notification.id}
                   className={`cursor-pointer rounded-xl p-0 transition-colors focus:bg-transparent ${
@@ -273,7 +279,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ title, showSearch = false 
                           ? 'border-purple-200 bg-purple-50 hover:bg-purple-100/70 dark:border-purple-800 dark:bg-purple-950/30 dark:hover:bg-purple-900/40'
                           : 'border-transparent bg-purple-50/50 hover:bg-purple-100/50 dark:bg-purple-950/20 dark:hover:bg-purple-900/30'
                         : !notification.read
-                          ? 'border-primary/15 bg-muted/70 hover:bg-muted'
+                          ? 'border-l-4 border-l-primary border-primary/15 bg-muted/70 hover:bg-muted'
                           : 'border-transparent bg-background hover:bg-muted/40'
                     }`}
                   >

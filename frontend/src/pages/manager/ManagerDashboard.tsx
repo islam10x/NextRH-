@@ -1,11 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Users, Award, AlertTriangle, Calendar, ChevronRight } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Badge } from '@/components/ui/badge';
+import { Users, Award, AlertTriangle, Calendar, ChevronRight, Pencil } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import { teamService } from '@/services/team.service';
+import { teamService, TeamInfo } from '@/services/team.service';
 import { certificationService, CertificationStats, TeamCertification } from '@/services/certification.service';
 import { toast } from 'sonner';
 
@@ -22,11 +26,14 @@ const ManagerDashboard: React.FC = () => {
   const [teamCertifications, setTeamCertifications] = useState<TeamCertification[]>([]);
   const [loadingCertifications, setLoadingCertifications] = useState(false);
 
-  const teamName = useMemo(() => {
-    const rawName = user?.name || '';
-    const firstName = rawName.split(' ').filter(Boolean)[0];
-    return firstName ? `${firstName}'s Team` : 'Your Team';
-  }, [user]);
+  // Team identity
+  const [teamInfo, setTeamInfo] = useState<TeamInfo | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editFocus, setEditFocus] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const teamName = teamInfo?.teamName || (user?.name?.split(' ')[0] ? `${user.name.split(' ')[0]}'s Team` : 'Your Team');
 
   const pieData = [
     { name: 'Active', value: certificationStats.active, color: 'hsl(var(--success))' },
@@ -67,6 +74,39 @@ const ManagerDashboard: React.FC = () => {
     }
   };
 
+  const loadTeamInfo = async () => {
+    try {
+      const info = await teamService.getMyTeam();
+      setTeamInfo(info);
+    } catch {
+      // silently ignore — team will be created on first PATCH
+    }
+  };
+
+  const openEdit = () => {
+    setEditName(teamInfo?.teamName || teamName);
+    setEditFocus(teamInfo?.teamFocus || '');
+    setEditOpen(true);
+  };
+
+  const handleSaveTeam = async () => {
+    if (!editName.trim() || editName.trim().length < 2) {
+      toast.error('Team name must be at least 2 characters.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const saved = await teamService.updateMyTeam(editName.trim(), editFocus.trim() || null);
+      setTeamInfo(saved);
+      setEditOpen(false);
+      toast.success('Team info updated!');
+    } catch (error: any) {
+      toast.error(error?.response?.data?.message || 'Failed to update team info.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const loadCertifications = async () => {
     if (!user) return;
     try {
@@ -87,16 +127,72 @@ const ManagerDashboard: React.FC = () => {
 
   useEffect(() => {
     loadMembers();
+    loadTeamInfo();
     loadCertifications();
   }, []);
 
   return (
     <div className="space-y-6">
+      {/* Edit Team Dialog */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit team identity</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="team-name">Team name</Label>
+              <Input
+                id="team-name"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                maxLength={80}
+                placeholder="e.g. Alpha Squad"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="team-focus">Focus / specialisation <span className="text-muted-foreground">(optional)</span></Label>
+              <Input
+                id="team-focus"
+                value={editFocus}
+                onChange={(e) => setEditFocus(e.target.value)}
+                maxLength={120}
+                placeholder="e.g. Cloud Infrastructure, Data & AI…"
+              />
+              <p className="text-xs text-muted-foreground">Shown on your dashboard and your team members' dashboards.</p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button>
+            <Button onClick={handleSaveTeam} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Team Dashboard</h1>
-          <p className="text-muted-foreground">{teamName} Overview</p>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold text-foreground">{teamName}</h1>
+            <button
+              onClick={openEdit}
+              className="rounded-full p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              title="Edit team name & focus"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          {teamInfo?.teamFocus ? (
+            <div className="flex items-center gap-2 mt-1">
+              <Badge variant="secondary" className="text-xs font-normal">{teamInfo.teamFocus}</Badge>
+              <span className="text-xs text-muted-foreground">— {members.length} member{members.length !== 1 ? 's' : ''}</span>
+            </div>
+          ) : (
+            <p className="text-muted-foreground text-sm">
+              {members.length} member{members.length !== 1 ? 's' : ''} ·{' '}
+              <button onClick={openEdit} className="underline underline-offset-2 hover:text-foreground transition-colors">Add a team focus</button>
+            </p>
+          )}
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => navigate('/manager/team')}>

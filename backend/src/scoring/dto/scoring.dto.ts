@@ -111,3 +111,10 @@ export class ScoreExternalEvaluationDto {
   @Max(20)
   score: number;
 }
+
+export class ScoreInternalEvaluationDto {
+  @IsNumber()
+  @Min(0)
+  @Max(20)
+  score: number;
+}

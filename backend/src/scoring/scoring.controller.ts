@@ -28,6 +28,7 @@ import {
   ComputeScoreDto,
   ComputeTeamScoresDto,
   ScoreExternalEvaluationDto,
+  ScoreInternalEvaluationDto,
 } from './dto/scoring.dto';
 
 @Controller('scoring')
@@ -205,6 +206,13 @@ export class ScoringController {
     return this.scoringService.listPendingExternalEvaluations(managerId);
   }
 
+  @Get('internal-evaluations/pending')
+  @Roles(UserRole.TEAM_MANAGER)
+  async listPendingInternalEvaluations(@Req() req: any) {
+    const managerId = req.user?.id || req.user?.userId || req.user?.user_id;
+    return this.scoringService.listPendingInternalEvaluations(managerId);
+  }
+
   @Post('external-evaluations/:recordId/score')
   @Roles(UserRole.TEAM_MANAGER)
   async scoreExternalEvaluation(
@@ -214,6 +222,17 @@ export class ScoringController {
   ) {
     const managerId = req.user?.id || req.user?.userId || req.user?.user_id;
     return this.scoringService.scoreExternalEvaluation(recordId, managerId, dto.score);
+  }
+
+  @Post('internal-evaluations/:recordId/score')
+  @Roles(UserRole.TEAM_MANAGER)
+  async scoreInternalEvaluation(
+    @Param('recordId') recordId: string,
+    @Body() dto: ScoreInternalEvaluationDto,
+    @Req() req: any,
+  ) {
+    const managerId = req.user?.id || req.user?.userId || req.user?.user_id;
+    return this.scoringService.scoreInternalEvaluation(recordId, managerId, dto.score);
   }
 
   // ── List projects for PV selector ─────────────────────────────────────

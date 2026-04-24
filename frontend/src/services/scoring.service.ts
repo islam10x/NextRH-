@@ -203,6 +203,19 @@ export interface PendingExternalEvaluation {
   employeeName: string;
 }
 
+export interface PendingInternalEvaluation {
+  recordId: string;
+  profileId: string;
+  projectName: string;
+  clientName: string | null;
+  projectDescription: string | null;
+  complexity: string | null;
+  completionDate: string | null;
+  assignmentDate: string | null;
+  createdAt: string;
+  employeeName: string;
+}
+
 const normalizeEmployeeScore = (score: any): EmployeeScore | null => {
   if (!score) return null;
 
@@ -323,8 +336,18 @@ export const scoringService = {
     return res.data || [];
   },
 
+  async listPendingInternalEvaluations(): Promise<PendingInternalEvaluation[]> {
+    const res = await api.get('/scoring/internal-evaluations/pending');
+    return res.data || [];
+  },
+
   async scoreExternalEvaluation(recordId: string, score: number) {
     const res = await api.post(`/scoring/external-evaluations/${recordId}/score`, { score });
+    return res.data;
+  },
+
+  async scoreInternalEvaluation(recordId: string, score: number) {
+    const res = await api.post(`/scoring/internal-evaluations/${recordId}/score`, { score });
     return res.data;
   },
 

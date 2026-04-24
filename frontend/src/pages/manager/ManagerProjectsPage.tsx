@@ -24,8 +24,9 @@ import {
 } from '@/components/ui/dialog';
 import { projectService, CrossTeamRequest, OwnedProjectLite } from '@/services/project.service';
 import { teamService, ExternalTeamLite } from '@/services/team.service';
+import { scoringService, AvailableProject } from '@/services/scoring.service';
 import { Project } from '@/types';
-import { Briefcase, BriefcaseBusiness, Building2, Calendar, CalendarClock, Inbox, Search, Send, UserRound, Users } from 'lucide-react';
+import { Briefcase, BriefcaseBusiness, Building2, Calendar, CalendarClock, Inbox, Search, Send, Upload, UserRound, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { useSearchParams } from 'react-router-dom';
 
@@ -100,10 +101,25 @@ const ManagerProjectsPage: React.FC = () => {
   const [creatingRequest, setCreatingRequest] = useState(false);
   const [selectedIncomingProfiles, setSelectedIncomingProfiles] = useState<Record<string, string>>({});
   const [processingRequestId, setProcessingRequestId] = useState<string | null>(null);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadProjectId, setUploadProjectId] = useState('');
+  const [uploadComplexity, setUploadComplexity] = useState<'low' | 'medium' | 'high'>('medium');
+  const [uploadProfileIds, setUploadProfileIds] = useState<string[]>([]);
+  const [uploadScores, setUploadScores] = useState<Record<string, string>>({});
+  const [uploadContributions, setUploadContributions] = useState<Record<string, string>>({});
+  const [uploading, setUploading] = useState(false);
+  const [availableProjects, setAvailableProjects] = useState<AvailableProject[]>([]);
   const [activeTab, setActiveTab] = useState<'projects' | 'cross-team'>(
     searchParams.get('tab') === 'cross-team' ? 'cross-team' : 'projects',
   );
   const tabQuery = searchParams.get('tab');
+  const requestIdQuery = searchParams.get('requestId');
+  const selectedUploadProject = useMemo(
+    () => availableProjects.find((project) => project.project_id === uploadProjectId),
+    [availableProjects, uploadProjectId],
+  );
+  const selectedUploadParticipants = useMemo(() => selectedUploadProject?.participants || [], [selectedUploadProject]);
 
   const loadMembers = async () => {
     setLoadingMembers(true);
@@ -158,6 +174,15 @@ const ManagerProjectsPage: React.FC = () => {
     }
     setActiveTab('projects');
   }, [tabQuery]);
+
+  // When a requestId is provided (from notification click), highlight and scroll to the matching request card.
+  useEffect(() => {
+    if (!requestIdQuery) return;
+    const el = document.getElementById(`request-${requestIdQuery}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [requestIdQuery, incomingRequests, outgoingRequests]);
 
   const groupedProjects = useMemo(() => {
     const grouped = new Map<
@@ -252,6 +277,136 @@ const ManagerProjectsPage: React.FC = () => {
   const pendingIncomingCount = incomingRequests.filter((request) => request.status === 'pending').length;
   const pendingOutgoingCount = outgoingRequests.filter((request) => request.status === 'pending').length;
   const approvedOutgoingCount = outgoingRequests.filter((request) => request.status === 'approved').length;
+
+  // Score progress for PV upload: count how many internal participants still need a score
+  const internalParticipants = selectedUploadParticipants.filter((p) => p.assignmentType === 'internal');
+  const scoredCount = internalParticipants.filter((p) => {
+    const v = uploadScores[p.profileId];
+    return v !== undefined && v !== '' && Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 20;
+  }).length;
+  const allScoresEntered = internalParticipants.length === 0 || scoredCount === internalParticipants.length;
+  const canUpload = !uploading && allScoresEntered;
+
+  const openUploadDialog = async () => {
+    setUploadOpen(true);
+    setUploadFile(null);
+    setUploadProjectId('');
+    setUploadComplexity('medium');
+    setUploadProfileIds([]);
+    setUploadScores({});
+    setUploadContributions({});
+    try {
+      const projects = await scoringService.listProjects();
+      setAvailableProjects(projects);
+    } catch (error: unknown) {
+      setAvailableProjects([]);
+      toast.error(getApiErrorMessage(error, 'Failed to load projects for PV upload'));
+    }
+  };
+
+  const handleUploadProjectChange = (projectId: string) => {
+    setUploadProjectId(projectId);
+    setUploadScores({});
+    setUploadContributions({});
+    const selected = availableProjects.find((project) => project.project_id === projectId);
+    const participantIds = (selected?.participants || []).map((participant) => participant.profileId);
+    setUploadProfileIds(participantIds);
+    const nextComplexity = (selected?.complexity || 'medium').toLowerCase();
+    if (nextComplexity === 'low' || nextComplexity === 'high') {
+      setUploadComplexity(nextComplexity);
+      return;
+    }
+    setUploadComplexity('medium');
+  };
+
+  const handleUploadPv = async () => {
+    if (!uploadFile) {
+      toast.error('Select a PV file');
+      return;
+    }
+    if (!uploadProjectId) {
+      toast.error('Select a project');
+      return;
+    }
+    if (!uploadComplexity) {
+      toast.error('Select project complexity');
+      return;
+    }
+    if (uploadProfileIds.length === 0) {
+      toast.error('Select at least one participant.');
+      return;
+    }
+
+    const participantsById = new Map(
+      selectedUploadParticipants.map((participant) => [participant.profileId, participant]),
+    );
+
+    for (const profileId of uploadProfileIds) {
+      const participant = participantsById.get(profileId);
+      if (!participant) continue;
+      const internalRawScore = uploadScores[profileId];
+      if (participant.assignmentType === 'internal' && (internalRawScore === undefined || internalRawScore === '')) {
+        toast.error('An internal score is required for each internal participant.');
+        return;
+      }
+      if (participant.assignmentType === 'internal' && internalRawScore !== undefined && internalRawScore !== '') {
+        const internalScore = Number(internalRawScore);
+        if (!Number.isFinite(internalScore) || internalScore < 0 || internalScore > 20) {
+          toast.error('Individual score must be between 0 and 20.');
+          return;
+        }
+      }
+      if (participant.assignmentType === 'external' && !uploadContributions[profileId]?.trim()) {
+        toast.error('Contribution description is required for external members.');
+        return;
+      }
+    }
+
+    setUploading(true);
+    try {
+      const profileEvaluations = uploadProfileIds.map((profileId) => {
+        const participant = participantsById.get(profileId);
+        const rawScore = uploadScores[profileId];
+        const parsedScore = rawScore === undefined || rawScore === '' ? undefined : Number(rawScore);
+
+        return {
+          profileId,
+          score:
+            participant?.assignmentType === 'internal' && Number.isFinite(parsedScore)
+              ? parsedScore
+              : undefined,
+          contributionDescription:
+            participant?.assignmentType === 'external'
+              ? uploadContributions[profileId]?.trim() || undefined
+              : undefined,
+        };
+      });
+
+      const result = await scoringService.uploadPv(
+        uploadFile,
+        uploadProfileIds,
+        uploadProjectId,
+        uploadComplexity,
+        profileEvaluations,
+      );
+      const hasDuplicate = result.status === 'duplicate' || result.results?.some((item) => item.status === 'duplicate');
+      if (hasDuplicate) {
+        toast.warning(result.message || 'This PV already exists. Upload skipped.');
+      } else {
+        toast.success(result.message || 'PV uploaded successfully');
+      }
+
+      if (result.status !== 'duplicate') {
+        setUploadOpen(false);
+      }
+      await loadAll();
+      window.dispatchEvent(new Event('scoring:updated'));
+    } catch (error: unknown) {
+      toast.error(getApiErrorMessage(error, 'PV upload failed'));
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const toggleSelection = (profileId: string | null) => {
     if (!profileId) {
@@ -383,6 +538,9 @@ const ManagerProjectsPage: React.FC = () => {
           <p className="text-muted-foreground">Manage internal/external projects and cross-team assignments.</p>
         </div>
         <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+          <Button variant="outline" className="w-full sm:w-auto" onClick={openUploadDialog}>
+            <Upload className="mr-2 h-4 w-4" /> Upload PV
+          </Button>
           <Dialog
             open={isAssignOpen}
             onOpenChange={(open) => {
@@ -776,8 +934,25 @@ const ManagerProjectsPage: React.FC = () => {
               ) : (
                 incomingRequests.map((request) => {
                   const pending = request.status === 'pending';
+                  const highlighted = requestIdQuery === request.requestId;
                   return (
-                    <div key={request.requestId} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 space-y-4 shadow-sm">
+                    <div
+                      key={request.requestId}
+                      id={`request-${request.requestId}`}
+                      className={`rounded-2xl border p-4 space-y-4 shadow-sm transition-all ${
+                        highlighted
+                          ? 'border-amber-400 bg-amber-50/60 ring-2 ring-amber-300 ring-offset-2'
+                          : pending
+                            ? 'border-sky-200 bg-sky-50/40'
+                            : 'border-slate-200 bg-slate-50/70 opacity-70'
+                      }`}
+                    >
+                      {pending && (
+                        <div className="flex items-center gap-2 rounded-xl bg-sky-600 px-3 py-2 text-xs font-semibold text-white">
+                          <span className="inline-flex h-2 w-2 rounded-full bg-white animate-pulse" />
+                          Awaiting your response — choose an employee and approve or reject
+                        </div>
+                      )}
                       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                         <div className="space-y-1">
                           <p className="text-lg font-semibold text-slate-950">{request.projectName}</p>
@@ -892,8 +1067,20 @@ const ManagerProjectsPage: React.FC = () => {
                   No outgoing requests.
                 </div>
               ) : (
-                outgoingRequests.map((request) => (
-                  <div key={request.requestId} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 space-y-4 shadow-sm">
+                outgoingRequests.map((request) => {
+                  const highlighted = requestIdQuery === request.requestId;
+                  return (
+                  <div
+                    key={request.requestId}
+                    id={`request-${request.requestId}`}
+                    className={`rounded-2xl border p-4 space-y-4 shadow-sm transition-all ${
+                      highlighted
+                        ? 'border-amber-400 bg-amber-50/60 ring-2 ring-amber-300 ring-offset-2'
+                        : request.status === 'pending'
+                          ? 'border-sky-200 bg-sky-50/40'
+                          : 'border-slate-200 bg-slate-50/70'
+                    }`}
+                  >
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                       <div>
                         <p className="text-lg font-semibold text-slate-950">{request.projectName}</p>
@@ -951,12 +1138,167 @@ const ManagerProjectsPage: React.FC = () => {
                       </div>
                     )}
                   </div>
-                ))
+                  );
+                })
               )}
             </CardContent>
           </Card>
         </TabsContent>
       </Tabs>
+
+      <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Upload PV</DialogTitle>
+            <DialogDescription>
+              Submit the PV here and complete all manager inputs in one flow: give scores to internal members and describe external-member contributions for the home-manager review.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>PV File (PDF)</Label>
+              <Input type="file" accept=".pdf" onChange={(e) => setUploadFile(e.target.files?.[0] || null)} />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Project</Label>
+                <Select value={uploadProjectId} onValueChange={handleUploadProjectChange}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select project" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableProjects.map((project) => (
+                      <SelectItem key={project.project_id} value={project.project_id}>
+                        {project.projectName} ({project.projectType}){project.startDate ? ` - ${project.startDate}` : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Project Complexity</Label>
+                <Select
+                  value={uploadComplexity}
+                  onValueChange={(value: 'low' | 'medium' | 'high') => setUploadComplexity(value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="low">Low</SelectItem>
+                    <SelectItem value="medium">Medium</SelectItem>
+                    <SelectItem value="high">High</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {selectedUploadProject && (
+              <div className="rounded-md border bg-muted/40 p-3">
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="font-medium">{selectedUploadProject.projectName}</p>
+                    <p className="text-sm text-muted-foreground">{selectedUploadProject.clientName || 'No client'}</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant="secondary">{selectedUploadProject.projectType}</Badge>
+                    <Badge variant="outline">
+                      {selectedUploadProject.participants.length} participant{selectedUploadProject.participants.length === 1 ? '' : 's'}
+                    </Badge>
+                    {selectedUploadProject.startDate && (
+                      <Badge variant="outline">Assigned {formatDate(selectedUploadProject.startDate)}</Badge>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label>Participants</Label>
+              {selectedUploadParticipants.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Select a project to load participants.</p>
+              ) : (
+                <div className="space-y-2">
+                  {selectedUploadParticipants.map((participant) => {
+                    const member = members.find((m) => m.profileId === participant.profileId);
+                    const displayName = member?.name || participant.name;
+                    return (
+                      <div key={participant.profileId} className="rounded-md border p-3 space-y-2">
+                        <label className="flex items-center gap-2 text-sm">
+                          <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">included</span>
+                          <span className="font-medium">{displayName}</span>
+                          <Badge variant="outline">{participant.assignmentType}</Badge>
+                          {participant.assignmentType === 'internal' ? (
+                            <span className="text-xs text-sky-700 font-normal">score required</span>
+                          ) : (
+                            <span className="text-xs text-amber-600 font-normal">describe contribution for home-manager review</span>
+                          )}
+                        </label>
+
+                        {participant.assignmentType === 'internal' && (
+                          <div className="space-y-2 rounded-md border border-sky-200 bg-sky-50/70 p-3">
+                            <div className="space-y-1">
+                              <Label className="text-xs font-semibold text-sky-950">Execution score (0–20)</Label>
+                              <p className="text-xs text-sky-900">
+                                Score × project complexity ceiling = final contribution. e.g. 16/20 on a High project → (16/20) × 85 = 68/100.
+                              </p>
+                            </div>
+                            <Input
+                              type="number"
+                              min={0}
+                              max={20}
+                              value={uploadScores[participant.profileId] || ''}
+                              onChange={(e) =>
+                                setUploadScores((prev) => ({ ...prev, [participant.profileId]: e.target.value }))
+                              }
+                            />
+                          </div>
+                        )}
+
+                        {participant.assignmentType === 'external' && (
+                          <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50/70 p-3">
+                            <Label className="text-xs font-semibold text-amber-950">What did this external member actually do?</Label>
+                            <Textarea
+                              value={uploadContributions[participant.profileId] || ''}
+                              onChange={(e) =>
+                                setUploadContributions((prev) => ({
+                                  ...prev,
+                                  [participant.profileId]: e.target.value,
+                                }))
+                              }
+                              placeholder="Example: owned the API integration, coordinated testing with the client, resolved deployment blockers, and delivered the production-ready script used for release."
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <DialogFooter>
+            {internalParticipants.length > 0 && (
+              <div className={`flex-1 flex items-center gap-2 text-sm ${allScoresEntered ? 'text-emerald-700' : 'text-sky-700'}`}>
+                <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-xs font-bold text-white ${allScoresEntered ? 'bg-emerald-500' : 'bg-sky-500'}`}>
+                  {scoredCount}
+                </span>
+                <span>/ {internalParticipants.length} execution score{internalParticipants.length > 1 ? 's' : ''} entered</span>
+                {!allScoresEntered && <span className="text-xs text-sky-600">— fill in the remaining score{internalParticipants.length - scoredCount > 1 ? 's' : ''} to unlock upload</span>}
+              </div>
+            )}
+            <Button variant="outline" onClick={() => setUploadOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleUploadPv} disabled={!canUpload}>
+              {uploading ? 'Uploading...' : 'Upload PV'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

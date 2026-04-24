@@ -182,14 +182,7 @@ export class ProjectsService {
             }),
         );
 
-        const currentYear = new Date().getFullYear();
-        for (const profile of profiles) {
-            try {
-                await this.scoringService.computeScore(profile.profile_id, currentYear);
-            } catch (err: any) {
-                this.logger.warn(`Score recompute failed after assignment for ${profile.profile_id}: ${err.message}`);
-            }
-        }
+        // Scores are NOT updated on assignment - only when PV is submitted.
 
         return created;
     }

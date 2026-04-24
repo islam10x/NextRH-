@@ -12,6 +12,7 @@ export interface TeamInfo {
   teamId: string;
   managerId: string;
   teamName: string;
+  teamFocus: string | null;
 }
 
 export interface ExternalTeamLite {
@@ -20,6 +21,13 @@ export interface ExternalTeamLite {
   managerId: string;
   managerName: string;
   managerEmail: string;
+}
+
+export interface EmployeeTeamInfo {
+  teamId: string;
+  teamName: string;
+  teamFocus: string | null;
+  managerName: string | null;
 }
 
 export const teamService = {
@@ -40,16 +48,33 @@ export const teamService = {
       teamId: res.data.teamId,
       managerId: res.data.managerId,
       teamName: res.data.teamName || 'Team',
+      teamFocus: res.data.teamFocus ?? null,
     };
   },
 
-  async updateMyTeam(teamName: string): Promise<TeamInfo> {
-    const res = await api.patch('/teams/me', { teamName });
+  async updateMyTeam(teamName: string, teamFocus?: string | null): Promise<TeamInfo> {
+    const res = await api.patch('/teams/me', { teamName, teamFocus: teamFocus ?? null });
     return {
       teamId: res.data.teamId,
       managerId: res.data.managerId,
       teamName: res.data.teamName || 'Team',
+      teamFocus: res.data.teamFocus ?? null,
     };
+  },
+
+  async getMyTeamInfo(): Promise<EmployeeTeamInfo | null> {
+    try {
+      const res = await api.get('/teams/my-team');
+      if (!res.data) return null;
+      return {
+        teamId: res.data.teamId,
+        teamName: res.data.teamName || 'Team',
+        teamFocus: res.data.teamFocus ?? null,
+        managerName: res.data.managerName ?? null,
+      };
+    } catch {
+      return null;
+    }
   },
 
   async listOtherTeams(): Promise<ExternalTeamLite[]> {

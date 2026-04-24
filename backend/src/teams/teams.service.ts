@@ -58,11 +58,12 @@ export class TeamsService {
         return {
             teamId: team.team_id,
             teamName: team.teamName,
+            teamFocus: team.teamFocus ?? null,
             managerId: managerUserId,
         };
     }
 
-    async updateManagerTeamName(managerUserId: string, teamName: string) {
+    async updateManagerTeam(managerUserId: string, teamName: string, teamFocus?: string | null) {
         const manager = await this.userRepo.findOne({ where: { user_id: managerUserId } });
         if (!manager || manager.role !== UserRole.TEAM_MANAGER) {
             throw new BadRequestException('Only team managers can manage team settings');
@@ -73,14 +74,42 @@ export class TeamsService {
             throw new BadRequestException('Team name must be between 2 and 80 characters');
         }
 
+        const normalizedFocus = teamFocus != null
+            ? String(teamFocus).trim().replace(/\s+/g, ' ').slice(0, 120) || null
+            : null;
+
         const team = await this.findOrCreateManagerTeam(managerUserId, manager);
         team.teamName = normalized;
+        team.teamFocus = normalizedFocus;
         const saved = await this.teamRepo.save(team);
 
         return {
             teamId: saved.team_id,
             teamName: saved.teamName,
+            teamFocus: saved.teamFocus ?? null,
             managerId: managerUserId,
+        };
+    }
+
+    /** Kept for backward compat — delegates to updateManagerTeam */
+    async updateManagerTeamName(managerUserId: string, teamName: string) {
+        return this.updateManagerTeam(managerUserId, teamName, undefined);
+    }
+
+    async getTeamInfoForEmployee(memberUserId: string) {
+        // Find the team the employee belongs to
+        const member = await this.teamMemberRepo.findOne({
+            where: { employee: { user_id: memberUserId } },
+            relations: ['team', 'team.manager'],
+        });
+        if (!member?.team) return null;
+        return {
+            teamId: member.team.team_id,
+            teamName: member.team.teamName,
+            teamFocus: member.team.teamFocus ?? null,
+            managerName: member.team.manager
+                ? `${member.team.manager.firstName || ''} ${member.team.manager.lastName || ''}`.trim() || member.team.manager.email
+                : null,
         };
     }
 

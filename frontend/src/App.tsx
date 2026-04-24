@@ -63,7 +63,7 @@ const App = () => (
             <Route element={<MainLayout requiredRole="bid_manager" />}>
               <Route path="/bid/dashboard" element={<BIDDashboard />} />
               <Route path="/bid/directory" element={<EmployeeDirectoryPage />} />
-              <Route path="/bid/scoring" element={<ManagerScoringPage />} />
+              <Route path="/bid/scoring" element={<Navigate to="/bid/dashboard" replace />} />
               <Route path="/bid/employee/:memberId" element={<MemberProfilePage />} />
               <Route path="/bid/ai-chat" element={<AIChatPage />} />
               <Route path="/bid/cv-generation" element={<CVGenerationPage />} />

@@ -41,8 +41,21 @@ export class TeamsController {
 
     @Patch('me')
     @Roles(UserRole.TEAM_MANAGER)
-    async updateMyTeam(@Req() req: any, @Body() body: { teamName?: string }) {
+    async updateMyTeam(@Req() req: any, @Body() body: { teamName?: string; teamFocus?: string | null }) {
         const managerId = req.user?.userId || req.user?.user_id || req.user?.id;
-        return this.teamsService.updateManagerTeamName(managerId, body?.teamName || '');
+        return this.teamsService.updateManagerTeam(managerId, body?.teamName || '', body?.teamFocus ?? null);
+    }
+
+    @Get('my-team')
+    @Roles(UserRole.TEAM_MANAGER, UserRole.EMPLOYEE)
+    async myTeamInfo(@Req() req: any) {
+        const userId = req.user?.userId || req.user?.user_id || req.user?.id;
+        const role = req.user?.role;
+        if (role === UserRole.TEAM_MANAGER) {
+            return this.teamsService.getManagerTeam(userId);
+        }
+        const info = await this.teamsService.getTeamInfoForEmployee(userId);
+        if (!info) return null;
+        return info;
     }
 }

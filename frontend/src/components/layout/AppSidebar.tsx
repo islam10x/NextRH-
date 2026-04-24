@@ -1,4 +1,5 @@
 import React from 'react';
+import { } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -46,6 +47,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
+
 interface NavItem {
   title: string;
   url: string;
@@ -75,7 +77,6 @@ const managerNavItems: NavItem[] = [
 const bidManagerNavItems: NavItem[] = [
   { title: 'BID Dashboard', url: '/bid/dashboard', icon: LayoutDashboard },
   { title: 'Employee Directory', url: '/bid/directory', icon: Search },
-  { title: 'Scoring', url: '/bid/scoring', icon: Trophy },
   { title: 'AI Assistant', url: '/bid/ai-chat', icon: MessageSquare },
   { title: 'Generate CV', url: '/bid/cv-generation', icon: FileOutput },
   { title: 'Upload CV', url: '/employee/cv-upload', icon: FileText },

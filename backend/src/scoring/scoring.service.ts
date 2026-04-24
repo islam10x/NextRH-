@@ -757,6 +757,101 @@ export class ScoringService {
     };
   }
 
+  private normalizeProjectComplexity(value?: string | null): 'low' | 'medium' | 'high' {
+    const normalized = String(value || '').trim().toLowerCase();
+
+    if (normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+      return normalized;
+    }
+
+    return 'medium';
+  }
+
+  private normalizeProjectReferenceDate(value?: string | Date | null): Date | null {
+    if (!value) {
+      return null;
+    }
+
+    const parsed = value instanceof Date ? value : new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  private getProjectRecordReferenceDate(record?: ProjectRecord | null): Date | null {
+    if (!record) {
+      return null;
+    }
+
+    return (
+      this.normalizeProjectReferenceDate(record.completionDate) ||
+      this.normalizeProjectReferenceDate(record.parsedData?.assignment_date) ||
+      this.normalizeProjectReferenceDate(record.parsedData?.assignmentDate) ||
+      this.normalizeProjectReferenceDate(record.createdAt)
+    );
+  }
+
+  async ensureProvisionalProjectRecord(params: {
+    profileId: string;
+    projectName: string;
+    clientName?: string | null;
+    projectDescription?: string | null;
+    assignmentDate?: Date | null;
+    complexity?: string | null;
+    assignmentType: 'internal' | 'external';
+    assignmentSource: 'team_assignment' | 'cross_team_approval';
+  }) {
+    const assignmentDate =
+      this.normalizeProjectReferenceDate(params.assignmentDate) || new Date();
+    const complexity = this.normalizeProjectComplexity(params.complexity);
+
+    const existing = await this.projectRecordRepo.findOne({
+      where: {
+        profileId: params.profileId,
+        projectName: params.projectName,
+        clientName: params.clientName || (IsNull() as any),
+        completionDate: IsNull() as any,
+      },
+    });
+
+    const parsedData = {
+      assignment_date: assignmentDate.toISOString().split('T')[0],
+      assignment_type: params.assignmentType,
+      assignment_source: params.assignmentSource,
+    };
+
+    if (existing) {
+      existing.projectDescription = params.projectDescription || null;
+      existing.complexity = complexity;
+      existing.evaluationStatus = 'scored_by_own_manager';
+      existing.parsedData = {
+        ...(existing.parsedData || {}),
+        ...parsedData,
+      };
+      return this.projectRecordRepo.save(existing);
+    }
+
+    return this.projectRecordRepo.save(
+      this.projectRecordRepo.create({
+        profileId: params.profileId,
+        projectName: params.projectName,
+        clientName: params.clientName || null,
+        projectDescription: params.projectDescription || null,
+        completionDate: null,
+        complexity,
+        pvVerified: false,
+        individualScore: null,
+        evaluationStatus: 'scored_by_own_manager',
+        externalContributionDescription: null,
+        externalHomeManagerId: null,
+        evaluatedByManagerId: null,
+        evaluatedAt: null,
+        submittedBy: null,
+        documentHash: null,
+        sourceFilename: null,
+        parsedData,
+      }),
+    );
+  }
+
   private getEmployeeDisplayName(user?: User | null): string {
     const name = [user?.firstName, user?.lastName].filter(Boolean).join(' ').trim();
     return name || user?.email || 'employé inconnu';
@@ -880,14 +975,33 @@ export class ScoringService {
       relations: ['project'],
     });
 
-    const pvRecords = await this.projectRecordRepo.find({
-      where: { profileId, pvVerified: true },
+    const projectRecords = await this.projectRecordRepo.find({
+      where: { profileId },
     });
 
     const normalizeProjectName = (value?: string | null) =>
       String(value || '')
         .trim()
         .toLowerCase();
+
+    const projectRecordByName = new Map<string, ProjectRecord>();
+    const sortedProjectRecords = [...projectRecords].sort((left, right) => {
+      const pvDelta = Number(Boolean(right.pvVerified)) - Number(Boolean(left.pvVerified));
+      if (pvDelta !== 0) {
+        return pvDelta;
+      }
+
+      const leftDate = this.getProjectRecordReferenceDate(left)?.getTime() || 0;
+      const rightDate = this.getProjectRecordReferenceDate(right)?.getTime() || 0;
+      return rightDate - leftDate;
+    });
+
+    for (const record of sortedProjectRecords) {
+      const key = normalizeProjectName(record.projectName);
+      if (!projectRecordByName.has(key)) {
+        projectRecordByName.set(key, record);
+      }
+    }
 
     const projects: Array<{
       project_name: string;
@@ -902,58 +1016,52 @@ export class ScoringService {
       const proj = participation.project;
       const projectName = proj?.projectName || 'Projet inconnu';
       const projectKey = normalizeProjectName(projectName);
-      const matchingPv = pvRecords
-        .filter((pv) => normalizeProjectName(pv.projectName) === projectKey)
-        .sort((a, b) => {
-          const aDate = a.completionDate ? new Date(a.completionDate).getTime() : 0;
-          const bDate = b.completionDate ? new Date(b.completionDate).getTime() : 0;
-          return bDate - aDate;
-        })[0];
+      const matchingRecord = projectRecordByName.get(projectKey);
 
-      const completionDate = matchingPv?.completionDate || proj?.endDate || proj?.startDate || null;
-      const normalizedComplexity = String(matchingPv?.complexity || proj?.complexity || 'medium')
-        .toLowerCase();
-      const complexity: 'low' | 'medium' | 'high' =
-        normalizedComplexity === 'low' || normalizedComplexity === 'high' ? normalizedComplexity : 'medium';
+      if (participation.assignmentType === 'external' && !matchingRecord) {
+        continue;
+      }
+
+      const completionDate =
+        this.getProjectRecordReferenceDate(matchingRecord) ||
+        this.normalizeProjectReferenceDate(proj?.endDate) ||
+        this.normalizeProjectReferenceDate(proj?.startDate) ||
+        null;
+      const complexity = this.normalizeProjectComplexity(
+        matchingRecord?.complexity || proj?.complexity,
+      );
 
       projects.push({
         project_name: projectName,
         complexity,
         completion_date: completionDate ? new Date(completionDate).toISOString().split('T')[0] : null,
-        pv_verified: Boolean(matchingPv),
+        pv_verified: Boolean(matchingRecord?.pvVerified),
         individual_score:
-          matchingPv?.individualScore === null || matchingPv?.individualScore === undefined
+          matchingRecord?.individualScore === null || matchingRecord?.individualScore === undefined
             ? null
-            : Number(matchingPv.individualScore),
-        evaluation_status: (matchingPv?.evaluationStatus || 'scored_by_own_manager') as any,
+            : Number(matchingRecord.individualScore),
+        evaluation_status: (matchingRecord?.evaluationStatus || 'scored_by_own_manager') as any,
       });
     }
 
     const participatedNames = new Set(
       projects.map((p) => normalizeProjectName(p.project_name)),
     );
-    for (const pv of pvRecords) {
-      const key = normalizeProjectName(pv.projectName);
+    for (const [key, record] of projectRecordByName.entries()) {
       if (participatedNames.has(key)) {
         continue;
       }
-      const normalizedComplexity = String(pv.complexity || 'medium').toLowerCase();
-      const complexity: 'low' | 'medium' | 'high' =
-        normalizedComplexity === 'low' || normalizedComplexity === 'high' ? normalizedComplexity : 'medium';
+      const referenceDate = this.getProjectRecordReferenceDate(record);
       projects.push({
-        project_name: pv.projectName || 'Projet inconnu',
-        complexity,
-        completion_date: pv.completionDate
-          ? pv.completionDate.toISOString().split('T')[0]
-          : pv.createdAt
-            ? pv.createdAt.toISOString().split('T')[0]
-            : null,
-        pv_verified: true,
+        project_name: record.projectName || 'Projet inconnu',
+        complexity: this.normalizeProjectComplexity(record.complexity),
+        completion_date: referenceDate ? referenceDate.toISOString().split('T')[0] : null,
+        pv_verified: Boolean(record.pvVerified),
         individual_score:
-          pv.individualScore === null || pv.individualScore === undefined
+          record.individualScore === null || record.individualScore === undefined
             ? null
-            : Number(pv.individualScore),
-        evaluation_status: (pv.evaluationStatus || 'scored_by_own_manager') as any,
+            : Number(record.individualScore),
+        evaluation_status: (record.evaluationStatus || 'scored_by_own_manager') as any,
       });
     }
 
@@ -979,32 +1087,30 @@ export class ScoringService {
         project.evaluation_status === 'pending_external_manager'
           ? null
           : project.individual_score;
-      const pvBonus = project.pv_verified ? 10 : 0;
-      const complexityScore = Math.max(
-        0,
-        Math.min(100, complexityBase[project.complexity] + pvBonus),
-      );
+      const ceiling = complexityBase[project.complexity] ?? 65;
 
-      let contributionScore = complexityScore;
+      let contributionScore = 0;
       let scoringMethod:
-        | 'manager_score_converted'
+        | 'execution_x_complexity'
         | 'legacy_manager_score'
-        | 'complexity_fallback' = 'complexity_fallback';
+        | 'pending_no_score' = 'pending_no_score';
       let explanation = project.evaluation_status === 'pending_external_manager'
-        ? `Awaiting the employee's home manager review. The current provisional score uses ${project.complexity} complexity (${complexityBase[project.complexity]}/100)${project.pv_verified ? ' plus the verified PV bonus (+10).' : '.'}`
-        : `No manager score was found, so the score uses ${project.complexity} complexity (${complexityBase[project.complexity]}/100)${project.pv_verified ? ' plus the verified PV bonus (+10).' : '.'}`;
+        ? `Awaiting the employee's home manager review. No score counted yet (0/100).`
+        : `No execution score recorded yet. Project contributes 0 until a score is given.`;
 
       if (managerScoreRaw !== null && managerScoreRaw !== undefined) {
         const numericManagerScore = Number(managerScoreRaw);
         if (numericManagerScore > 20) {
+          // Legacy records stored on a /100 scale — keep as-is
           contributionScore = Math.max(0, Math.min(100, numericManagerScore));
           scoringMethod = 'legacy_manager_score';
-          explanation = `Legacy manager score kept on a /100 scale: ${roundScore(contributionScore)}/100.`;
+          explanation = `Legacy score on /100 scale: ${roundScore(contributionScore)}/100.`;
         } else {
-          const managerScoreOver20 = Math.max(0, Math.min(20, numericManagerScore));
-          contributionScore = roundScore((managerScoreOver20 / 20) * 100);
-          scoringMethod = 'manager_score_converted';
-          explanation = `Manager score ${roundScore(managerScoreOver20)}/20 converted to ${roundScore(contributionScore)}/100.`;
+          // New formula: execution score × complexity ceiling
+          const clampedScore = Math.max(0, Math.min(20, numericManagerScore));
+          contributionScore = roundScore((clampedScore / 20) * ceiling);
+          scoringMethod = 'execution_x_complexity';
+          explanation = `Execution ${roundScore(clampedScore)}/20 × ${project.complexity} ceiling (${ceiling}) = ${roundScore(contributionScore)}/100.`;
         }
       }
 
@@ -1105,12 +1211,12 @@ export class ScoringService {
     }
     if (trainingCount < 5) {
       nextActions.push(
-        `Each completed training adds 20 points to the training pillar until it reaches 100.`,
+        `Each completed training adds 20 points to the training pillar.`,
       );
     }
     if (formationCount < 4) {
       nextActions.push(
-        `Each delivered formation adds 25 points to the formation pillar until it reaches 100.`,
+        `Each delivered formation adds 25 points to the formation pillar.`,
       );
     }
     if (projectItems.length === 0) {
@@ -1143,14 +1249,14 @@ export class ScoringService {
       formulas: {
         final: 'Final score = (Projects + Certifications + Trainings + Formations) / 4',
         projects:
-          'Each validated project adds its own contribution. Manager score projects use (score / 20) x 100. Without a manager score, the system uses complexity plus a verified PV bonus.',
+          'Contribution = (execution score / 20) × complexity ceiling. Low complexity: ceiling 45 | Medium: 65 | High: 85. No execution score yet = 0/100 (no fallback). Same rule applies to both internal and external members.',
         certifications: `Certification score = min(100, (${certCount} / ${effectiveTarget}) x 100)`,
         trainings: `Training score = ${trainingCount} x 20`,
         formations: `Formation score = ${formationCount} x 25`,
       },
       workflow: {
         scoring_year: year,
-        pending_external_projects_use_provisional_complexity: true,
+        no_score_fallback: false,
         next_actions: nextActions,
       },
       pillars: {
@@ -1459,6 +1565,47 @@ export class ScoringService {
     }));
   }
 
+  async listPendingInternalEvaluations(managerUserId: string) {
+    const rows = await this.projectRecordRepo
+      .createQueryBuilder('pr')
+      .leftJoin('pr.profile', 'ep')
+      .leftJoin('ep.user', 'u')
+      .innerJoin('team_members', 'tm', 'tm.employee_id = ep.user_id')
+      .innerJoin('teams', 't', 't.team_id = tm.team_id')
+      .where('t.manager_id = :managerUserId', { managerUserId })
+      .andWhere('pr.evaluation_status = :status', { status: 'scored_by_own_manager' })
+      .andWhere('pr.individual_score IS NULL')
+      .andWhere("COALESCE(pr.parsed_data ->> 'assignment_type', 'internal') = :assignmentType", {
+        assignmentType: 'internal',
+      })
+      .orderBy('pr.created_at', 'DESC')
+      .select('pr.record_id', 'recordId')
+      .addSelect('pr.profile_id', 'profileId')
+      .addSelect('pr.project_name', 'projectName')
+      .addSelect('pr.client_name', 'clientName')
+      .addSelect('pr.project_description', 'projectDescription')
+      .addSelect('pr.complexity', 'complexity')
+      .addSelect('pr.completion_date', 'completionDate')
+      .addSelect("COALESCE(pr.parsed_data ->> 'assignment_date', '')", 'assignmentDate')
+      .addSelect('pr.created_at', 'createdAt')
+      .addSelect("CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))", 'employeeName')
+      .addSelect('u.email', 'employeeEmail')
+      .getRawMany();
+
+    return rows.map((row: any) => ({
+      recordId: row.recordId,
+      profileId: row.profileId,
+      projectName: row.projectName,
+      clientName: row.clientName,
+      projectDescription: row.projectDescription,
+      complexity: row.complexity,
+      completionDate: row.completionDate,
+      assignmentDate: row.assignmentDate || null,
+      createdAt: row.createdAt,
+      employeeName: String(row.employeeName || '').trim() || row.employeeEmail || 'Employee',
+    }));
+  }
+
   async scoreExternalEvaluation(recordId: string, managerUserId: string, score: number) {
     if (!Number.isFinite(score) || score < 0 || score > 20) {
       throw new BadRequestException('Le score doit etre compris entre 0 et 20.');
@@ -1476,9 +1623,9 @@ export class ScoringService {
     if (record.externalHomeManagerId !== managerUserId) {
       throw new ForbiddenException('Vous ne pouvez evaluer que les membres de votre equipe.');
     }
-    if (!(await this.isManagerOfProfile(managerUserId, record.profileId))) {
-      throw new ForbiddenException('Ce collaborateur ne fait pas partie de votre equipe.');
-    }
+    // Note: isManagerOfProfile check is intentionally omitted here.
+    // The externalHomeManagerId check above is the correct authorization for cross-team evaluations.
+    // The employee being evaluated may belong to a different team by design.
 
     record.individualScore = score as any;
     record.evaluationStatus = 'scored_by_home_manager';
@@ -1507,6 +1654,57 @@ export class ScoringService {
         relatedEntityType: 'project_record',
         relatedEntityId: saved.record_id,
       }).catch((err) => this.logger.warn(`Employee external score notification failed: ${err.message}`));
+    }
+
+    return saved;
+  }
+
+  async scoreInternalEvaluation(recordId: string, managerUserId: string, score: number) {
+    if (!Number.isFinite(score) || score < 0 || score > 20) {
+      throw new BadRequestException('Le score doit etre compris entre 0 et 20.');
+    }
+
+    const record = await this.projectRecordRepo.findOne({
+      where: { record_id: recordId },
+    });
+    if (!record) {
+      throw new NotFoundException(`Enregistrement projet ${recordId} non trouve`);
+    }
+    if (!(await this.isManagerOfProfile(managerUserId, record.profileId))) {
+      throw new ForbiddenException('Ce collaborateur ne fait pas partie de votre equipe.');
+    }
+    if (String(record.parsedData?.assignment_type || 'internal') !== 'internal') {
+      throw new BadRequestException('Cette notation directe est reservee aux projets internes.');
+    }
+    if (record.evaluationStatus === 'pending_external_manager') {
+      throw new BadRequestException('Ce projet attend une evaluation externe, pas une notation interne directe.');
+    }
+
+    record.individualScore = score as any;
+    record.evaluationStatus = 'scored_by_own_manager';
+    record.evaluatedByManagerId = managerUserId;
+    record.evaluatedAt = new Date();
+    const saved = await this.projectRecordRepo.save(record);
+
+    const referenceYear = this.getProjectRecordReferenceDate(saved)?.getFullYear() || new Date().getFullYear();
+    await this.computeScore(saved.profileId, referenceYear);
+    if (referenceYear !== new Date().getFullYear()) {
+      await this.computeScore(saved.profileId, new Date().getFullYear());
+    }
+
+    const profile = await this.profileRepo.findOne({
+      where: { profile_id: saved.profileId },
+      relations: ['user'],
+    });
+    if (profile?.user?.user_id) {
+      await this.notificationsService.create({
+        userId: profile.user.user_id,
+        type: 'score_updated',
+        title: 'Score mis a jour',
+        message: 'Votre manager a finalise la notation de votre projet interne.',
+        relatedEntityType: 'project_record',
+        relatedEntityId: saved.record_id,
+      }).catch((err) => this.logger.warn(`Employee internal score notification failed: ${err.message}`));
     }
 
     return saved;

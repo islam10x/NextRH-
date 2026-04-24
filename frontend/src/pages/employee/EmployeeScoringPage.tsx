@@ -178,7 +178,7 @@ const EmployeeScoringPage: React.FC = () => {
       key: 'projects',
       label: 'Projects',
       score: score?.projectScore ?? 0,
-      description: scoreDetails?.formulas?.projects || 'Each validated project adds its own contribution to the project pillar.',
+      description: scoreDetails?.formulas?.projects || 'Contribution = (execution / 20) × complexity ceiling. Low: ×45 | Medium: ×65 | High: ×85. No score yet = 0/100.',
       progress: Math.max(0, Math.min(100, score?.projectScore ?? 0)),
       meta: `${projectDetails.length} project(s) counted`,
     },
@@ -371,7 +371,7 @@ const EmployeeScoringPage: React.FC = () => {
           <div className="space-y-2 text-sm">
             <p className="font-medium">Applied formulas</p>
             <div className="space-y-1 text-muted-foreground">
-              <p>{scoreDetails?.formulas?.projects || 'Each project adds a contribution based on manager score or, if still pending, complexity and PV verification.'}</p>
+              <p>{scoreDetails?.formulas?.projects || 'Contribution = (execution score / 20) × complexity ceiling. Low: ×45 | Medium: ×65 | High: ×85. No execution score yet = 0/100 (no fallback).'}</p>
               <p>{scoreDetails?.formulas?.certifications || 'Certifications are compared with the annual target.'}</p>
               <p>{scoreDetails?.formulas?.trainings || 'Each completed training adds 20 points.'}</p>
               <p>{scoreDetails?.formulas?.formations || 'Each delivered formation adds 25 points.'}</p>

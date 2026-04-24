@@ -2,13 +2,14 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Training, Notification } from '@/types';
-import { GraduationCap, Bell, Upload, FileText, Clock, Play, CheckCircle2, Link as LinkIcon, Trophy, TrendingUp, FolderKanban, Award, BookOpen, Crown } from 'lucide-react';
+import { GraduationCap, Bell, Upload, FileText, Clock, Play, CheckCircle2, Link as LinkIcon, Trophy, TrendingUp, FolderKanban, Award, BookOpen, Crown, Users } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { trainingService } from '@/services/training.service';
 import { notificationService } from '@/services/notification.service';
 import { scoringService, EmployeeScore, LeaderboardEntry } from '@/services/scoring.service';
-import { Badge } from '@/components/ui/badge';
+import { teamService, EmployeeTeamInfo } from '@/services/team.service';
 import api from '@/services/api';
 
 const statusTone = (status?: string) => {
@@ -27,6 +28,7 @@ const EmployeeDashboard: React.FC = () => {
   const [myScore, setMyScore] = useState<EmployeeScore | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [myProfileId, setMyProfileId] = useState('');
+  const [teamInfo, setTeamInfo] = useState<EmployeeTeamInfo | null>(null);
 
   const notificationsToShow = notifications.slice(0, 4);
 
@@ -75,6 +77,7 @@ const EmployeeDashboard: React.FC = () => {
         scoringService.getLeaderboard(currentYear).then((lb) => setLeaderboard(lb)).catch(() => {});
       }
     }).catch(() => {});
+    teamService.getMyTeamInfo().then((info) => setTeamInfo(info)).catch(() => {});
   }, [user]);
 
   useEffect(() => {
@@ -102,7 +105,20 @@ const EmployeeDashboard: React.FC = () => {
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Welcome back, {user?.name?.split(' ')[0] || 'there'}!</h1>
-          <p className="text-muted-foreground">Track your trainings and notifications</p>
+          {teamInfo ? (
+            <div className="flex items-center gap-2 mt-1">
+              <Users className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="text-sm text-muted-foreground">{teamInfo.teamName}</span>
+              {teamInfo.teamFocus && (
+                <Badge variant="secondary" className="text-xs font-normal">{teamInfo.teamFocus}</Badge>
+              )}
+              {teamInfo.managerName && (
+                <span className="text-xs text-muted-foreground">· {teamInfo.managerName}</span>
+              )}
+            </div>
+          ) : (
+            <p className="text-muted-foreground">Track your trainings and notifications</p>
+          )}
         </div>
         <div className="flex gap-2">
           {quickActions.map((action) => (
