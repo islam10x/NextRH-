@@ -6,10 +6,9 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import ReactMarkdown from 'react-markdown';
 import { ChatMessage, ChatSearchResult } from '@/types';
+import { bidService, RagStreamEvent } from '@/services/bid.service';
 import { Send, Bot, User, Sparkles, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
 const suggestedQueries = [
   "Who has AWS certification and 5+ years experience?",
@@ -85,72 +84,39 @@ const AIChatPage: React.FC = () => {
     setMessages(prev => [...prev, placeholderMsg].slice(-MAX_MESSAGES));
 
     try {
-      const token = sessionStorage.getItem('access_token');
-      const response = await fetch(`${API_BASE}/rag/chat/stream`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ message: query, session_id: sessionId }),
-      });
-
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('No stream');
-
-      const decoder = new TextDecoder();
-      let buffer = '';
       let accumulatedContent = '';
       let results: ChatSearchResult[] | undefined;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-
-          try {
-            const event = JSON.parse(trimmed);
-
-            if (event.type === 'results') {
-              // Cards arrive first
-              results = Array.isArray(event.data) ? event.data : [];
-              setMessages(prev =>
-                prev.map(m =>
-                  m.id === aiMsgId ? { ...m, results } : m
-                )
-              );
-            } else if (event.type === 'token') {
-              accumulatedContent += event.data || '';
-              const snapshot = accumulatedContent;
-              setMessages(prev =>
-                prev.map(m =>
-                  m.id === aiMsgId ? { ...m, content: snapshot } : m
-                )
-              );
-            } else if (event.type === 'replace') {
-              accumulatedContent = event.data || '';
-              const snapshot = accumulatedContent;
-              setMessages(prev =>
-                prev.map(m =>
-                  m.id === aiMsgId ? { ...m, content: snapshot } : m
-                )
-              );
-            }
-            // 'done' — nothing extra needed
-          } catch {
-            // skip malformed lines
+      await bidService.chatStream(
+        query,
+        sessionId,
+        (event: RagStreamEvent) => {
+          if (event.type === 'results') {
+            results = Array.isArray(event.data) ? (event.data as ChatSearchResult[]) : [];
+            setMessages(prev =>
+              prev.map(m =>
+                m.id === aiMsgId ? { ...m, results } : m
+              )
+            );
+          } else if (event.type === 'token') {
+            accumulatedContent += event.data || '';
+            const snapshot = accumulatedContent;
+            setMessages(prev =>
+              prev.map(m =>
+                m.id === aiMsgId ? { ...m, content: snapshot } : m
+              )
+            );
+          } else if (event.type === 'replace') {
+            accumulatedContent = event.data || '';
+            const snapshot = accumulatedContent;
+            setMessages(prev =>
+              prev.map(m =>
+                m.id === aiMsgId ? { ...m, content: snapshot } : m
+              )
+            );
           }
-        }
-      }
+        },
+      );
 
       // If no content came through at all
       if (!accumulatedContent) {

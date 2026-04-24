@@ -86,10 +86,19 @@ export class CvService {
         const address = rawAddress
             ? this.stripAtFirstSectionMarker(rawAddress) || null
             : null;
+        const linkedin =
+            this.cleanText(
+                rawMeta?.structured_data?.linkedin ||
+                rawMeta?.structured_data?.linkedin_url ||
+                rawMeta?.structured_data?.linkedinUrl ||
+                rawMeta?.structured_data?.linkedIn ||
+                rawMeta?.linkedin,
+            ) || null;
         const cvFilename = rawMeta?.filename || null;
         const fallbackCertifications = this.extractCertificationsFromMetadata(rawMeta);
         const fallbackWorkExperiences = this.extractWorkExperiencesFromMetadata(rawMeta);
         const fallbackEducations = this.extractEducationsFromMetadata(rawMeta);
+        const fallbackLanguages = this.extractLanguagesFromMetadata(rawMeta);
         const toDateString = (value: Date | string | null | undefined) => {
             if (!value) return null;
             if (value instanceof Date) {
@@ -115,11 +124,13 @@ export class CvService {
                 email: user.email,
                 phone,
                 address,
+                linkedin,
                 cvFilename,
                 currentPosition: null,
                 professionalSummary: null,
                 totalExperienceYears: null,
                 skills: metaData.skills ?? [],
+                languages: fallbackLanguages,
                 lastUpdate: metaData.last_update ?? null,
                 workExperiences: fallbackWorkExperiences,
                 educations: fallbackEducations,
@@ -249,11 +260,13 @@ export class CvService {
             email: user.email,
             phone,
             address,
+            linkedin,
             cvFilename,
             currentPosition: profile.currentPosition ?? null,
             professionalSummary: profile.professionalSummary ?? null,
             totalExperienceYears: profile.totalExperienceYears ?? null,
             skills: metaData.skills ?? [],
+            languages: fallbackLanguages,
             lastUpdate: metaData.last_update ?? null,
             workExperiences,
             educations,
@@ -458,6 +471,45 @@ export class CvService {
                 };
             })
             .filter(Boolean);
+    }
+
+    private extractLanguagesFromMetadata(rawMeta: any): string[] {
+        const structuredLanguages = rawMeta?.structured_data?.languages;
+        const topLevelLanguages = rawMeta?.languages;
+        const rawLanguages = [
+            ...(Array.isArray(structuredLanguages) ? structuredLanguages : []),
+            ...(Array.isArray(topLevelLanguages) ? topLevelLanguages : []),
+        ];
+
+        if (rawLanguages.length === 0) {
+            return [];
+        }
+
+        const normalized: string[] = [];
+        const seen = new Set<string>();
+
+        for (const entry of rawLanguages) {
+            let candidate = '';
+            if (typeof entry === 'string') {
+                candidate = this.cleanText(entry);
+            } else if (entry && typeof entry === 'object') {
+                candidate = this.cleanText(
+                    entry.name ||
+                    entry.language ||
+                    entry.label ||
+                    entry.lang ||
+                    entry.value,
+                );
+            }
+
+            if (!candidate) continue;
+            const key = candidate.toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            normalized.push(candidate);
+        }
+
+        return normalized;
     }
 
     async saveEmployeeCv(userId: string, file: Express.Multer.File) {

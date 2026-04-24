@@ -20,6 +20,12 @@ export interface RagChatResponse {
   context: { content: string; metadata: Record<string, any> }[];
 }
 
+export type RagStreamEvent =
+  | { type: 'results'; data: any[] }
+  | { type: 'token'; data: string }
+  | { type: 'replace'; data: string }
+  | { type: 'done' };
+
 export const bidService = {
   async getDashboardStats(): Promise<BidDashboardStats> {
     const [usersRes, certStatsRes, teamsRes] = await Promise.all([
@@ -40,6 +46,75 @@ export const bidService = {
   async chat(message: string, sessionId = 'bid-chat'): Promise<RagChatResponse> {
     const res = await api.post('/rag/chat', { message, session_id: sessionId });
     return res.data as RagChatResponse;
+  },
+
+  async chatStream(
+    message: string,
+    sessionId = 'bid-chat',
+    onEvent?: (event: RagStreamEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const baseUrl = String(api.defaults.baseURL || '').replace(/\/+$/, '');
+    const token = sessionStorage.getItem('access_token');
+    const response = await fetch(`${baseUrl}/rag/chat/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ message, session_id: sessionId }),
+      signal,
+    });
+
+    if (!response.ok) {
+      let body = '';
+      try {
+        body = await response.text();
+      } catch {
+        body = '';
+      }
+      throw new Error(`RAG stream failed: ${response.status} ${body}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No readable stream from backend');
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    const handleLine = (line: string) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      let parsed: any;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        return;
+      }
+      if (!parsed || typeof parsed.type !== 'string') return;
+
+      if (
+        parsed.type === 'results' ||
+        parsed.type === 'token' ||
+        parsed.type === 'replace' ||
+        parsed.type === 'done'
+      ) {
+        onEvent?.(parsed as RagStreamEvent);
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) handleLine(line);
+    }
+
+    if (buffer.trim()) {
+      handleLine(buffer);
+    }
   },
 
   /**

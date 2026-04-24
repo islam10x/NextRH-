@@ -1,4 +1,4 @@
-import { IsArray, IsBoolean, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsArray, IsBoolean, IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 export class GenerateCvDto {
     @IsUUID()
@@ -24,4 +24,8 @@ export class GenerateCvDto {
     @IsString()
     @MaxLength(100)
     generationPurpose?: string;
+
+    @IsOptional()
+    @IsIn(['primary', 'fallback'])
+    engine?: 'primary' | 'fallback';
 }

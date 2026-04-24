@@ -47,7 +47,14 @@ export class CvController {
     }
 
     /**
-     * One-time backfill: populate project dates from stored metadata.json files
+     * Endpoint for employees to upload CV files
+     */
+    @Post('upload')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.EMPLOYEE, UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
+    @UseInterceptors(
+        FileInterceptor('file', {
+            limits: { fileSize: MAX_UPLOAD_BYTES },
             fileFilter: (_req, file, cb) => {
                 if (!ALLOWED_UPLOAD_MIME_TYPES.includes((file.mimetype || '').toLowerCase())) {
                     return cb(new BadRequestException('Unsupported file type'), false);

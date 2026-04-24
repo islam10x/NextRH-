@@ -39,6 +39,7 @@ DOCX_ALIASES: Dict[str, str] = {
     "mail": "email", "courriel": "email", "e_mail": "email",
     "telephone": "phone", "tel": "phone", "mobile": "phone", "portable": "phone",
     "adresse": "address", "lieu": "address", "location": "address",
+    "linkedin": "linkedin", "linkedin_url": "linkedin",
     # Position
     "poste": "current_position", "titre": "current_position",
     "poste_actuel": "current_position", "titre_poste": "current_position",
@@ -66,7 +67,7 @@ DOCX_ALIASES: Dict[str, str] = {
 
 # Available context keys for LLM mapping reference.
 _CONTEXT_KEYS = [
-    "full_name", "email", "phone", "address", "current_position",
+    "full_name", "email", "phone", "address", "linkedin", "current_position",
     "professional_summary", "total_experience_years", "skills",
     "work_experiences", "educations", "certifications", "projects",
 ]
@@ -208,6 +209,12 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
         "email": _safe_text(profile.get("email")),
         "phone": _safe_text(profile.get("phone")),
         "address": _safe_text(profile.get("address")),
+        "linkedin": _safe_text(
+            profile.get("linkedin")
+            or profile.get("linkedinUrl")
+            or profile.get("linkedin_url")
+            or profile.get("linkedIn")
+        ),
         "birth_date": _safe_text(profile.get("birthDate") or profile.get("birth_date")),
         "marital_status": _safe_text(profile.get("maritalStatus") or profile.get("marital_status")),
         "hire_date": _safe_text(profile.get("hireDate") or profile.get("hire_date")),
@@ -651,28 +658,97 @@ def _docx_contains_jinja(doc: DocxDocument) -> bool:
 
 
 def _fill_common_placeholders(doc: DocxDocument, context: Dict[str, Any]) -> None:
-    placeholder_re = re.compile(r"^[\\.·•…\\s]{2,}$")
+    placeholder_re = re.compile(r"^[\.\s]{2,}$")
+    phone_re = re.compile(r"(?:\+?\d[\d\s().\-/]{7,}\d)")
+    email_re = re.compile(r"[\w.+\- ]+@[\w\-]+\.[\w.\-]+")
+    linkedin_re = re.compile(r"(?:https?://)?(?:www\.)?linkedin\.com/\S+", re.IGNORECASE)
     placeholder_count = 0
+    header_name_done = False
+    header_title_done = False
 
     def _replace_contact_line(text: str) -> Optional[str]:
         norm = _normalize_header_text(text)
         if norm.startswith("tel"):
-            return f"Tél : {context.get('phone') or 'N/A'}"
+            return f"Tel : {context.get('phone') or 'N/A'}"
         if norm.startswith("email"):
             return f"Email : {context.get('email') or 'N/A'}"
         if norm.startswith("adresse"):
             return f"Adresse : {context.get('address') or 'N/A'}"
         if norm.startswith("nom") and "prenom" in norm:
-            return f"Nom et Prénom : {context.get('full_name') or 'N/A'}"
+            return f"Nom et Prenom : {context.get('full_name') or 'N/A'}"
         return None
 
-    def _process_paragraphs(paragraphs):
+    def _replace_header_value_line(text: str) -> Optional[str]:
+        nonlocal header_name_done, header_title_done
+        clean = (text or "").strip()
+        if not clean:
+            return None
+
+        # Skip synthetic merged paragraphs that concatenate multiple header runs.
+        if len(clean) > 140:
+            return None
+
+        if linkedin_re.search(clean):
+            return _safe_text(context.get("linkedin"))
+
+        if email_re.search(clean):
+            email_value = _safe_text(context.get("email"))
+            address_value = str(context.get("address") or "").strip()
+            return f"{email_value} {address_value}".strip() if address_value else email_value
+
+        digits = re.sub(r"\D", "", clean)
+        if phone_re.search(clean) and len(digits) >= 8 and "@" not in clean:
+            return _safe_text(context.get("phone"))
+
+        norm = _normalize_header_text(clean)
+        if norm in {
+            "competences",
+            "experience professionnelle",
+            "formation",
+            "langues",
+            "references",
+        }:
+            return None
+
+        # Uppercase value lines in headers are often NAME and TITLE.
+        ascii_upper = "".join(
+            ch for ch in unicodedata.normalize("NFD", clean)
+            if unicodedata.category(ch) != "Mn"
+        ).upper()
+        if re.fullmatch(r"[A-Z'\-\s]{4,}", ascii_upper):
+            words = [w for w in clean.split() if w]
+            if 1 < len(words) <= 7:
+                title_markers = (
+                    "ingenieur",
+                    "consultant",
+                    "manager",
+                    "charge",
+                    "chef",
+                    "responsable",
+                    "developer",
+                    "architect",
+                    "analyst",
+                    "projet",
+                    "project",
+                )
+                looks_like_title = any(marker in norm for marker in title_markers)
+                if not header_name_done and not looks_like_title:
+                    header_name_done = True
+                    return _safe_text(context.get("full_name"))
+                if not header_title_done:
+                    header_title_done = True
+                    return _safe_text(context.get("current_position"))
+        return None
+
+    def _process_paragraphs(paragraphs, header_mode: bool = False):
         nonlocal placeholder_count
         for para in paragraphs:
             text = (para.text or "").strip()
             if not text:
                 continue
             replacement = _replace_contact_line(text)
+            if not replacement and header_mode:
+                replacement = _replace_header_value_line(text)
             if replacement:
                 para.text = replacement
                 continue
@@ -686,29 +762,28 @@ def _fill_common_placeholders(doc: DocxDocument, context: Dict[str, Any]) -> Non
                     # Treat additional dotted lines as N/A per user request
                     para.text = "N/A"
 
-    def _process_tables(tables):
+    def _process_tables(tables, header_mode: bool = False):
         for table in tables:
             for row in table.rows:
                 for cell in row.cells:
-                    _process_paragraphs(cell.paragraphs)
+                    _process_paragraphs(cell.paragraphs, header_mode=header_mode)
 
     # Process document body
-    _process_paragraphs(doc.paragraphs)
-    _process_tables(doc.tables)
+    _process_paragraphs(doc.paragraphs, header_mode=False)
+    _process_tables(doc.tables, header_mode=False)
 
     # Process headers and footers across all sections
     for section in doc.sections:
         # Standard, first-page, and even-page headers
         for header in [section.header, section.first_page_header, section.even_page_header]:
             if header:
-                _process_paragraphs(header.paragraphs)
-                _process_tables(header.tables)
+                _process_paragraphs(header.paragraphs, header_mode=True)
+                _process_tables(header.tables, header_mode=True)
         # Standard, first-page, and even-page footers
         for footer in [section.footer, section.first_page_footer, section.even_page_footer]:
             if footer:
-                _process_paragraphs(footer.paragraphs)
-                _process_tables(footer.tables)
-
+                _process_paragraphs(footer.paragraphs, header_mode=True)
+                _process_tables(footer.tables, header_mode=True)
 
 def _resolve_rule_value(section: str, field: str, item: Dict[str, Any]) -> str:
     field = field or ""
@@ -1191,7 +1266,7 @@ def generate_cv_document(
     matched_template_path = std_result["matched_template_path"]
 
     # Analyzer-driven rendering (no DB storage)
-    analyzer_only = os.getenv("CV_TEMPLATE_ANALYZER_ONLY", "1") != "0"
+    analyzer_only = os.getenv("CV_TEMPLATE_ANALYZER_ONLY", "0") != "0"
     if template_ext == ".docx" and os.getenv("CV_TEMPLATE_USE_ANALYZER", "1") != "0":
         try:
             doc = DocxDocument(template_path)

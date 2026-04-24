@@ -1,4 +1,10 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+    BadRequestException,
+    Injectable,
+    Logger,
+    NotFoundException,
+    ServiceUnavailableException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { GeneratedCv } from './entities/generated-cv.entity';
@@ -85,6 +91,7 @@ export class CvGenerationService {
             translate,
             filename_prefix: filenamePrefix,
             profile: profilePayload,
+            engine: dto.engine || 'primary',
         };
 
         // Use cached field mapping when available (skips re-analysis).
@@ -199,22 +206,44 @@ export class CvGenerationService {
         const timeoutMs = 120_000; // 2 minutes
         const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
         try {
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-                signal: controller.signal,
-            });
-            if (!response.ok) {
-                const body = await response.text().catch(() => '');
-                this.logger.error(`AI generation failed: ${response.status} ${response.statusText} ${body}`);
-                throw new BadRequestException('AI service failed to generate CV');
+            const call = async (targetUrl: string) => {
+                const response = await fetch(targetUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                    signal: controller.signal,
+                });
+                if (!response.ok) {
+                    const body = await response.text().catch(() => '');
+                    this.logger.error(`AI generation failed: ${response.status} ${response.statusText} ${body}`);
+                    throw new BadRequestException('AI service failed to generate CV');
+                }
+                return (await response.json()) as AiGenerateResponse;
+            };
+
+            try {
+                return await call(url);
+            } catch (error: any) {
+                const isNetworkError = error instanceof TypeError || error?.message === 'fetch failed';
+                const canRetryIpv4 = /:\/\/localhost(?::|\/|$)/i.test(url);
+                if (!isNetworkError || !canRetryIpv4) {
+                    throw error;
+                }
+
+                const ipv4Url = url.replace('://localhost', '://127.0.0.1');
+                this.logger.warn(`AI service fetch failed for ${url}; retrying once via ${ipv4Url}`);
+                return await call(ipv4Url);
             }
-            return (await response.json()) as AiGenerateResponse;
         } catch (error) {
             if (error instanceof DOMException && error.name === 'AbortError') {
                 this.logger.error(`AI service call timed out after ${timeoutMs / 1000}s`);
                 throw new BadRequestException('CV generation timed out. Please try again.');
+            }
+            if (error instanceof TypeError) {
+                this.logger.error(`AI service unreachable at ${url}: ${error.message}`);
+                throw new ServiceUnavailableException(
+                    `AI service unreachable at ${url}. Ensure ai-service is running and AI_SERVICE_URL is correct.`,
+                );
             }
             throw error;
         } finally {

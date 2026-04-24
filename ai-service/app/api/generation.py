@@ -104,6 +104,113 @@ def _normalize_formats(
     return normalized
 
 
+def _safe_str(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _format_date_range(start_value: Any, end_value: Any) -> str:
+    start = _safe_str(start_value)
+    end = _safe_str(end_value)
+    if start and end:
+        return f"{start} - {end}"
+    return start or end
+
+
+def _coerce_string_list(value: Any, dict_keys: tuple[str, ...] = ()) -> List[str]:
+    if value is None:
+        return []
+
+    raw_items: List[Any]
+    if isinstance(value, list):
+        raw_items = value
+    else:
+        raw_items = [value]
+
+    out: List[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        text = ""
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, dict):
+            for key in dict_keys:
+                candidate = item.get(key)
+                if isinstance(candidate, str) and candidate.strip():
+                    text = candidate.strip()
+                    break
+            if not text:
+                fallback = item.get("name")
+                if isinstance(fallback, str):
+                    text = fallback.strip()
+        elif item is not None:
+            text = str(item).strip()
+
+        if not text:
+            continue
+        norm = text.lower()
+        if norm in seen:
+            continue
+        seen.add(norm)
+        out.append(text)
+
+    return out
+
+
+def _normalize_experience_entries(value: Any) -> List[Dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+
+    normalized: List[Dict[str, Any]] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        title = _safe_str(entry.get("title") or entry.get("jobTitle") or entry.get("role"))
+        company = _safe_str(entry.get("company") or entry.get("companyName") or entry.get("client"))
+        start_date = _safe_str(entry.get("startDate") or entry.get("start_date"))
+        end_date = _safe_str(entry.get("endDate") or entry.get("end_date"))
+        dates = _safe_str(entry.get("dates")) or _format_date_range(start_date, end_date)
+        description = _safe_str(entry.get("description"))
+
+        merged = dict(entry)
+        merged["title"] = title
+        merged["jobTitle"] = title or _safe_str(entry.get("jobTitle"))
+        merged["company"] = company
+        merged["companyName"] = company or _safe_str(entry.get("companyName"))
+        merged["dates"] = dates
+        merged["start_date"] = start_date
+        merged["end_date"] = end_date
+        merged["description"] = description
+        normalized.append(merged)
+
+    return normalized
+
+
+def _normalize_education_entries(value: Any) -> List[Dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+
+    normalized: List[Dict[str, Any]] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        degree = _safe_str(entry.get("degree"))
+        institution = _safe_str(entry.get("institution") or entry.get("school"))
+        start_date = _safe_str(entry.get("startDate") or entry.get("start_date"))
+        end_date = _safe_str(entry.get("endDate") or entry.get("end_date") or entry.get("graduationDate"))
+        dates = _safe_str(entry.get("dates")) or _format_date_range(start_date, end_date)
+
+        merged = dict(entry)
+        merged["degree"] = degree
+        merged["institution"] = institution
+        merged["dates"] = dates
+        merged["end_date"] = end_date
+        normalized.append(merged)
+
+    return normalized
+
+
 def _profile_to_fallback_payload(profile: Dict[str, Any]) -> Dict[str, Any]:
     name = (profile.get("name") or "").strip()
     if not name:
@@ -111,17 +218,33 @@ def _profile_to_fallback_payload(profile: Dict[str, Any]) -> Dict[str, Any]:
         last = (profile.get("lastName") or "").strip()
         name = f"{first} {last}".strip()
 
+    raw_experience = profile.get("experience") or profile.get("workExperiences") or []
+    raw_education = profile.get("education") or profile.get("educations") or []
+    normalized_experience = _normalize_experience_entries(raw_experience)
+    normalized_education = _normalize_education_entries(raw_education)
+
+    linkedin = (
+        profile.get("linkedin")
+        or profile.get("linkedinUrl")
+        or profile.get("linkedin_url")
+        or profile.get("linkedIn")
+        or ""
+    )
+
     return {
         "name": name,
+        "firstName": profile.get("firstName") or "",
+        "lastName": profile.get("lastName") or "",
         "title": profile.get("title") or profile.get("currentPosition") or "",
         "email": profile.get("email") or "",
         "phone": profile.get("phone") or "",
         "address": profile.get("address") or "",
+        "linkedin": linkedin,
         "summary": profile.get("summary") or profile.get("professionalSummary") or "",
-        "skills": profile.get("skills") or [],
-        "experience": profile.get("experience") or profile.get("workExperiences") or [],
-        "education": profile.get("education") or profile.get("educations") or [],
-        "languages": profile.get("languages") or [],
+        "skills": _coerce_string_list(profile.get("skills"), ("name", "skill", "label")),
+        "experience": normalized_experience,
+        "education": normalized_education,
+        "languages": _coerce_string_list(profile.get("languages"), ("name", "language", "label", "lang")),
         "certifications": profile.get("certifications") or [],
         "projects": profile.get("projects") or [],
         "photo": profile.get("photo"),
@@ -181,6 +304,11 @@ async def generate_cv(
 
         try:
             if req.engine == "fallback":
+                if resolved_template.suffix.lower() != ".docx":
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Fallback engine supports only .docx templates.",
+                    )
                 result = _run_fallback_generation(
                     template_path=str(resolved_template),
                     output_dir=str(resolved_output),
@@ -278,6 +406,14 @@ async def generate_cv(
         with open(template_path, "wb") as file_handle:
             file_handle.write(content)
 
+        # Keep fallback behavior aligned with the original DOCX-only engine:
+        # no PDF standardization/OCR/overlay pre-processing.
+        if engine_mode == "fallback" and file_ext != ".docx":
+            raise HTTPException(
+                status_code=400,
+                detail="Fallback engine supports only .docx templates.",
+            )
+
         if not zipfile.is_zipfile(template_path):
             raise HTTPException(
                 status_code=400,
@@ -302,28 +438,6 @@ async def generate_cv(
 
         formats = _normalize_formats(output_format=output_format)
 
-        # Standardize template (conversion, OCR, etc.) for engines that expect DOCX
-        std_result = standardize_template(
-            template_path, temp_dir, profile, formats
-        )
-        if std_result["response"]:
-            r = std_result["response"]
-            if output_format == "pdf" and r.get("pdf_path"):
-                 return FileResponse(
-                    path=r["pdf_path"],
-                    filename=os.path.basename(r["pdf_path"]),
-                    media_type="application/pdf",
-                    headers={"X-CV-Format": "pdf", "X-CV-Engine": engine_mode},
-                )
-            # If we already have a response (e.g. from overlay mode), we could return it
-            # but usually we want to proceed to return the file. 
-            # For now, if response exists but isn't what we wanted, we proceed with the path.
-
-        template_path = std_result["template_path"]
-        # If it was converted, update the file_ext for correct engine logic
-        if template_path.endswith(".docx"):
-            file_ext = ".docx"
-
         if engine_mode == "fallback":
             result = _run_fallback_generation(
                 template_path=template_path,
@@ -333,6 +447,28 @@ async def generate_cv(
                 debug=debug_mode,
             )
         else:
+            # Standardize template (conversion, OCR, etc.) for primary engine only.
+            std_result = standardize_template(
+                template_path, temp_dir, profile, formats
+            )
+            if std_result["response"]:
+                r = std_result["response"]
+                if output_format == "pdf" and r.get("pdf_path"):
+                     return FileResponse(
+                        path=r["pdf_path"],
+                        filename=os.path.basename(r["pdf_path"]),
+                        media_type="application/pdf",
+                        headers={"X-CV-Format": "pdf", "X-CV-Engine": engine_mode},
+                    )
+                # If we already have a response (e.g. from overlay mode), we could return it
+                # but usually we want to proceed to return the file.
+                # For now, if response exists but isn't what we wanted, we proceed with the path.
+
+            template_path = std_result["template_path"]
+            # If it was converted, update the file_ext for correct engine logic
+            if template_path.endswith(".docx"):
+                file_ext = ".docx"
+
             result = generate_cv_document(
                 profile=profile,
                 template_path=template_path,

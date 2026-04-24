@@ -11,22 +11,38 @@ import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { CVTemplateSelector, CvTemplate, TemplateType, EngineMode } from '@/components/cv/CVTemplateSelector';
 
+const extractFilename = (contentDisposition: string | undefined, fallback: string) => {
+  if (!contentDisposition) return fallback;
+
+  const utfMatch = contentDisposition.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+  if (utfMatch?.[1]) {
+    return decodeURIComponent(utfMatch[1]);
+  }
+
+  const plainMatch = contentDisposition.match(/filename\s*=\s*"?([^";]+)"?/i);
+  if (plainMatch?.[1]) {
+    return plainMatch[1];
+  }
+
+  return fallback;
+};
+
 const CVGenerationPage: React.FC = () => {
   const [employees, setEmployees] = useState<any[]>([]);
   const [templates, setTemplates] = useState<CvTemplate[]>([]);
   const [selectedEmployee, setSelectedEmployee] = useState('');
-  
+
   // Selector states
   const [selectedTemplate, setSelectedTemplate] = useState('');
   const [selectedType, setSelectedType] = useState<TemplateType>('standard');
   const [language, setLanguage] = useState('');
   const [translateEnabled, setTranslateEnabled] = useState(true);
   const [engine, setEngine] = useState<EngineMode>('primary');
-  
+
   const [isGenerating, setIsGenerating] = useState(false);
   const [isGenerated, setIsGenerated] = useState(false);
   const [downloadLinks, setDownloadLinks] = useState<{ docx?: string; pdf?: string }>({});
-  
+
   const [uploading, setUploading] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -50,35 +66,20 @@ const CVGenerationPage: React.FC = () => {
     setIsGenerating(true);
     setIsGenerated(false);
     try {
-      if (engine === 'primary') {
-        const res = await api.post('/cv-generation', {
-          employeeId: selectedEmployee,
-          templateId: selectedTemplate,
-          language: language || undefined,
-          translate: translateEnabled,
-          outputFormats: ['docx', 'pdf'],
-        });
-        setDownloadLinks({
-          docx: res.data.downloadDocxUrl,
-          pdf: res.data.downloadPdfUrl,
-        });
-      } else {
-        // Fallback engine path (returns blobs)
-        const [docxBlob, pdfBlob] = await Promise.all([
-          bidService.generateCvFromStored(selectedTemplate, selectedEmployee, 'docx', 'fallback'),
-          bidService.generateCvFromStored(selectedTemplate, selectedEmployee, 'pdf', 'fallback'),
-        ]);
-        
-        // Convert blobs to local URLs for this session
-        const docxUrl = URL.createObjectURL(docxBlob);
-        const pdfUrl = URL.createObjectURL(pdfBlob);
-        
-        setDownloadLinks({
-          docx: docxUrl,
-          pdf: pdfUrl,
-        });
-      }
-      
+      const res = await api.post('/cv-generation', {
+        employeeId: selectedEmployee,
+        templateId: selectedTemplate,
+        language: language || undefined,
+        translate: translateEnabled,
+        outputFormats: ['docx', 'pdf'],
+        engine: engine,
+      });
+
+      setDownloadLinks({
+        docx: res.data.downloadDocxUrl,
+        pdf: res.data.downloadPdfUrl,
+      });
+
       setIsGenerated(true);
       toast.success(engine === 'primary' ? 'Standard engine generated CV' : 'Advanced AI engine generated CV successfully');
     } catch {
@@ -97,7 +98,7 @@ const CVGenerationPage: React.FC = () => {
       formData.append('file', file);
       formData.append('templateName', file.name.replace(/\.(docx|pdf)$/i, ''));
       formData.append('templateType', selectedType);
-      
+
       const res = await api.post('/cv-templates', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
@@ -111,30 +112,43 @@ const CVGenerationPage: React.FC = () => {
     }
   };
 
-  const handleDownload = (type: 'docx' | 'pdf') => {
+  const handleDownload = async (type: 'docx' | 'pdf') => {
     const url = type === 'pdf' ? downloadLinks.pdf : downloadLinks.docx;
     if (!url) return;
-    
-    if (engine === 'fallback') {
-      // Fallback URLs are local blobs
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `cv_${selectedEmployee}.${type}`;
-      a.click();
-    } else {
-      // Primary URLs are backend endpoints
-      window.open(`${api.defaults.baseURL}${url}`);
+
+    if (url.startsWith('blob:')) {
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `generated-cv.${type}`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      return;
+    }
+
+    try {
+      const res = await api.get(url, { responseType: 'blob' });
+      const fallbackName = `generated-cv.${type}`;
+      const filename = extractFilename(res.headers['content-disposition'], fallbackName);
+      const blobUrl = URL.createObjectURL(res.data);
+      const anchor = document.createElement('a');
+      anchor.href = blobUrl;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(blobUrl);
+    } catch {
+      toast.error('Download failed');
     }
   };
 
   useEffect(() => {
     if (previewOpen && downloadLinks.docx) {
       setPreviewLoading(true);
-      const url = engine === 'primary' ? `${api.defaults.baseURL}${downloadLinks.docx}` : downloadLinks.docx;
-      
-      const fetchBlob = engine === 'primary' 
-        ? api.get(downloadLinks.docx, { responseType: 'blob' }).then(res => res.data)
-        : fetch(downloadLinks.docx).then(res => res.blob());
+      const url = `${api.defaults.baseURL}${downloadLinks.docx}`;
+
+      const fetchBlob = api.get(downloadLinks.docx, { responseType: 'blob' }).then(res => res.data);
 
       fetchBlob.then(blob => {
         import('docx-preview').then(({ renderAsync }) => {
@@ -182,7 +196,7 @@ const CVGenerationPage: React.FC = () => {
                 </Select>
               </div>
 
-              <CVTemplateSelector 
+              <CVTemplateSelector
                 templates={templates}
                 selectedTemplate={selectedTemplate}
                 onTemplateChange={setSelectedTemplate}
@@ -202,34 +216,34 @@ const CVGenerationPage: React.FC = () => {
 
           {isGenerated && (
             <Card className="border-success/30 bg-success/5 animate-in slide-in-from-top-4 duration-500">
-               <CardContent className="pt-6 space-y-4">
-                  <div className="flex items-center gap-3 text-success">
-                    <div className="w-10 h-10 rounded-full bg-success/20 flex items-center justify-center">
-                      <Check className="h-6 w-6" />
-                    </div>
-                    <div>
-                      <p className="font-bold text-base">Document Ready</p>
-                      <p className="text-[10px] text-success/80">
-                        Generated using {engine === 'fallback' ? 'Advanced AI Engine (Fallback)' : 'Standard Engine'}.
-                      </p>
-                    </div>
+              <CardContent className="pt-6 space-y-4">
+                <div className="flex items-center gap-3 text-success">
+                  <div className="w-10 h-10 rounded-full bg-success/20 flex items-center justify-center">
+                    <Check className="h-6 w-6" />
                   </div>
-                  <div className="flex flex-wrap gap-2 pt-2">
-                    <Button variant="outline" size="sm" onClick={() => setPreviewOpen(true)} className="bg-background shadow-sm h-10 px-4">
-                      <Eye className="h-4 w-4 mr-2" /> Live Preview
+                  <div>
+                    <p className="font-bold text-base">Document Ready</p>
+                    <p className="text-[10px] text-success/80">
+                      Generated using {engine === 'fallback' ? 'Advanced AI Engine (Fallback)' : 'Standard Engine'}.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2 pt-2">
+                  <Button variant="outline" size="sm" onClick={() => setPreviewOpen(true)} className="bg-background shadow-sm h-10 px-4">
+                    <Eye className="h-4 w-4 mr-2" /> Live Preview
+                  </Button>
+                  {downloadLinks.pdf && (
+                    <Button size="sm" onClick={() => handleDownload('pdf')} className="h-10 px-4 shadow-lg shadow-primary/20">
+                      <Download className="h-4 w-4 mr-2" /> Download PDF
                     </Button>
-                    {downloadLinks.pdf && (
-                      <Button size="sm" onClick={() => handleDownload('pdf')} className="h-10 px-4 shadow-lg shadow-primary/20">
-                        <Download className="h-4 w-4 mr-2" /> Download PDF
-                      </Button>
-                    )}
-                    {downloadLinks.docx && (
-                      <Button variant="secondary" size="sm" onClick={() => handleDownload('docx')} className="h-10 px-4">
-                        <Download className="h-4 w-4 mr-2" /> Download DOCX
-                      </Button>
-                    )}
-                  </div>
-               </CardContent>
+                  )}
+                  {downloadLinks.docx && (
+                    <Button variant="secondary" size="sm" onClick={() => handleDownload('docx')} className="h-10 px-4">
+                      <Download className="h-4 w-4 mr-2" /> Download DOCX
+                    </Button>
+                  )}
+                </div>
+              </CardContent>
             </Card>
           )}
         </div>
@@ -248,17 +262,17 @@ const CVGenerationPage: React.FC = () => {
                 </p>
               </div>
               <div className="pt-4 border-t space-y-3">
-                 <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Quick Guidelines</h4>
-                 <ul className="space-y-2">
-                   <li className="flex gap-2 text-sm text-muted-foreground items-start">
-                     <div className="w-1.5 h-1.5 rounded-full bg-primary mt-2 shrink-0" />
-                     Verify employee data in Directory before generating.
-                   </li>
-                   <li className="flex gap-2 text-sm text-muted-foreground items-start">
-                     <div className="w-1.5 h-1.5 rounded-full bg-primary mt-2 shrink-0" />
-                     Fallback engine (AI) is optimized for RPF compliance.
-                   </li>
-                 </ul>
+                <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Quick Guidelines</h4>
+                <ul className="space-y-2">
+                  <li className="flex gap-2 text-sm text-muted-foreground items-start">
+                    <div className="w-1.5 h-1.5 rounded-full bg-primary mt-2 shrink-0" />
+                    Verify employee data in Directory before generating.
+                  </li>
+                  <li className="flex gap-2 text-sm text-muted-foreground items-start">
+                    <div className="w-1.5 h-1.5 rounded-full bg-primary mt-2 shrink-0" />
+                    Fallback engine (AI) is optimized for RPF compliance.
+                  </li>
+                </ul>
               </div>
             </CardContent>
           </Card>

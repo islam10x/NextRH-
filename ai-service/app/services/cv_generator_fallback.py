@@ -360,22 +360,15 @@ def _replace_sections_in_layout_table(
 
             new_content = _build_section_content(section_name, employee)
             if new_content is None:
-                # No employee data — remove existing and insert "N/A"
+                # No employee data — remove existing content
                 for elem in content_paras:
                     try:
                         tc.remove(elem)
                     except ValueError:
                         pass
-                
-                # Insert "N/A" after heading to maintain structure
-                na_p = _make_para_elem(
-                    "N/A",
-                    ref_spacing=_get_ref_ppr_spacing([heading_el])
-                )
-                heading_el.addnext(na_p)
-
                 logger.info(
-                    f"  layout-table '{section_name}': substituted content with 'N/A' (no data)"
+                    f"  layout-table '{section_name}': removed "
+                    f"{len(content_paras)} content paragraphs (no data)"
                 )
                 replaced += 1
                 continue
@@ -1301,52 +1294,46 @@ def _build_replacements(
             pairs.append((detected['last_name_text'], emp_last))
 
     # Title / position — cover all placeholder variants (body + header may differ)
-    added_titles: set = set()
-    emp_title = (employee.get('title') or '').strip()
-    new_title = emp_title if emp_title else "N/A"
-    
-    if detected.get('title'):
-        pairs.append((detected['title'], new_title))
-        added_titles.add(detected['title'])
-    for variant in detected.get('_all_ph_titles', []):
-        if variant not in added_titles:
-            pairs.append((variant, new_title))
-            added_titles.add(variant)
+    if employee.get('title'):
+        added_titles: set = set()
+        if detected.get('title'):
+            pairs.append((detected['title'], employee['title']))
+            added_titles.add(detected['title'])
+        for variant in detected.get('_all_ph_titles', []):
+            if variant not in added_titles:
+                pairs.append((variant, employee['title']))
+                added_titles.add(variant)
 
     # Email (may contain space before @, need to replace exactly as detected)
-    if detected.get('email'):
+    if detected.get('email') and employee.get('email'):
         det_email = detected['email']
-        emp_email = (employee.get('email') or '').strip()
-        new_email = emp_email if emp_email else "N/A"
-        pairs.append((det_email, new_email))
+        emp_email = employee['email']
+        pairs.append((det_email, emp_email))
 
-        if emp_email:
-            # Fragment pairs: infographic templates split email across TXBX
-            # paragraphs (e.g. "lucas.leblanc" and "@courriel.ca" in separate <w:p>).
-            # Add local-part and domain pairs so both fragments get replaced.
-            det_local, det_domain = '', ''
-            emp_local, emp_domain = '', ''
-            if '@' in det_email:
-                # Handle space before @ (e.g. "lucas.leblanc @courriel.ca")
-                clean = det_email.replace(' ', '')
-                det_local = clean.split('@')[0]
-                det_domain = '@' + clean.split('@')[1]
-            if '@' in emp_email:
-                emp_local = emp_email.split('@')[0]
-                emp_domain = '@' + emp_email.split('@')[1]
-            if det_local and emp_local and det_local != emp_local:
-                pairs.append((det_local, emp_local))
-            if det_domain and emp_domain and det_domain != emp_domain:
-                pairs.append((det_domain, emp_domain))
+        # Fragment pairs: infographic templates split email across TXBX
+        # paragraphs (e.g. "lucas.leblanc" and "@courriel.ca" in separate <w:p>).
+        # Add local-part and domain pairs so both fragments get replaced.
+        det_local, det_domain = '', ''
+        emp_local, emp_domain = '', ''
+        if '@' in det_email:
+            # Handle space before @ (e.g. "lucas.leblanc @courriel.ca")
+            clean = det_email.replace(' ', '')
+            det_local = clean.split('@')[0]
+            det_domain = '@' + clean.split('@')[1]
+        if '@' in emp_email:
+            emp_local = emp_email.split('@')[0]
+            emp_domain = '@' + emp_email.split('@')[1]
+        if det_local and emp_local and det_local != emp_local:
+            pairs.append((det_local, emp_local))
+        if det_domain and emp_domain and det_domain != emp_domain:
+            pairs.append((det_domain, emp_domain))
 
-    # Phone
+    # Phone — replace with employee's, or clear if employee has none
     if detected.get('phone'):
-        det_phone = detected['phone']
-        emp_phone = (employee.get('phone') or '').strip()
-        new_phone = emp_phone if emp_phone else "N/A"
-        pairs.append((det_phone, new_phone))
+        if employee.get('phone'):
+            pairs.append((detected['phone'], employee['phone']))
 
-        # Fragment pairs: TXBX templates split phone digits across paragraphs.
+            # Fragment pairs: TXBX templates split phone digits across paragraphs.
         # The last digit group (≥4 chars, usually unique) is safe to replace.
         # Shorter groups (area code etc.) risk false matches so we skip them.
         det_phone = detected['phone']
@@ -1365,6 +1352,11 @@ def _build_replacements(
                     emp_last = emp_groups[-1] if emp_groups else ''
                     if last_g != emp_last:
                         pairs.append((last_g, emp_last))
+        else:
+            # Employee has no phone — erase the template's phone so it
+            # doesn't appear in the generated CV as someone else's number.
+            pairs.append((detected['phone'], ''))
+            logger.debug("Clearing template phone (employee has none): %r", detected['phone'])
 
     # Placeholder phone label (e.g. 'Telephone', 'Téléphone') — no real number detected
     if detected.get('_ph_phone') and not detected.get('phone') and employee.get('phone'):
@@ -1414,37 +1406,51 @@ def _build_replacements(
         if not detected.get('linkedin'):  # only if real URL not already handled
             pairs.append((ph_li, new_li))
 
-    # Address / location — keep full address (no smart shortening)
+    # Address / location — replace with employee's, or clear if employee has none
     if detected.get('address'):
-        det_addr = detected['address']
-        emp_addr = (employee.get('address') or '').strip()
-        new_addr = emp_addr if emp_addr else "N/A"
-        pairs.append((det_addr, new_addr))
+        if employee.get('address'):
+            det_addr = detected['address']
+            emp_addr = employee['address']
+            pairs.append((det_addr, emp_addr))
 
-        # Fragment pairs: TXBX templates split "City, Country" into
-        # "City" and ", Country" paragraphs.
-        # SAFETY: only generate fragments when BOTH addresses follow a simple
-        # 2-part "City, Country" pattern.  Skip when the employee address is
-        # a complex multi-part street address (3+ commas) or when the mapped
-        # city-part is not a recognisable place name (e.g. just a number).
-        det_comma_count = det_addr.count(',')
-        emp_comma_count = emp_addr.count(',')
-        _simple_addr = (det_comma_count == 1 and emp_comma_count <= 1)
-        if _simple_addr and ',' in det_addr:
-            det_parts = [p.strip() for p in det_addr.split(',', 1)]
-            emp_parts_addr = [p.strip() for p in emp_addr.split(',', 1)] if ',' in emp_addr else [emp_addr.strip(), '']
-            # Only create city fragment if the employee city looks like a name (has letters)
-            emp_city_has_alpha = bool(re.search(r'[A-Za-zÀ-ÿ]{2,}', emp_parts_addr[0]))
-            if det_parts[0] and emp_parts_addr[0] and det_parts[0] != emp_parts_addr[0] and emp_city_has_alpha:
-                pairs.append((det_parts[0], emp_parts_addr[0]))
-            if len(det_parts) > 1 and len(emp_parts_addr) > 1 and emp_parts_addr[1]:
-                det_suffix = ', ' + det_parts[1]
-                emp_suffix = ', ' + emp_parts_addr[1]
-                if det_suffix != emp_suffix:
-                    pairs.append((det_suffix, emp_suffix))
-                # Also handle " Country" alone (no comma prefix in paragraph)
-                if det_parts[1] != emp_parts_addr[1]:
-                    pairs.append((det_parts[1], emp_parts_addr[1]))
+            # Fragment pairs: TXBX templates split "City, Country" into
+            # "City" and ", Country" paragraphs.
+            # SAFETY: only generate fragments when BOTH addresses follow a simple
+            # 2-part "City, Country" pattern.  Skip when the employee address is
+            # a complex multi-part street address (3+ commas) or when the mapped
+            # city-part is not a recognisable place name (e.g. just a number).
+            det_comma_count = det_addr.count(',')
+            emp_comma_count = emp_addr.count(',')
+            _simple_addr = (det_comma_count == 1 and emp_comma_count <= 1)
+            if _simple_addr and ',' in det_addr:
+                det_parts = [p.strip() for p in det_addr.split(',', 1)]
+                emp_parts_addr = [p.strip() for p in emp_addr.split(',', 1)] if ',' in emp_addr else [emp_addr.strip(), '']
+                # Only create city fragment if the employee city looks like a name (has letters)
+                emp_city_has_alpha = bool(re.search(r'[A-Za-zÀ-ÿ]{2,}', emp_parts_addr[0]))
+                if det_parts[0] and emp_parts_addr[0] and det_parts[0] != emp_parts_addr[0] and emp_city_has_alpha:
+                    pairs.append((det_parts[0], emp_parts_addr[0]))
+                if len(det_parts) > 1 and len(emp_parts_addr) > 1 and emp_parts_addr[1]:
+                    det_suffix = ', ' + det_parts[1]
+                    emp_suffix = ', ' + emp_parts_addr[1]
+                    if det_suffix != emp_suffix:
+                        pairs.append((det_suffix, emp_suffix))
+                    # Also handle " Country" alone (no comma prefix in paragraph)
+                    if det_parts[1] != emp_parts_addr[1]:
+                        pairs.append((det_parts[1], emp_parts_addr[1]))
+        else:
+            # Employee has no address — erase every address fragment so
+            # the previous employee's address does not bleed through.
+            det_addr = detected['address']
+            pairs.append((det_addr, ''))
+            logger.debug("Clearing template address (employee has none): %r", det_addr)
+            # Also clear fragment parts if simple City, Country format
+            if det_addr.count(',') == 1:
+                det_parts = [p.strip() for p in det_addr.split(',', 1)]
+                if det_parts[0]:
+                    pairs.append((det_parts[0], ''))
+                if det_parts[1]:
+                    pairs.append((', ' + det_parts[1], ''))
+                    pairs.append((det_parts[1], ''))
 
     # Clear preceding street line (e.g. "234 5th Ave,") when the address
     # was detected from a US-format "City, ST ZIP" on the next paragraph.
@@ -3332,7 +3338,7 @@ def _extract_template_structured_data(
     entries via the template's job title.
     """
     result: Dict[str, Any] = {
-        'experience': [], 'education': [], 'summary_paras': [], 'all_paragraphs': []
+        'experience': [], 'education': [], 'summary_paras': []
     }
     W = NS_W
     try:
@@ -3410,11 +3416,6 @@ def _extract_template_structured_data(
     # (e.g. "Certificat", "Année", "Diplôme") being treated as real data.
     all_paras: List[Tuple[str, bool]] = []   # (text, is_txbx)
     for p in tree.iter(f'{{{W}}}p'):
-        ps = ''.join(t.text or '' for t in p.iter(f'{{{W}}}t'))
-        # Collect for global placeholder/dots cleanup later, regardless of structure
-        if ps.strip():
-            result['all_paragraphs'].append(ps)
-
         if _is_in_fallback(p):
             continue                  # Skip VML fallback copies
         if _is_in_table_cell(p):
@@ -3855,16 +3856,6 @@ def _build_full_replacement_map(
             pairs.append((old_tok, new_tok))
             existing_olds.add(old_tok)
 
-    # ── Dotted placeholder fallback ───────────────────────────────────
-    # Identify paragraphs that consist ONLY of dots/placeholders
-    # and replace them with "N/A" if they haven't been mapped yet.
-    placeholder_re = re.compile(r"^[\\.·•…\s]{3,}$")
-    for p_text in (template_data.get('all_paragraphs') or []):
-        stripped = (p_text or '').strip()
-        if stripped and stripped not in existing_olds and placeholder_re.match(stripped):
-            pairs.append((stripped, "N/A"))
-            existing_olds.add(stripped)
-
     pairs.sort(key=lambda x: len(x[0]), reverse=True)
     logger.info(f"Full replacement map: {len(pairs)} pairs")
     for old, new in pairs[:15]:
@@ -3875,7 +3866,7 @@ def _build_full_replacement_map(
 # ── Known language names for textbox blanking ────────────────────────────
 _KNOWN_LANGUAGE_NAMES: set = {
     'anglais', 'english', 'français', 'french', 'espagnol', 'spanish',
-    'allemand', 'german', 'arabe', 'arabic', 'italien', 'italian',
+    'allemand', 'german', 'italien', 'italian',
     'portugais', 'portuguese', 'néerlandais', 'dutch', 'chinois', 'chinese',
     'japonais', 'japanese', 'russe', 'russian', 'coréen', 'korean',
     'turc', 'turkish', 'hindi', 'mandarin', 'cantonais', 'cantonese',
@@ -5592,7 +5583,7 @@ Your task:
 Return a JSON object with two keys:
 
 "replacements": array of objects {{"old": "...", "new": "..."}} — one per piece of
-  personal data found in the template that must change.
+  personal or professional data found in the template.
   Rules:
   - "old" must be the EXACT string as it appears in the template text (copy-paste).
   - Cover ALL contact / personal info: first name alone, last name alone,
@@ -5603,6 +5594,10 @@ Return a JSON object with two keys:
     Even if first name and last name live in separate text boxes, the replacement engine
     will handle merging them into a single wider textbox automatically.
     Copy the EXACT "FIRST LAST" string as it appears in the template (with a space between).
+  - Also cover template-specific fields such as department, direction, title suffix,
+    nationality, marital status, or any other personal/professional data label+value that
+    appears in the template but does NOT correspond to anything in the employee JSON.
+    For those unmatched fields use {{"old": "<exact template text>", "new": ""}} to CLEAR them.
   - For multi-part values (e.g. phone split as "555-555-5555"), use the joined form.
   - Do NOT replace section headings (Expérience, Formation, Compétences, Langues…).
   - Do NOT replace company names, school names, or dates from past experience.
@@ -5781,18 +5776,23 @@ def _ai_get_replacements(
         if not isinstance(item, dict):
             continue
         old = (item.get("old") or "").strip()
-        new = (item.get("new") or "").strip()
-        if old and new and old != new:
-            if old in full_text:
-                pairs.append((old, new))
-            else:
-                for para in paragraphs:
-                    if old.lower() in para.lower():
-                        real_idx = para.lower().find(old.lower())
-                        real_old = para[real_idx: real_idx + len(old)]
-                        if real_old and real_old not in [p[0] for p in pairs]:
-                            pairs.append((real_old, new))
-                        break
+        # Allow new="" (clearing unmatched template fields) — only require old to be non-empty
+        new_raw = item.get("new")
+        new = (new_raw or "").strip() if new_raw is not None else (item.get("new") or "").strip()
+        if not old:
+            continue
+        if old == new:
+            continue
+        if old in full_text:
+            pairs.append((old, new))
+        else:
+            for para in paragraphs:
+                if old.lower() in para.lower():
+                    real_idx = para.lower().find(old.lower())
+                    real_old = para[real_idx: real_idx + len(old)]
+                    if real_old and real_old not in [p[0] for p in pairs]:
+                        pairs.append((real_old, new))
+                    break
 
     pairs.sort(key=lambda x: len(x[0]), reverse=True)
 
@@ -5886,11 +5886,10 @@ def _clear_template_sections(docx_path: str, sections_to_clear: List[str]) -> in
             text = ''.join(t.text or '' for t in t_elems).strip()
             for label in sections_to_clear:
                 if text.upper() == label.upper() or text.strip() == label.strip():
-                    # For textboxes, we usually want to keep the label 
-                    # and clear the REST of the textbox content if it's mixed.
-                    # But if the textbox IS the label, we keep it as requested.
-                    logger.info(f"  Preserving textbox section label: '{text}'")
-                    # No longer clearing t.text = '' here.
+                    # Clear only this textbox
+                    for t in t_elems:
+                        t.text = ''
+                    logger.info(f"  Cleared textbox label: '{text}'")
                     cleared += 1
                     break
 
@@ -5964,15 +5963,8 @@ def _clear_template_sections(docx_path: str, sections_to_clear: List[str]) -> in
                                 body.remove(elem)
                             except ValueError:
                                 pass
-                        
-                        # Insert "N/A" paragraph after the heading
-                        na_p = etree.Element(f'{{{W}}}p')
-                        na_r = etree.SubElement(na_p, f'{{{W}}}r')
-                        na_t = etree.SubElement(na_r, f'{{{W}}}t')
-                        na_t.text = "N/A"
-                        child.addnext(na_p)
-
-                        logger.info(f"  Substituted body section with 'N/A': '{label}'")
+                        body.remove(child)
+                        logger.info(f"  Removed body section: '{label}' + {len(removable)} content elements")
                         cleared += 1
                         break
 
@@ -6008,20 +6000,10 @@ def _clear_template_sections(docx_path: str, sections_to_clear: List[str]) -> in
                             # Clear all <w:t> text in this content paragraph
                             for t in content_p.iter(f'{{{W}}}t'):
                                 t.text = ''
-                        # Also blank the heading paragraph itself? 
-                        # NO, keep the heading as requested.
-                        
-                        # Insert "N/A" into the first content paragraph if possible, 
-                        # or just make sure the following text is "N/A".
-                        first_content = tc_children[h_idx + 1] if h_idx + 1 < len(tc_children) else None
-                        if first_content is not None and first_content.tag == W_P:
-                             na_t = first_content.find(f'.//{{{W}}}t')
-                             if na_t is None:
-                                 na_r = etree.SubElement(first_content, f'{{{W}}}r')
-                                 na_t = etree.SubElement(na_r, f'{{{W}}}t')
-                             na_t.text = "N/A"
-                        
-                        logger.info(f"  Substituted layout-table cell section with 'N/A': '{cell_text}'")
+                        # Also blank the heading paragraph itself
+                        for t in child.iter(f'{{{W}}}t'):
+                            t.text = ''
+                        logger.info(f"  Cleared layout-table cell section: '{cell_text}'")
                         cleared += 1
                         break
 
