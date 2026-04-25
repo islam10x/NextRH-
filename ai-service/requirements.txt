@@ -5,6 +5,8 @@ watchdog
 requests
 pymupdf
 python-docx
+pypdf
+pdf2docx
 tika
 
 pytesseract

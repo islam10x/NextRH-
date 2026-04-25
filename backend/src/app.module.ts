@@ -11,6 +11,8 @@ import { TrainingModule } from './training/training.module';
 import { ProjectsModule } from './projects/projects.module';
 import { TeamsModule } from './teams/teams.module';
 import { CvModule } from './cv/cv.module';
+import { CvTemplatesModule } from './cv-templates/cv-templates.module';
+import { CvGenerationModule } from './cv-generation/cv-generation.module';
 import { FileStorageModule } from './file-storage/file-storage.module';
 import { RagModule } from './rag/rag.module';
 import { NotificationsModule } from './notifications/notifications.module';
@@ -55,6 +57,8 @@ import { ScheduleModule } from '@nestjs/schedule';
         ProjectsModule,
         TeamsModule,
         CvModule,
+        CvTemplatesModule,
+        CvGenerationModule,
         FileStorageModule,
         RagModule,
         NotificationsModule,

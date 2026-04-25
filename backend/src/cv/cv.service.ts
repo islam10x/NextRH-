@@ -772,6 +772,7 @@ export class CvService {
         templateFile: Express.Multer.File,
         outputFormat: 'docx' | 'pdf' = 'docx',
         language: string = 'en',
+        engine: 'primary' | 'fallback' = 'fallback',
     ): Promise<{ buffer: Buffer; filename: string; mimeType: string }> {
         // 1. Load employee profile data
         const profileData = await this.getMyProfile(employeeId);
@@ -833,6 +834,7 @@ export class CvService {
         formData.append('employee_data', JSON.stringify(employeePayload));
         formData.append('output_format', outputFormat);
         formData.append('language', language);
+        formData.append('engine', engine);
 
         const aiUrl = `${this.aiServiceBaseUrl}/api/v1/generation/cv`;
         this.logger.log(`Calling AI generation service: ${aiUrl} (format: ${outputFormat})`);

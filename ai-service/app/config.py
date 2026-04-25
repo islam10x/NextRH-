@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     RAG_CHAT_MODEL: str = "qwen2.5:1.5b-instruct"
     RAG_CHAT_TIMEOUT_SECONDS: float = 30.0
     # Comma-separated candidate roots for employee metadata.json files.
-    RAG_METADATA_ROOTS: str = "backend/local-storage,backend/file-storage/CV_Database"
+    RAG_METADATA_ROOTS: str = "backend/local-storage,backend/file-storage/CV_Database,/app/file-storage/CV_Database"
 
     # Groq LLM for CV generation
     GROQ_API_KEY: str = ""

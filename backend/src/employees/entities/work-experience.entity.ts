@@ -16,10 +16,10 @@ export class WorkExperience {
     @JoinColumn({ name: 'profile_id' })
     profile: EmployeeProfile;
 
-    @Column({ name: 'job_title' })
+    @Column({ name: 'job_title', type: 'text' })
     jobTitle: string;
 
-    @Column({ name: 'company_name' })
+    @Column({ name: 'company_name', type: 'text' })
     companyName: string;
 
     @Column({ name: 'start_date', type: 'date', nullable: true })

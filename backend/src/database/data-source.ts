@@ -1,5 +1,9 @@
 import { DataSource } from 'typeorm';
 import * as path from 'path';
+import * as dotenv from 'dotenv';
+
+// Ensure CLI migrations load environment variables from the backend/.env file.
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 const dbPassword = process.env.DB_PASSWORD;
 if (!dbPassword) {

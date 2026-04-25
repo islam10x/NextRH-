@@ -25,6 +25,7 @@ from app.utils.llm import build_rag_chat_llm, parse_json_object
 
 TOP_K = 8
 TOP_K_PER_MATCHED_EMPLOYEE = 12
+NO_INFO_REPLY = "I don't have that information."
 
 
 def _normalize_for_match(value: str) -> str:
@@ -34,6 +35,18 @@ def _normalize_for_match(value: str) -> str:
     text = re.sub(r"(?<=[a-z])&(?=[a-z])", "a", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+def _as_int_or_none(value: object) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except Exception:
+        return None
 
 
 def _token_variants(token: str) -> list[str]:
@@ -170,6 +183,7 @@ def _extract_directory_entries(doc: LCDocument) -> list[dict[str, object]]:
                     "role": str(item.get("role") or "").strip(),
                     "experience_entries": int(item.get("experience_entries") or 0),
                     "project_count": int(item.get("project_count") or 0),
+                    "experience_years": _as_int_or_none(item.get("experience_years")),
                     "companies": [str(c).strip() for c in (item.get("companies") or []) if str(c).strip()],
                 }
             )
@@ -194,9 +208,14 @@ def _extract_directory_entries(doc: LCDocument) -> list[dict[str, object]]:
             "role": "",
             "experience_entries": 0,
             "project_count": 0,
+            "experience_years": None,
             "companies": [],
         }
         for token in parts[1:]:
+            if "=" not in token and "experience_years~" in token:
+                _, value = token.split("experience_years~", 1)
+                parsed["experience_years"] = _as_int_or_none(value)
+                continue
             if "=" not in token:
                 continue
             key, value = token.split("=", 1)
@@ -210,6 +229,8 @@ def _extract_directory_entries(doc: LCDocument) -> list[dict[str, object]]:
                 parsed["experience_entries"] = int(value or 0)
             elif key == "project_count":
                 parsed["project_count"] = int(value or 0)
+            elif key == "experience_years":
+                parsed["experience_years"] = _as_int_or_none(value)
             elif key == "companies":
                 parsed["companies"] = [c.strip() for c in value.split(";") if c.strip()]
         entries.append(parsed)
@@ -532,6 +553,7 @@ def _build_structured_facts(
         lambda: {
             "project_count": None,
             "experience_count": None,
+            "experience_years": None,
             "companies": set(),
             "projects": {},
             "experience": {},
@@ -552,6 +574,9 @@ def _build_structured_facts(
             bucket = employees[name]
             bucket["project_count"] = int(row.get("project_count") or 0)
             bucket["experience_count"] = int(row.get("experience_entries") or 0)
+            years_value = _as_int_or_none(row.get("experience_years"))
+            if years_value is not None:
+                bucket["experience_years"] = years_value
             for company in row.get("companies") or []:
                 if str(company).strip():
                     bucket["companies"].add(str(company).strip())
@@ -630,6 +655,7 @@ def _build_structured_facts(
         )
 
     project_ranking: list[tuple[str, int]] = []
+    experience_years_ranking: list[tuple[str, int]] = []
     employee_rows: list[dict[str, object]] = []
     company_groups: dict[str, dict[str, object]] = {}
     employee_search_blobs: dict[str, str] = {}
@@ -646,6 +672,7 @@ def _build_structured_facts(
         experience_count_value = bucket["experience_count"]
         if experience_count_value is None:
             experience_count_value = len(experience)
+        experience_years_value = _as_int_or_none(bucket.get("experience_years"))
 
         companies = sorted(c for c in bucket["companies"] if c)
         certifications = sorted(bucket["certifications"], key=_normalize_for_match)
@@ -659,11 +686,14 @@ def _build_structured_facts(
             company_groups[key]["employees"].add(name)
 
         project_ranking.append((name, int(project_count_value or 0)))
+        if experience_years_value is not None:
+            experience_years_ranking.append((name, int(experience_years_value)))
         employee_rows.append(
             {
                 "name": name,
                 "project_count": int(project_count_value or 0),
                 "experience_count": int(experience_count_value or 0),
+                "experience_years": experience_years_value,
                 "companies": companies,
                 "projects": projects,
                 "experience": experience,
@@ -686,6 +716,7 @@ def _build_structured_facts(
         employee_search_blobs[name] = _normalize_for_match(" ".join(blob_parts))
 
     project_ranking.sort(key=lambda item: item[1], reverse=True)
+    experience_years_ranking.sort(key=lambda item: item[1], reverse=True)
 
     payload = {
         "total_employees": total_employees,
@@ -703,6 +734,9 @@ def _build_structured_facts(
         ],
         "project_count_ranking": [
             {"name": name, "project_count": count} for name, count in project_ranking
+        ],
+        "experience_years_ranking": [
+            {"name": name, "experience_years": count} for name, count in experience_years_ranking
         ],
     }
     query_norm = _normalize_for_match(query_text)
@@ -724,6 +758,134 @@ def _build_structured_facts(
             )
     payload["query_token_matches"] = token_matches
     return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _signal_tokens(text: str) -> list[str]:
+    stopwords = {
+        "the",
+        "and",
+        "for",
+        "with",
+        "that",
+        "this",
+        "from",
+        "into",
+        "about",
+        "your",
+        "their",
+        "have",
+        "has",
+        "had",
+        "was",
+        "were",
+        "are",
+        "is",
+        "who",
+        "what",
+        "when",
+        "where",
+        "why",
+        "how",
+        "list",
+        "show",
+        "find",
+        "search",
+        "please",
+        "could",
+        "would",
+        "should",
+        "there",
+        "them",
+        "they",
+        "then",
+        "than",
+        "also",
+        "only",
+        "just",
+        "more",
+        "less",
+        "most",
+        "least",
+        "info",
+        "information",
+        "employee",
+        "employees",
+        "profile",
+        "profiles",
+        "project",
+        "projects",
+        "skill",
+        "skills",
+        "certification",
+        "certifications",
+        "experience",
+    }
+    tokens = re.findall(r"[a-z0-9]+", _normalize_for_match(text))
+    out: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        if len(token) < 3:
+            continue
+        if token in stopwords:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+    return out
+
+
+def _build_grounding_blob(structured_facts_blob: str, docs: list[LCDocument]) -> str:
+    parts: list[str] = []
+    if structured_facts_blob:
+        parts.append(str(structured_facts_blob))
+
+    for doc in docs:
+        parts.append(str(doc.page_content or ""))
+        metadata = doc.metadata or {}
+        for key in ("name", "job_title", "company_name", "client_name", "project_name", "certification_name"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                parts.append(value.strip())
+        certifications = metadata.get("certifications")
+        if isinstance(certifications, list):
+            for cert in certifications:
+                cert_text = str(cert or "").strip()
+                if cert_text:
+                    parts.append(cert_text)
+
+    return _normalize_for_match(" ".join(parts))
+
+
+def _is_answer_grounded(answer: str, structured_facts_blob: str, docs: list[LCDocument]) -> bool:
+    """Last-resort safety net: only blocks answers that share ZERO tokens with
+    the evidence. This catches pure hallucinations (made-up people/companies)
+    without interfering with reasoning or paraphrased answers from real data."""
+    normalized_answer = _normalize_for_match(answer)
+    if not normalized_answer:
+        return False
+    if _normalize_for_match(NO_INFO_REPLY) in normalized_answer:
+        return True
+    if "timed out" in normalized_answer:
+        return True
+    if "i don" in normalized_answer or "don t have" in normalized_answer:
+        # LLM explicitly saying it doesn't know — always valid.
+        return True
+
+    answer_tokens = _signal_tokens(normalized_answer)
+    if not answer_tokens:
+        # Very short generic answer — pass through.
+        return True
+
+    evidence_blob = _build_grounding_blob(structured_facts_blob, docs)
+    if not evidence_blob:
+        # No evidence to compare against — can't verify, let through.
+        return True
+
+    matched = [token for token in answer_tokens if _contains_word(evidence_blob, token)]
+    # Only reject if ZERO overlap — a real answer will always reference at
+    # least one name, certification, company, or skill from the data.
+    return len(matched) > 0
 
 
 def build_chain():
@@ -1153,14 +1315,17 @@ Rules:
                 "system",
                 """Select explicit evidence rows that directly support answering the query.
 Return strict JSON only:
-{"query_type":"category_filter|other","selected_evidence_ids":["E1","E2"],"notes":"..."}
+{"query_type":"category_filter|listing|other","selected_evidence_ids":["E1","E2"],"notes":"..."}
 Rules:
 - Use only ids from EvidenceCatalog.
 - Set query_type=category_filter when the user asks membership/filter/category/comparison across people
   (examples: who has worked for banks, healthcare organizations, telecom, cybersecurity).
 - For category_filter, be conservative: select only rows with direct lexical evidence for the target category.
 - Do not infer category from unrelated organizations; if uncertain, select no rows.
-- For non-category queries, set query_type=other and selected_evidence_ids=[].""",
+- Set query_type=listing when the user asks to list, enumerate, or summarize all employees or the workforce
+  (examples: who are the employees, list all employees, how many employees do we have, show me the team).
+  For listing queries, set selected_evidence_ids=[].
+- For non-category, non-listing queries, set query_type=other and selected_evidence_ids=[].""",
             ),
             ("human", "StandaloneQuery:\n{standalone_query}\n\nEvidenceCatalog:\n{evidence_catalog}"),
         ]
@@ -1203,7 +1368,7 @@ Rules:
             raw = llm.invoke(messages)
             obj = parse_json_object(str(getattr(raw, "content", "") or "").strip()) or {}
             query_type = str(obj.get("query_type") or "other").strip().lower()
-            if query_type not in {"category_filter", "other"}:
+            if query_type not in {"category_filter", "listing", "other"}:
                 query_type = "other"
 
             selected_ids_raw = obj.get("selected_evidence_ids")
@@ -1260,19 +1425,12 @@ Reasoning guidelines:
 5) Stay consistent with RecentChatHistory unless newly retrieved facts clearly change the answer.
 6) If information is missing or ambiguous, reply exactly: "I don't have that information."
 7) Keep answers concise and factual.
-8) If GroundedEvidence.query_type is "category_filter":
-   - Use only GroundedEvidence.selected_rows to determine membership.
-   - Do not add entities or employees that are not present in selected_rows.
-   - If selected_rows is empty, reply exactly: "I don't have that information."
 
 RecentChatHistory:
 {recent_chat_history}
 
-StandaloneQuery:
+Question:
 {standalone_query}
-
-GroundedEvidence:
-{grounded_evidence}
 
 StructuredFacts:
 {structured_facts}
@@ -1303,24 +1461,39 @@ Context:
                 return "The language model request timed out. Please try again."
             raise
 
+    _GREETING_WORDS = {"hello", "hi", "hey", "greetings", "bonjour", "salut", "yo", "sup"}
+    _GREETING_REPLY = (
+        "Hello! I'm your employee database assistant. "
+        "I can help you find information about employees, their skills, "
+        "certifications, projects, and experience. What would you like to know?"
+    )
+
     def _invoke(inputs: dict) -> dict:
         user_input = str(inputs.get("input") or "").strip()
         chat_history = inputs.get("chat_history", []) or []
+
+        # Handle greetings directly — no need for retrieval + LLM.
+        input_norm = _normalize_for_match(user_input)
+        input_words = set(input_norm.split())
+        if input_words and input_words.issubset(_GREETING_WORDS | {"", "there", "everyone", "all"}):
+            return {
+                "answer": _GREETING_REPLY,
+                "context": [],
+            }
 
         standalone_query, retrieval_queries = _plan_llm_first_queries(user_input, chat_history)
         docs = _retrieve_union(retrieval_queries)
         if not docs:
             docs = retriever.invoke(standalone_query)
-        structured_facts = _build_structured_facts(docs, query_text=standalone_query)
-        grounded_evidence_obj = _select_llm_first_evidence(standalone_query, docs)
-        if (
-            str(grounded_evidence_obj.get("query_type") or "").strip().lower() == "category_filter"
-            and not grounded_evidence_obj.get("selected_rows")
-        ):
+        if not docs:
             return {
-                "answer": "I don't have that information.",
-                "context": docs,
+                "answer": NO_INFO_REPLY,
+                "context": [],
             }
+
+        # Build structured facts from retrieved docs — this is the LLM's primary data source.
+        structured_facts = _build_structured_facts(docs, query_text=standalone_query)
+
         recent_history_blob = _recent_history_blob(chat_history)
         answer = _safe_chain_invoke(
             qa_chain_llm_first,
@@ -1330,9 +1503,13 @@ Context:
                 "context": docs,
                 "structured_facts": structured_facts,
                 "recent_chat_history": recent_history_blob,
-                "grounded_evidence": json.dumps(grounded_evidence_obj, ensure_ascii=False, indent=2),
             },
         )
+
+        # Lightweight safety net: only reject genuinely hallucinated answers.
+        if not _is_answer_grounded(str(answer or ""), structured_facts, docs):
+            answer = NO_INFO_REPLY
+
         return {
             "answer": answer,
             "context": docs,
@@ -1348,11 +1525,85 @@ Context:
         history_messages_key="chat_history",
         output_messages_key="answer",
     )
-    return conversational_chain
+
+    def _stream_invoke(user_input: str, session_id: str):
+        """Sync generator yielding NDJSON lines: context first, then tokens."""
+        import json as _json
+
+        history = store[session_id]
+        chat_history = history.messages
+
+        # Greetings — no retrieval needed
+        input_norm = _normalize_for_match(user_input)
+        input_words = set(input_norm.split())
+        if input_words and input_words.issubset(_GREETING_WORDS | {"", "there", "everyone", "all"}):
+            yield _json.dumps({"type": "context", "data": []}) + "\n"
+            yield _json.dumps({"type": "token", "data": _GREETING_REPLY}) + "\n"
+            yield _json.dumps({"type": "done"}) + "\n"
+            history.add_user_message(user_input)
+            history.add_ai_message(_GREETING_REPLY)
+            return
+
+        # Retrieval
+        standalone_query, retrieval_queries = _plan_llm_first_queries(user_input, chat_history)
+        docs = _retrieve_union(retrieval_queries)
+        if not docs:
+            docs = retriever.invoke(standalone_query)
+
+        # Yield context immediately so cards appear first
+        context_data = [
+            {"content": doc.page_content, "metadata": doc.metadata}
+            for doc in docs
+        ]
+        yield _json.dumps({"type": "context", "data": context_data}) + "\n"
+
+        if not docs:
+            yield _json.dumps({"type": "token", "data": NO_INFO_REPLY}) + "\n"
+            yield _json.dumps({"type": "done"}) + "\n"
+            history.add_user_message(user_input)
+            history.add_ai_message(NO_INFO_REPLY)
+            return
+
+        structured_facts = _build_structured_facts(docs, query_text=standalone_query)
+        recent_history_blob = _recent_history_blob(chat_history)
+
+        # Stream LLM answer token-by-token
+        full_answer = ""
+        try:
+            for chunk in qa_chain_llm_first.stream({
+                "input": user_input,
+                "standalone_query": standalone_query,
+                "context": docs,
+                "structured_facts": structured_facts,
+                "recent_chat_history": recent_history_blob,
+            }):
+                token = str(chunk or "")
+                if token:
+                    full_answer += token
+                    yield _json.dumps({"type": "token", "data": token}) + "\n"
+        except Exception as exc:
+            err = str(exc or "")
+            if "timeout" in _normalize_for_match(err):
+                full_answer = "The language model request timed out. Please try again."
+            else:
+                full_answer = "An error occurred while generating the response."
+            yield _json.dumps({"type": "token", "data": full_answer}) + "\n"
+
+        # Grounding safety net
+        if full_answer and not _is_answer_grounded(full_answer, structured_facts, docs):
+            yield _json.dumps({"type": "replace", "data": NO_INFO_REPLY}) + "\n"
+            full_answer = NO_INFO_REPLY
+
+        yield _json.dumps({"type": "done"}) + "\n"
+        history.add_user_message(user_input)
+        history.add_ai_message(full_answer)
+
+    return {"chain": conversational_chain, "stream": _stream_invoke}
 
 
 def chat_loop():
-    chain = build_chain()
+    built = build_chain()
+    chain = built["chain"]
     session_id = "cli"
     print("Bid Manager ready. Type 'exit' to quit.\n")
 

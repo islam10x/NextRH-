@@ -9,6 +9,10 @@ import { User } from '../users/entities/user.entity';
 export class RagService {
     private readonly logger = new Logger(RagService.name);
     private readonly aiServiceBaseUrl: string;
+    private readonly ragOutOfScopeMessage =
+        'Sorry, I can only answer questions based on our employee RAG data (employees, skills, certifications, projects, and experience).';
+    private readonly ragNoDataMessage =
+        "Sorry, I couldn't find that information in our employee RAG data.";
 
     constructor(
         private readonly configService: ConfigService,
@@ -107,6 +111,86 @@ export class RagService {
     }
 
     /**
+     * Stream a RAG chat response. Proxies the AI service NDJSON stream,
+     * intercepts the context event to build result cards, and forwards
+     * everything to the caller as NDJSON lines.
+     */
+    async *chatStream(
+        message: string,
+        sessionId: string,
+        userId?: string,
+    ): AsyncGenerator<string> {
+        const startedAt = Date.now();
+        let fullAnswer = '';
+        let contextArr: any[] = [];
+
+        try {
+            const url = `${this.aiServiceBaseUrl}/api/v1/rag/chat/stream`;
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message, session_id: sessionId }),
+            });
+
+            if (!response.ok) {
+                throw new Error(`AI stream failed: ${response.status}`);
+            }
+
+            const reader = response.body?.getReader();
+            if (!reader) throw new Error('No readable stream from AI service');
+
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed) continue;
+
+                    try {
+                        const event = JSON.parse(trimmed);
+
+                        if (event.type === 'context') {
+                            contextArr = Array.isArray(event.data) ? event.data : [];
+                            // Build result cards from context and send them first
+                            const results = this.buildResults(contextArr, message);
+                            yield JSON.stringify({ type: 'results', data: results }) + '\n';
+                        } else if (event.type === 'token') {
+                            fullAnswer += event.data || '';
+                            yield trimmed + '\n';
+                        } else if (event.type === 'replace') {
+                            fullAnswer = event.data || '';
+                            yield trimmed + '\n';
+                        } else if (event.type === 'done') {
+                            yield trimmed + '\n';
+                        }
+                    } catch {
+                        // Skip malformed lines
+                    }
+                }
+            }
+        } catch (error) {
+            this.logger.error(`Stream error: ${error.message}`);
+            yield JSON.stringify({ type: 'token', data: 'Sorry, I could not reach the AI service.' }) + '\n';
+            yield JSON.stringify({ type: 'done' }) + '\n';
+            fullAnswer = 'Sorry, I could not reach the AI service.';
+        }
+
+        // Log the query after the stream completes
+        const elapsedMs = Date.now() - startedAt;
+        const extractedEntities = this.extractEntities(contextArr);
+        const resultCount = this.resolveResultCount(contextArr, extractedEntities, []);
+        await this.safeLogQuery(userId, message, extractedEntities, resultCount, elapsedMs);
+    }
+
+    /**
      * Delete RAG vectors for a specific user (best-effort).
      */
     async deleteUserVectors(userId: string): Promise<void> {
@@ -202,8 +286,9 @@ export class RagService {
     }> {
         if (!Array.isArray(context)) return [];
 
-        const allowDirectoryFallback = this.isDirectoryQuery(query);
         const queryTokens = this.extractQueryTokens(query);
+        // Generic fallback policy: if the query is broad/underspecified, allow directory rows as a backup.
+        const allowDirectoryFallback = queryTokens.length <= 1;
         const minYears = this.extractMinExperienceYears(query);
         const directoryIndex = new Map<string, { role?: string; experienceYears?: number; companies: Set<string> }>();
 
@@ -475,21 +560,6 @@ export class RagService {
         return tokens.every((token) => normalized.includes(token));
     }
 
-    private isDirectoryQuery(query?: string): boolean {
-        if (!query) return false;
-        const normalized = query.toLowerCase();
-        return (
-            normalized.includes('list employees') ||
-            normalized.includes('all employees') ||
-            normalized.includes('show employees') ||
-            normalized.includes('employee directory') ||
-            normalized.includes('team directory') ||
-            normalized.includes('list team') ||
-            normalized.includes('team members') ||
-            normalized.includes('everyone')
-        );
-    }
-
     private extractQueryTokens(query?: string): string[] {
         if (!query) return [];
         const stopwords = new Set([
@@ -498,6 +568,7 @@ export class RagService {
             'please', 'need', 'want', 'looking', 'that', 'those', 'these', 'which', 'whose', 'from',
             'certification', 'certifications', 'skill', 'skills', 'project', 'projects',
             'experience', 'years', 'year', 'yrs', 'yr', 'exp',
+            'cert', 'certs', 'certificate', 'certificates', 'certified',
         ]);
         return query
             .toLowerCase()
@@ -513,10 +584,234 @@ export class RagService {
             });
     }
 
+    private normalizeForMatch(value?: string): string {
+        return String(value || '')
+            .toLowerCase()
+            .replace(/[^a-z0-9\s]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    private escapeRegex(value: string): string {
+        return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    private containsWholeWord(text: string, token: string): boolean {
+        const normalizedText = this.normalizeForMatch(text);
+        const normalizedToken = this.normalizeForMatch(token);
+        if (!normalizedText || !normalizedToken) return false;
+        const pattern = new RegExp(`\\b${this.escapeRegex(normalizedToken)}\\b`, 'i');
+        return pattern.test(normalizedText);
+    }
+
+
+    private extractSignalTokens(text?: string): string[] {
+        const normalized = this.normalizeForMatch(text);
+        if (!normalized) return [];
+        const stopwords = new Set([
+            'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'about', 'your', 'their',
+            'have', 'has', 'had', 'was', 'were', 'are', 'is', 'who', 'what', 'when', 'where', 'why', 'how',
+            'list', 'show', 'find', 'search', 'please', 'could', 'would', 'should', 'there', 'them', 'they',
+            'then', 'than', 'also', 'only', 'just', 'more', 'less', 'most', 'least', 'info', 'information',
+            'employee', 'employees', 'profile', 'profiles', 'project', 'projects', 'skill', 'skills',
+            'certification', 'certifications', 'experience',
+        ]);
+        const tokens = normalized.split(/\s+/).filter(Boolean);
+        const out: string[] = [];
+        const seen = new Set<string>();
+        for (const token of tokens) {
+            if (token.length < 3) continue;
+            if (stopwords.has(token)) continue;
+            if (seen.has(token)) continue;
+            seen.add(token);
+            out.push(token);
+        }
+        return out;
+    }
+
+    private buildResultsBlob(results: Array<{
+        name: string;
+        role?: string;
+        experienceYears?: number;
+        companies?: string[];
+        certifications?: string[];
+        projects?: string[];
+        skills?: string[];
+    }>): string {
+        const parts: string[] = [];
+        for (const row of results) {
+            parts.push(String(row?.name || ''));
+            parts.push(String(row?.role || ''));
+            if (typeof row?.experienceYears === 'number') {
+                parts.push(String(row.experienceYears));
+            }
+            (row?.companies || []).forEach((v) => parts.push(String(v || '')));
+            (row?.certifications || []).forEach((v) => parts.push(String(v || '')));
+            (row?.projects || []).forEach((v) => parts.push(String(v || '')));
+            (row?.skills || []).forEach((v) => parts.push(String(v || '')));
+        }
+        return this.normalizeForMatch(parts.join(' '));
+    }
+
+    private buildContextBlob(context: any[]): string {
+        if (!Array.isArray(context) || context.length === 0) return '';
+        const parts: string[] = [];
+        for (const item of context) {
+            if (typeof item?.content === 'string' && item.content.trim()) {
+                parts.push(item.content.trim());
+            }
+            const meta = item?.metadata || {};
+            const push = (value: any) => {
+                if (typeof value === 'string' && value.trim()) {
+                    parts.push(value.trim());
+                }
+            };
+            push(meta?.name);
+            push(meta?.job_title);
+            push(meta?.company_name);
+            push(meta?.client_name);
+            push(meta?.project_name);
+            push(meta?.certification_name);
+            if (Array.isArray(meta?.certifications)) {
+                meta.certifications.forEach((c: any) => push(c));
+            }
+        }
+        return this.normalizeForMatch(parts.join(' '));
+    }
+
+    private computeTokenCoverage(tokens: string[], normalizedBlob: string): number {
+        if (!tokens.length || !normalizedBlob) return 0;
+        let matched = 0;
+        for (const token of tokens) {
+            if (this.containsWholeWord(normalizedBlob, token) || (token.length >= 5 && normalizedBlob.includes(token))) {
+                matched += 1;
+            }
+        }
+        return matched / tokens.length;
+    }
+
+    private isQueryGroundedInContext(
+        query: string,
+        context: any[],
+        results: Array<{
+            name: string;
+            role?: string;
+            experienceYears?: number;
+            companies?: string[];
+            certifications?: string[];
+            projects?: string[];
+            skills?: string[];
+        }>,
+    ): boolean {
+        // Trust the retriever: if it returned context docs or the results builder
+        // found employee cards, the query is related to our employee data.
+        // The AI service already has its own grounding (system prompt + safety net).
+        if (Array.isArray(context) && context.length > 0) return true;
+        if (Array.isArray(results) && results.length > 0) return true;
+
+        // No context at all — the retriever found nothing relevant.
+        return false;
+    }
+
+    private isAnswerGroundedInResults(
+        answer: string,
+        results: Array<{
+            name: string;
+            role?: string;
+            experienceYears?: number;
+            companies?: string[];
+            certifications?: string[];
+            projects?: string[];
+            skills?: string[];
+        }>,
+    ): boolean {
+        const normalized = this.normalizeForMatch(answer);
+        if (!normalized) return false;
+        const knownSafeReplies = [
+            this.normalizeForMatch(this.ragOutOfScopeMessage),
+            this.normalizeForMatch(this.ragNoDataMessage),
+        ];
+        if (knownSafeReplies.includes(normalized)) return true;
+
+        const answerTokens = this.extractSignalTokens(answer);
+        if (!answerTokens.length) return false;
+        const resultsBlob = this.buildResultsBlob(results);
+        const coverage = this.computeTokenCoverage(answerTokens, resultsBlob);
+        return coverage >= 0.3;
+    }
+
+    private buildResultsSummary(results: Array<{
+        name: string;
+        role?: string;
+        experienceYears?: number;
+        companies?: string[];
+        certifications?: string[];
+        projects?: string[];
+        skills?: string[];
+    }>): string {
+        if (!Array.isArray(results) || results.length === 0) {
+            return this.ragNoDataMessage;
+        }
+        const lines = results.slice(0, 5).map((row) => {
+            const parts: string[] = [];
+            parts.push(String(row?.name || '').trim());
+            if (row?.role) parts.push(`role: ${row.role}`);
+            if (typeof row?.experienceYears === 'number') parts.push(`experience: ${row.experienceYears} years`);
+            if (row?.companies?.length) parts.push(`companies: ${row.companies.slice(0, 3).join(', ')}`);
+            if (row?.certifications?.length) parts.push(`certifications: ${row.certifications.slice(0, 3).join(', ')}`);
+            return parts.filter(Boolean).join(' | ');
+        }).filter(Boolean);
+        if (!lines.length) return this.ragNoDataMessage;
+        return lines.join('\n');
+    }
+
+    private buildGroundedAnswer(
+        query: string,
+        context: any[],
+        results: Array<{
+            name: string;
+            role?: string;
+            experienceYears?: number;
+            companies?: string[];
+            certifications?: string[];
+            projects?: string[];
+            skills?: string[];
+        }>,
+        llmAnswer?: unknown,
+    ): string {
+        const candidate = String(llmAnswer || '').trim();
+
+        // If the AI service returned a direct answer (greeting, meta-response, or
+        // 'I don't have that information'), trust it immediately without grounding checks.
+        if (candidate && (!Array.isArray(context) || context.length === 0)) {
+            return candidate;
+        }
+
+        // Gate: if the retriever found nothing related, the query is out of scope.
+        if (!this.isQueryGroundedInContext(query, context, results)) {
+            return this.ragOutOfScopeMessage;
+        }
+
+        // Trust the AI service's LLM answer — it already has its own grounding
+        // (system prompt instructs "never invent data" + post-LLM safety net).
+        if (candidate) {
+            return candidate;
+        }
+
+        // Fallback: AI service returned no answer, build summary from results.
+        if (!Array.isArray(results) || results.length === 0) {
+            return this.ragNoDataMessage;
+        }
+        return this.buildResultsSummary(results);
+    }
+
     private hasTokenMatch(haystack: string, tokens: string[]): boolean {
         if (!haystack || tokens.length === 0) return false;
-        const normalized = haystack.toLowerCase();
-        return tokens.some((token) => normalized.includes(token));
+        const normalized = this.normalizeForMatch(haystack);
+        return tokens.some((token) => {
+            if (this.containsWholeWord(normalized, token)) return true;
+            return token.length >= 4 && normalized.includes(token);
+        });
     }
 
     private extractMinExperienceYears(query?: string): number | null {

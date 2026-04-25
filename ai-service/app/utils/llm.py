@@ -86,6 +86,10 @@ def resolve_rag_chat_model() -> str:
 def build_rag_chat_llm(temperature: float = 0.0, timeout: float | None = None):
     """Build a LangChain chat model for RAG chatbot usage only."""
     model_name = resolve_rag_chat_model()
+    effective_timeout = timeout if timeout is not None else settings.RAG_CHAT_TIMEOUT_SECONDS
+    client_kwargs: dict[str, float] = {}
+    if isinstance(effective_timeout, (int, float)) and float(effective_timeout) > 0:
+        client_kwargs["timeout"] = float(effective_timeout)
 
     from langchain_ollama import ChatOllama  # Imported lazily to keep optional dependency.
 
@@ -93,21 +97,44 @@ def build_rag_chat_llm(temperature: float = 0.0, timeout: float | None = None):
         model=model_name,
         base_url=settings.OLLAMA_URL,
         temperature=temperature,
-        disable_streaming=True,
-        num_ctx=4096,
+        client_kwargs=client_kwargs,
+        disable_streaming=False,
+        num_ctx=8192,
     )
     return llm, model_name, "ollama"
 
 def parse_json_object(raw_text: str) -> Optional[Dict[str, Any]]:
-    """Robustly parse a JSON object from text, finding the first valid {} block."""
+    """Robustly parse a JSON object from text, finding the first valid {} block.
+
+    Also handles:
+    - Markdown code fences (```json ... ```)
+    - Array-of-objects responses (flattened into a single dict)
+    """
     text = str(raw_text or "").strip()
     if not text:
         return None
-        
+
+    # Strip markdown code fences if present.
+    text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+    text = re.sub(r"\n?```\s*$", "", text)
+    text = text.strip()
+
+    # Small models frequently inject invalid trailing commas at the end of arrays/objects.
+    # Standard python json.loads crashes if it sees `[1, 2, ]`. Let's strip them!
+    text = re.sub(r',\s*([\]}])', r'\1', text)
+
     try:
         data = json.loads(text)
         if isinstance(data, dict):
             return data
+        # Handle array-of-objects: merge all dicts into one.
+        if isinstance(data, list):
+            merged = {}
+            for item in data:
+                if isinstance(item, dict):
+                    merged.update(item)
+            if merged:
+                return merged
     except Exception:
         pass
 
@@ -121,3 +148,4 @@ def parse_json_object(raw_text: str) -> Optional[Dict[str, Any]]:
         except Exception:
             return None
     return None
+

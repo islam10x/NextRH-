@@ -1,4 +1,4 @@
-﻿import fitz
+import fitz
 import re
 import unicodedata
 from bisect import bisect_right
@@ -68,7 +68,255 @@ class TemplateCVParser:
         data["projects"] = self._extract_projects(text, lines)
         data["skills"] = self._extract_skills(text, lines)
 
+        # DOCX files are table-first; prefer native table extraction to avoid row shifts.
+        if file_path.lower().endswith(".docx"):
+            docx_data = self._extract_docx_structured_data(file_path)
+            if docx_data.get("experience"):
+                data["experience"] = docx_data["experience"]
+            if docx_data.get("certifications"):
+                data["certifications"] = docx_data["certifications"]
+            if docx_data.get("education"):
+                data["education"] = docx_data["education"]
+
         return data
+
+    def _extract_docx_structured_data(self, file_path: str) -> Dict[str, List[Dict[str, str]]]:
+        """
+        Extract table-backed sections directly from DOCX.
+        This bypasses text-flow issues where cell rows get merged/shuffled.
+        """
+        try:
+            import docx  # type: ignore
+            from docx.document import Document as DocxDocument  # type: ignore
+            from docx.oxml.table import CT_Tbl  # type: ignore
+            from docx.oxml.text.paragraph import CT_P  # type: ignore
+            from docx.table import Table  # type: ignore
+            from docx.text.paragraph import Paragraph  # type: ignore
+        except Exception as exc:
+            logger.warning(f"DOCX parser dependency unavailable: {exc}")
+            return {"experience": [], "certifications": [], "education": [], "projects": []}
+
+        def iter_block_items(parent: DocxDocument):
+            for child in parent.element.body.iterchildren():
+                if isinstance(child, CT_P):
+                    yield Paragraph(child, parent)
+                elif isinstance(child, CT_Tbl):
+                    yield Table(child, parent)
+
+        def cell_text(cell: Any) -> str:
+            parts = [self._clean_text(paragraph.text) for paragraph in getattr(cell, "paragraphs", [])]
+            return self._clean_text(" ".join(part for part in parts if part))
+
+        extracted: Dict[str, List[Dict[str, str]]] = {
+            "experience": [],
+            "certifications": [],
+            "education": [],
+            "projects": [],
+        }
+
+        try:
+            doc = docx.Document(file_path)
+        except Exception as exc:
+            logger.warning(f"Failed to open DOCX for table extraction: {exc}")
+            return extracted
+
+        current_section = ""
+        for block in iter_block_items(doc):
+            if block.__class__.__name__ == "Paragraph":
+                paragraph_text = self._clean_text(getattr(block, "text", ""))
+                if not paragraph_text:
+                    continue
+
+                norm = self._normalize_for_match(paragraph_text)
+                if "experience professionnelle" in norm:
+                    current_section = "experience"
+                elif re.search(r"\bcertification(s)?\b|\bcertificat(s)?\b", norm):
+                    current_section = "certifications"
+                elif "formation academique" in norm or norm in {"education", "formation", "formations"}:
+                    current_section = "education"
+                elif "experience academique" in norm or re.search(r"\bprojects?\b|\bprojets?\b", norm):
+                    current_section = "projects"
+                elif re.search(r"\bskills?\b|\bcompetence(s)?\b", norm):
+                    current_section = ""
+                continue
+
+            rows: List[List[str]] = []
+            for row in getattr(block, "rows", []):
+                rows.append([cell_text(cell) for cell in getattr(row, "cells", [])])
+            if not rows:
+                continue
+
+            header = rows[0]
+            header_cells_norm = [self._normalize_for_match(cell) for cell in header if cell]
+            header_norm = " ".join(header_cells_norm)
+
+            table_type = ""
+            if ("certificat" in header_norm or "certification" in header_norm or "certificate" in header_norm) and "date" in header_norm:
+                table_type = "certifications"
+            elif "institution" in header_norm and ("diplome" in header_norm or "degree" in header_norm):
+                table_type = "education"
+            elif "periode" in header_norm and ("organisme" in header_norm or "fonction" in header_norm):
+                table_type = "experience"
+            else:
+                has_period_col = any(
+                    re.search(r"\b(annee|annees|year|years|periode|period|date)\b", cell_norm)
+                    for cell_norm in header_cells_norm
+                )
+                has_client_col = any(
+                    re.search(r"\b(client|clients|company|societe|entreprise|organisme)\b", cell_norm)
+                    for cell_norm in header_cells_norm
+                )
+                has_project_col = any(
+                    re.search(r"\b(project|projects|projet|projets|description|mission)\b", cell_norm)
+                    for cell_norm in header_cells_norm
+                )
+                if has_period_col and has_client_col and has_project_col:
+                    table_type = "projects"
+                elif current_section in {"experience", "certifications", "education", "projects"}:
+                    table_type = current_section
+            if not table_type:
+                continue
+
+            data_rows = rows[1:] if header_norm else rows
+            if table_type == "certifications":
+                for row in data_rows:
+                    name = self._clean_text(row[0] if len(row) > 0 else "")
+                    date_raw = self._clean_text(row[1] if len(row) > 1 else "")
+                    if not name or self._is_cert_header_or_column_line(name):
+                        continue
+
+                    full_date = ""
+                    full_match = re.search(r"\b\d{1,2}[/-]\d{1,2}[/-](?:19|20)\d{2}\b", date_raw)
+                    if full_match:
+                        full_date = full_match.group(0)
+                    else:
+                        full_date = self._extract_month_year(date_raw) or date_raw
+
+                    extracted["certifications"].append(
+                        {
+                            "name": name,
+                            "date_obtained": self._clean_text(full_date),
+                        }
+                    )
+                continue
+
+            if table_type == "education":
+                for row in data_rows:
+                    period = self._clean_text(row[0] if len(row) > 0 else "")
+                    institution = self._clean_text(row[1] if len(row) > 1 else "")
+                    degree = self._clean_text(" ".join(row[2:]) if len(row) > 2 else "")
+                    if not period and not institution and not degree:
+                        continue
+
+                    period_norm = self._normalize_for_match(period)
+                    if period_norm in {"periode", "period"} and self._normalize_for_match(institution) == "institution":
+                        continue
+
+                    end_date = self._extract_docx_period_end(period)
+                    extracted["education"].append(
+                        {
+                            "end_date": end_date,
+                            "institution": institution,
+                            "degree": degree,
+                        }
+                    )
+                continue
+
+            if table_type == "experience":
+                for row in data_rows:
+                    period = self._clean_text(row[0] if len(row) > 0 else "")
+                    company = self._clean_text(row[1] if len(row) > 1 else "")
+                    title = self._clean_text(" ".join(row[2:]) if len(row) > 2 else "")
+                    if not period and not company and not title:
+                        continue
+
+                    period_norm = self._normalize_for_match(period)
+                    if period_norm in {"periode", "period"} and self._normalize_for_match(company) == "organisme":
+                        continue
+
+                    # Heuristic: some DOCX tables shift columns so a month token lands in the "company" column.
+                    # Example observed: period="Mai 2023", company="Février", title="Next Generation IT Stage PFE ..."
+                    if company and re.fullmatch(rf"(?i){self.MONTH_RE}", company.strip()):
+                        year_match = re.search(r"\b(19|20)\d{2}\b", period)
+                        if year_match:
+                            period = self._clean_text(f"{company} {year_match.group(0)} - {period}")
+                            recovered_company, recovered_title = self._split_company_and_title(title)
+                            if recovered_company and not recovered_title:
+                                recovered_company, recovered_title = self._split_company_title_fallback(title)
+                            if recovered_company:
+                                company = recovered_company
+                                title = recovered_title
+
+                    extracted["experience"].append(
+                        {
+                            "start_date": period,
+                            "company": company,
+                            "title": title,
+                            "end_date": "",
+                            "description": "",
+                        }
+                    )
+                continue
+
+            if table_type == "projects":
+                for row in data_rows:
+                    date_value = self._clean_text(row[0] if len(row) > 0 else "")
+                    client_value = self._clean_text(row[1] if len(row) > 2 else "")
+                    if len(row) > 2:
+                        description_value = self._clean_text(" ".join(row[2:]))
+                    else:
+                        description_value = self._clean_text(" ".join(row[1:]) if len(row) > 1 else "")
+
+                    if not date_value and not client_value and not description_value:
+                        continue
+
+                    date_norm = self._normalize_for_match(date_value)
+                    client_norm = self._normalize_for_match(client_value)
+                    desc_norm = self._normalize_for_match(description_value)
+                    if (
+                        date_norm in {"annee", "annees", "year", "years", "periode", "period", "date"}
+                        and client_norm in {"client", "clients", "company", "societe", "entreprise", "organisme", ""}
+                        and desc_norm in {"project", "projects", "projet", "projets", "description", "mission", "formation"}
+                    ):
+                        continue
+
+                    extracted["projects"].append(
+                        {
+                            "date": date_value,
+                            "client": client_value,
+                            "description": description_value,
+                        }
+                    )
+                continue
+
+        return extracted
+
+    def _extract_docx_period_end(self, value: str) -> str:
+        text = self._clean_text(value)
+        if not text:
+            return ""
+
+        text_norm = self._normalize_for_match(text)
+        if re.search(r"\b(present|pr[eé]sent|current|en cours)\b", text_norm):
+            return "Present"
+
+        # If we have a range, keep the right side.
+        parts = re.split(rf"\s*{self.DASH_RE}\s*", text)
+        if len(parts) >= 2 and self._clean_text(parts[-1]):
+            right = self._clean_text(parts[-1])
+            right_norm = self._normalize_for_match(right)
+            if re.search(r"\b(present|pr[eé]sent|current|en cours)\b", right_norm):
+                return "Present"
+            return right
+
+        date_candidates = re.findall(
+            rf"(?i)(?:{self.MONTH_RE}\s+\d{{4}}|\d{{1,2}}/\d{{4}}|(?:19|20)\d{{2}})",
+            text,
+        )
+        if date_candidates:
+            return self._clean_text(date_candidates[-1])
+
+        return text
 
     def _build_layout_lines(
         self, page: fitz.Page, page_index: int, page_offset: float
@@ -172,15 +420,18 @@ class TemplateCVParser:
         return None
 
     def _extract_date_from_line(self, line: str) -> Optional[str]:
-        present_pattern = r"(?:present|pr(?:[eéè\u00e9\ufffd]|&eacute;)sent|current|aujourd['\u2019]?hui)"
-        dash_or_to = rf"(?:{self.DASH_RE}|[àa]|to|-)"
+        present_pattern = r"(?:present|pr(?:[eéè\u00e9\ufffd]|&eacute;)sent|current|aujourd['’\u2019]?hui|en\s+cours|[àa]\s+ce\s+jour|maintenant|now)"
+        dash_or_to = rf"(?:{self.DASH_RE}|[àa\ufffd]|to|-|jusqu['’\u2019\ufffd]?\s*[aà\ufffd]?)"
         
         date_patterns = [
             rf"(?i)\b(?:depuis|since)\s+{self.MONTH_RE}\s+\d{{4}}\b",
+            rf"(?i)\b\d{{1,2}}/\d{{1,2}}/\d{{4}}\s*{dash_or_to}\s*(?:\d{{1,2}}/\d{{1,2}}/\d{{4}}|\d{{1,2}}/\d{{4}}|\d{{4}}|{present_pattern})\b",
             rf"(?i)\b{self.MONTH_RE}\s+\d{{4}}\s*{dash_or_to}\s*(?:{self.MONTH_RE}\s+\d{{4}}|\d{{4}}|{present_pattern})\b",
+            rf"(?i)\b{self.MONTH_RE}\s+\d{{4}}\s*{dash_or_to}\s*{self.MONTH_RE}\b",
             rf"(?i)\b\d{{1,2}}/\d{{4}}\s*{dash_or_to}\s*(?:\d{{1,2}}/\d{{4}}|\d{{4}}|{present_pattern})\b",
             rf"(?i)\b\d{{4}}\s*{dash_or_to}\s*(?:\d{{4}}|{present_pattern})\b",
             rf"\b\d{{4}}\s*{self.DASH_RE}\s*\d{{4}}\b",
+            rf"(?i)\b\d{{1,2}}/\d{{1,2}}/\d{{4}}\b",
             rf"(?i)\b{self.MONTH_RE}\s+\d{{4}}\b",
             rf"(?i)\b(?:depuis|since)\s+\d{{1,2}}/\d{{4}}\b",
             rf"(?i)\b(?:depuis|since)\s+\d{{4}}\b",
@@ -191,7 +442,13 @@ class TemplateCVParser:
         for pattern in date_patterns:
             match = re.search(pattern, line)
             if match:
-                return match.group(0).strip()
+                date_str = match.group(0).strip()
+                # If the date is followed by a connector, include it
+                remaining = line[match.end():].strip()
+                connector_match = re.match(rf"^{dash_or_to}", remaining, re.IGNORECASE)
+                if connector_match:
+                    date_str += " " + connector_match.group(0).strip()
+                return date_str
         return None
 
     def _split_company_and_title(self, value: str) -> Tuple[str, str]:
@@ -222,6 +479,9 @@ class TemplateCVParser:
             r"\bcontract manager\b",
             r"\bchef de projet\b",
             r"\bproject manager\b",
+            r"\bstage\b",
+            r"\bpfe\b",
+            r"\bintern(?:ship)?\b",
             r"\bing[ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©e]nieur\b",
             r"\bengineer\b",
             r"\bconsultant\b",
@@ -418,7 +678,76 @@ class TemplateCVParser:
             return []
 
         for i in range(start_idx + 1, len(lines)):
+            # Section headers should be short; ignore long natural sentences
+            if len(lines[i].split()) > 7:
+                continue
             if any(self._match_keyword(lines[i], keyword) for keyword in end_keywords):
+                end_idx = i
+                break
+
+        return lines[start_idx:end_idx]
+
+    def _is_cert_section_header_line(self, line: str) -> bool:
+        line_clean = self._clean_text(line)
+        line_norm = self._normalize_for_match(line_clean)
+        if not line_norm:
+            return False
+
+        if line_norm in {
+            "certification",
+            "certifications",
+            "certificat",
+            "certificats",
+            "certificats obtenus",
+            "certificate",
+            "certificates",
+        }:
+            return True
+
+        has_cert_col = bool(
+            re.search(
+                r"\b(certificat|certificats|certification|certifications|certificate|certificates)\b",
+                line_norm,
+            )
+        )
+        has_date_col = bool(re.search(r"\b(date|obtention|obtained)\b", line_norm))
+        if has_cert_col and has_date_col:
+            return True
+
+        word_count = len(line_norm.split())
+        starts_with_cert = bool(
+            re.match(
+                r"^(certificat|certificats|certification|certifications|certificate|certificates)\b",
+                line_norm,
+            )
+        )
+        ends_with_cert = bool(
+            re.search(
+                r"\b(certificat|certificats|certification|certifications|certificate|certificates)$",
+                line_norm,
+            )
+        )
+        return word_count <= 6 and (starts_with_cert or ends_with_cert)
+
+    def _find_certification_section_lines(self, end_keywords: List[str], lines: List[str]) -> List[str]:
+        """Find certification lines while avoiding false starts inside project descriptions."""
+        start_idx = -1
+        end_idx = len(lines)
+
+        for i, line in enumerate(lines):
+            if self._is_cert_section_header_line(line):
+                start_idx = i
+                break
+
+        if start_idx == -1:
+            return []
+
+        for i in range(start_idx + 1, len(lines)):
+            current_line = lines[i]
+            if any(self._match_keyword(current_line, keyword) for keyword in end_keywords):
+                end_idx = i
+                break
+            if self._is_cert_section_header_line(current_line):
                 end_idx = i
                 break
 
@@ -587,6 +916,45 @@ class TemplateCVParser:
                 return address
         return ""
 
+    def _merge_broken_dates(self, lines: List[str]) -> List[str]:
+        """
+        Merge dates that have been fragmented across multiple lines by PyMuPDF
+        (e.g., due to narrow table columns wrapping text like 'Janvier 2017 - Octobre\\n2017').
+        """
+        merged_lines = []
+        present_pattern = r"(?:present|pr(?:[eéè\u00e9\ufffd]|&eacute;)sent|current|aujourd['’\u2019]?hui|en\s+cours|[àa]\s+ce\s+jour|maintenant|now)"
+        dash_or_to = rf"(?:{self.DASH_RE}|[àa\ufffd]|to|-|jusqu['’\u2019\ufffd]?\s*[aà\ufffd]?)"
+        month_re = self.MONTH_RE
+        
+        dangling_date_pat = re.compile(
+            rf"(?i)(\b{month_re}\s+\d{{4}}\s*{dash_or_to}\s*{month_re}|\b\d{{1,2}}/\d{{4}}\s*{dash_or_to}|\b{month_re}\s+\d{{4}}\s*{dash_or_to}|\b(?:depuis|since)\s+(?:{month_re}\s+\d{{4}}|\d{{4}}))\s*$"
+        )
+        completion_pat = re.compile(
+            rf"(?i)^(?:\d{{4}}\s*{dash_or_to}\s*{present_pattern}|\d{{4}}|\s*{dash_or_to}\s*(?:{present_pattern}|\d{{4}})|{present_pattern})"
+        )
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            while i + 1 < len(lines):
+                next_line = lines[i+1].strip()
+                is_dangling = dangling_date_pat.search(line)
+                is_completion = completion_pat.search(next_line) or re.fullmatch(r"(?i)\d{4}", next_line)
+
+                ends_with_date = re.search(rf"(?i)(\b{month_re}\s+\d{{4}}|\b\d{{1,2}}/\d{{4}}|\b\d{{4}})\s*$", line)
+                starts_with_dash = re.match(rf"(?i)^{dash_or_to}", next_line)
+                
+                if (is_dangling and is_completion) or (ends_with_date and starts_with_dash):
+                    line = f"{line} {next_line}"
+                    i += 1
+                else:
+                    break
+            
+            merged_lines.append(line)
+            i += 1
+            
+        return merged_lines
+
     def _extract_experience(self, text: str, lines: List[str]) -> List[Dict[str, str]]:
         """Extract work experience entries."""
         start_keywords = [
@@ -614,8 +982,13 @@ class TemplateCVParser:
         if not section_lines:
             return []
 
+        section_lines = self._merge_broken_dates(section_lines)
+
         experiences: List[Dict[str, str]] = []
         current_exp: Dict[str, str] = {}
+
+        label_mode = False
+        current_label = None
 
         for raw_line in section_lines:
             raw_payload = raw_line.strip()
@@ -625,9 +998,98 @@ class TemplateCVParser:
             if self._is_header_line(line, "experience"):
                 continue
 
+            # Handle PyMuPDF glued lines e.g. "➔ CiscoDate : 2019"
+            # Split on label keywords that appear mid-line
+            split_line = re.sub(
+                r"(?<!^)(Date\s*:|Soci(?:e|é)t(?:e|é)\s*:|Fonction\s*:|Description\s*:|Technologies\s*:|Pays\s*:)",
+                r"\n\1", line, flags=re.IGNORECASE
+            )
+
+            handled_by_label = False
+            for sub_line in split_line.split("\n"):
+                sub_line = sub_line.strip()
+                if not sub_line:
+                    continue
+
+                # Check for Label-Value format (Next Step template style)
+                label_match = re.match(r"^(Date|Soci(?:e|é)t(?:e|é)|Fonction|Description|Technologies|Pays)\s*:\s*(.*)", sub_line, re.IGNORECASE)
+                if label_match:
+                    label_mode = True
+                    handled_by_label = True
+                    label_name = label_match.group(1).capitalize()
+                    label_name = re.sub(r'Soci(?:e|é)t(?:e|é)', 'Société', label_name, flags=re.IGNORECASE)
+                    label_value = label_match.group(2)
+                    current_label = label_name
+
+                    if label_name == "Date":
+                        if current_exp.get("start_date") or current_exp.get("company"):
+                            experiences.append(current_exp)
+                            current_exp = {}
+                        current_exp["start_date"] = label_value
+                    elif label_name == "Société":
+                        current_exp["company"] = label_value
+                    elif label_name == "Fonction":
+                        current_exp["title"] = label_value
+                    elif label_name in ["Description", "Technologies", "Pays"]:
+                        existing_desc = current_exp.get("description", "")
+                        separator = "\n" if existing_desc else ""
+                        current_exp["description"] = f"{existing_desc}{separator}{label_name} : {label_value}"
+                    continue
+
+                if label_mode and current_label:
+                    handled_by_label = True
+                    # Only Description/Technologies/Pays accumulate multi-line content.
+                    # Société and Fonction are single-line; unlabeled continuations go to description.
+                    if current_label in ["Description", "Technologies", "Pays", "Date"]:
+                        existing_desc = current_exp.get("description", "")
+                        separator = "\n" if existing_desc else ""
+                        current_exp["description"] = f"{existing_desc}{separator}{sub_line}".strip()
+                    else:
+                        # Société/Fonction continuation lines are really description overflow
+                        existing_desc = current_exp.get("description", "")
+                        separator = "\n" if existing_desc else ""
+                        current_exp["description"] = f"{existing_desc}{separator}{sub_line}".strip()
+                    continue
+
+            if handled_by_label:
+                continue
+
+            # Standard parsing
+            line_clean = line
+            if not line_clean:
+                continue
+
+            # Intercept orphaned date completions (e.g., "- Aujourd'hui", "2017") at START of line
+            # before they trigger a new experience extraction.
+            if current_exp.get("start_date"):
+                dash_or_to = rf"(?:{self.DASH_RE}|[àa\ufffd]|to|-|jusqu['’\u2019\ufffd]?\s*[aà\ufffd]?)"
+                present_pattern = r"(?:present|pr(?:[eéè\u00e9\ufffd]|&eacute;)sent|current|aujourd['’\u2019]?hui|en\s+cours|[àa]\s+ce\s+jour|maintenant|now)"
+                
+                is_incomplete = re.search(rf"(?i)({dash_or_to}|{self.MONTH_RE}|depuis|since)\s*$", current_exp["start_date"].strip())
+                if is_incomplete:
+                    completion_pat = re.compile(
+                        rf"(?i)^(?:\s*{dash_or_to}\s*(?:{present_pattern}|\d{{4}})|{present_pattern}|\d{{4}}\s*{dash_or_to}\s*{present_pattern}|\d{{4}})"
+                    )
+                    completion_match = completion_pat.search(line_clean)
+                    if completion_match:
+                        completion_str = completion_match.group(0).strip()
+                        if completion_str.lower() != current_exp["start_date"].strip().lower():
+                            current_exp["start_date"] = self._clean_text(
+                                f"{current_exp['start_date']} {completion_str}"
+                            )
+                        remaining = self._clean_text(line_clean[completion_match.end():])
+                        company, title = self._split_company_and_title(remaining)
+                        if company and title:
+                             if not current_exp.get("company"): current_exp["company"] = company
+                             if not current_exp.get("title"): current_exp["title"] = title
+                        elif company:
+                             current_exp["title"] = f"{current_exp.get('title', '')} {company}".strip()
+                        
+                        continue
+
             date_str = self._extract_date_from_line(raw_payload)
             if date_str:
-                if current_exp.get("start_date"):
+                if current_exp.get("start_date") or current_exp.get("company"):
                     experiences.append(current_exp)
 
                 remaining = raw_payload.replace(date_str, "", 1)
@@ -639,12 +1101,29 @@ class TemplateCVParser:
                 }
                 continue
 
-            if not current_exp.get("start_date"):
+            if not current_exp.get("start_date") and not current_exp.get("company"):
                 continue
 
-            line_clean = self._clean_text(line)
+            line_clean = line
             if not line_clean:
                 continue
+
+            # Handle orphaned date completions (e.g., "- Aujourd'hui", "2017") at START of line
+            # that belong to the previous date range, due to PyMuPDF column table fusing.
+            present_pattern = r"(?:present|pr(?:[eéè\u00e9\ufffd]|&eacute;)sent|current|aujourd['’\u2019]?hui|en\s+cours|[àa]\s+ce\s+jour|maintenant|now)"
+            dash_or_to = rf"(?:{self.DASH_RE}|[àa\ufffd]|to|-|jusqu['’\u2019\ufffd]?\s*[aà\ufffd]?)"
+            completion_pat = re.compile(
+                rf"(?i)^(?:\s*{dash_or_to}\s*(?:{present_pattern}|\d{{4}})|{present_pattern}|\d{{4}}\s*{dash_or_to}\s*{present_pattern}|\d{{4}})"
+            )
+            completion_match = completion_pat.search(line_clean)
+            if completion_match and current_exp.get("start_date"):
+                completion_str = completion_match.group(0).strip()
+                current_exp["start_date"] = self._clean_text(
+                    f"{current_exp['start_date']} {completion_str}"
+                )
+                line_clean = self._clean_text(line_clean[completion_match.end():])
+                if not line_clean:
+                    continue
 
             if not current_exp.get("company") and not current_exp.get("title"):
                 company, title = self._split_company_and_title(line_clean)
@@ -669,7 +1148,7 @@ class TemplateCVParser:
                 separator = " / " if self.BULLET_RE.search(raw_payload) else " "
                 current_exp["title"] = self._clean_text(f"{current_exp['title']}{separator}{line_clean}")
 
-        if current_exp.get("start_date"):
+        if current_exp.get("start_date") or current_exp.get("company"):
             experiences.append(current_exp)
 
         cleaned_experience: List[Dict[str, str]] = []
@@ -677,6 +1156,42 @@ class TemplateCVParser:
             start_date = self._clean_text(exp.get("start_date", ""))
             company = self._clean_text(exp.get("company", ""))
             title = self._clean_text(exp.get("title", ""))
+
+            # Heuristic: some parsers/table extractions can shift columns so a date range ends up
+            # in the "company" field. Example observed:
+            #   start_date="Juillet 2015"
+            #   company="Juillet 2015-Septembre2015"
+            #   title="Next Step IT (Mission à ...)"
+            if company and start_date:
+                start_is_month_year = re.fullmatch(rf"(?i)\s*{self.MONTH_RE}\s+\d{{4}}\s*", start_date) is not None
+                company_has_year = re.search(r"\b(19|20)\d{2}\b", company) is not None
+                company_has_dash = re.search(rf"\s*{self.DASH_RE}\s*", company) is not None
+                company_has_month = re.search(rf"(?i)\b{self.MONTH_RE}\b", company) is not None
+                if start_is_month_year and company_has_year and company_has_dash and company_has_month:
+                    normalized_range = self._clean_text(company)
+                    # Fix common "Septembre2015" missing space.
+                    normalized_range = re.sub(
+                        rf"(?i)({self.MONTH_RE})(\d{{4}})\b",
+                        r"\1 \2",
+                        normalized_range,
+                    )
+                    start_date = normalized_range
+
+                    if title:
+                        paren_match = re.match(r"^(.*?)\s*\((.+)\)\s*$", title)
+                        if paren_match:
+                            maybe_company = self._clean_text(paren_match.group(1))
+                            maybe_title = self._clean_text(paren_match.group(2))
+                            if maybe_company:
+                                company = maybe_company
+                                title = maybe_title
+                        else:
+                            split_company, split_title = self._split_company_and_title(title)
+                            if split_company and not split_title:
+                                split_company, split_title = self._split_company_title_fallback(title)
+                            if split_company:
+                                company = split_company
+                                title = split_title
 
             if company and title:
                 company_norm = self._normalize_for_match(company)
@@ -698,18 +1213,18 @@ class TemplateCVParser:
                 if split_company and split_title:
                     company, title = split_company, split_title
 
-            if not start_date:
-                continue
-            if not company and not title:
+            if not start_date and not company:
                 continue
 
-            cleaned_experience.append(
-                {
-                    "start_date": start_date,
-                    "company": company,
-                    "title": title,
-                }
-            )
+            cleaned_entry = {
+                "start_date": start_date,
+                "company": company,
+                "title": title,
+            }
+            if "description" in exp:
+                cleaned_entry["description"] = self._clean_text(exp["description"])
+            
+            cleaned_experience.append(cleaned_entry)
 
         return cleaned_experience
 
@@ -841,13 +1356,6 @@ class TemplateCVParser:
 
     def _extract_certifications(self, text: str, lines: List[str], file_path: Optional[str] = None) -> List[Dict[str, str]]:
         """Extract certification entries."""
-        start_keywords = [
-            "Certification",
-            "Certifications",
-            "Certificat",
-            "Certificats",
-            "Certificats obtenus",
-        ]
         end_keywords = [
             "Formation",
             "Formations",
@@ -863,7 +1371,7 @@ class TemplateCVParser:
         if file_path:
             table_certifications = self._extract_certifications_from_tables(file_path)
 
-        section_lines = self._find_section_lines(start_keywords, end_keywords, lines)
+        section_lines = self._find_certification_section_lines(end_keywords, lines)
         if not section_lines and not table_certifications:
             return []
 
@@ -1101,11 +1609,24 @@ class TemplateCVParser:
                         
                         if "projet" in header_norm or "project" in header_norm or "client" in header_norm:
                             continue
+                        if "certificat" in header_norm or "certification" in header_norm:
+                            continue
+                        if header_norm.strip() in ["periode formation", "period training", "formation periode"]:
+                            continue
                             
                         has_edu_table = "diplome" in header_norm or "institution" in header_norm or "annee" in header_norm
                         
                         data_rows = clean_rows[1:] if has_edu_table else clean_rows
                         if not data_rows:
+                            continue
+
+                        # Anti-patterns: if table contains experience/project specific labels, skip
+                        exp_labels = {"societe", "fonction", "client", "technologies", "description"}
+                        is_exp_table = any(
+                            self._normalize_for_match(cell) in exp_labels
+                            for row in clean_rows for cell in row
+                        )
+                        if is_exp_table:
                             continue
 
                         year_like_rows = 0
@@ -1116,8 +1637,15 @@ class TemplateCVParser:
                             if re.search(r"\b(?:19|20)\d{2}\b", joined):
                                 year_like_rows += 1
 
+                        # Require strong degree keywords if the header doesn't explicitly look like education
+                        strong_degree_keys = ("diplome", "master", "licence", "bachelor", "ingenieur", "phd", "doctorat")
+                        has_strong_degree = any(
+                            any(k in self._normalize_for_match(c) for k in strong_degree_keys)
+                            for r in data_rows for c in r if len(c.split()) < 25
+                        )
+                        
                         is_edu_table = has_edu_table or (
-                            year_like_rows >= max(2, len(data_rows) // 2) and any("diplome" in self._normalize_for_match(c) or "universi" in self._normalize_for_match(c) for r in data_rows for c in r)
+                            year_like_rows >= max(2, len(data_rows) // 2) and has_strong_degree
                         )
                         
                         if not is_edu_table:
@@ -1196,8 +1724,25 @@ class TemplateCVParser:
             "Experience",
         ]
 
-        section_lines = self._find_section_lines(start_keywords, end_keywords, lines)
-        
+        section_lines = []
+        start_idx = -1
+        end_idx = len(lines)
+
+        for i, line in enumerate(lines):
+            line_norm = self._normalize_for_match(line)
+            if any(self._match_keyword(line, keyword) for keyword in start_keywords):
+                # Ensure we don't accidentally match "Formations et certifications" as academic education
+                if "certification" not in line_norm and "certificat" not in line_norm:
+                    start_idx = i
+                    break
+
+        if start_idx != -1:
+            for i in range(start_idx + 1, len(lines)):
+                if any(self._match_keyword(lines[i], keyword) for keyword in end_keywords):
+                    end_idx = i
+                    break
+            section_lines = lines[start_idx:end_idx]
+
         table_education: List[Dict[str, str]] = []
         if file_path:
             table_education = self._extract_education_from_tables(file_path)
@@ -1207,6 +1752,8 @@ class TemplateCVParser:
 
         if not section_lines:
             return []
+
+        section_lines = self._merge_broken_dates(section_lines)
 
         education: List[Dict[str, str]] = []
         current_edu: Dict[str, str] = {}

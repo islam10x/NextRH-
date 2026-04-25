@@ -1,91 +1,393 @@
 """
 CV Generation API Endpoint
 ===========================
-Accepts a CV template file + employee data JSON and returns
-a generated CV with personal data replaced.
+Unified endpoint supporting both primary and fallback CV generation engines.
+Accepts both JSON (path-based) and multipart (file upload) workflows.
 """
+
+from __future__ import annotations
 
 import json
 import os
 import shutil
 import tempfile
 import zipfile
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
-from app.services.cv_generator import process_cv, convert_docx_to_pdf
-from app.services.cv_errors import (
-    CVGenerationError, CVValidationError, CVTemplateError,
-    CVIOError, CVRenderError, CVExportError,
+from app.services.cv_errors import CVGenerationError, CVTemplateError, CVValidationError
+from app.services.cv_generator import (
+    analyze_template,
+    generate_cv_document,
+    standardize_template,
 )
+from app.services.cv_generator_fallback import (
+    convert_docx_to_pdf as convert_docx_to_pdf_fallback,
+)
+from app.services.cv_generator_fallback import process_cv as process_cv_fallback
 from app.services.cv_io import validate_zip_members
-from app.services.translation_service import (
-    translate_cv_best_effort,
-    translate_docx_headings,
-    SUPPORTED_LANGUAGES,
-)
 from app.utils.logger import logger
+
+router = APIRouter()
+
+# Allow overriding the root path via environment variables for VM deployments
+_env_root = os.getenv("PROJECT_ROOT")
+REPO_ROOT = Path(_env_root).resolve() if _env_root else Path(__file__).resolve().parents[3]
 
 # Hard ceiling: reject templates bigger than 50 MB to avoid memory exhaustion.
 _MAX_TEMPLATE_BYTES = 50 * 1024 * 1024
 
-router = APIRouter()
+
+class GenerateCvRequest(BaseModel):
+    template_path: str
+    output_dir: str
+    output_formats: List[str] = Field(default_factory=lambda: ["docx", "pdf"])
+    language: Optional[str] = None
+    translate: bool = True
+    filename_prefix: Optional[str] = None
+    profile: Dict[str, Any]
+    field_mapping: Optional[Dict[str, str]] = None
+    engine: Literal["primary", "fallback"] = "primary"
+    debug: bool = False
+
+
+class AnalyzeTemplateRequest(BaseModel):
+    template_path: str
+
+
+def _validate_path(path_str: str, label: str) -> Path:
+    resolved = Path(path_str).resolve()
+    norm_resolved = os.path.normcase(str(resolved))
+    norm_root = os.path.normcase(str(REPO_ROOT))
+    if not norm_resolved.startswith(norm_root):
+        logger.error(
+            "Path validation failed for %s: resolved='%s', root='%s'",
+            label,
+            norm_resolved,
+            norm_root,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"{label} must be within the repository",
+        )
+    return resolved
+
+
+def _to_relative(path_str: Optional[str]) -> Optional[str]:
+    if not path_str:
+        return None
+    try:
+        return str(Path(path_str).resolve().relative_to(REPO_ROOT))
+    except Exception:
+        return path_str
+
+
+def _normalize_formats(
+    output_formats: Optional[List[str]] = None,
+    output_format: Optional[str] = None,
+) -> List[str]:
+    if output_formats:
+        values = [str(v).lower() for v in output_formats]
+    else:
+        raw = (output_format or "docx").lower()
+        if raw == "both":
+            values = ["docx", "pdf"]
+        elif raw == "pdf":
+            values = ["pdf"]
+        else:
+            values = ["docx"]
+
+    normalized: List[str] = []
+    for value in values:
+        if value in ("docx", "pdf") and value not in normalized:
+            normalized.append(value)
+
+    if not normalized:
+        normalized = ["docx"]
+    return normalized
+
+
+def _safe_str(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _format_date_range(start_value: Any, end_value: Any) -> str:
+    start = _safe_str(start_value)
+    end = _safe_str(end_value)
+    if start and end:
+        return f"{start} - {end}"
+    return start or end
+
+
+def _coerce_string_list(value: Any, dict_keys: tuple[str, ...] = ()) -> List[str]:
+    if value is None:
+        return []
+
+    raw_items: List[Any]
+    if isinstance(value, list):
+        raw_items = value
+    else:
+        raw_items = [value]
+
+    out: List[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        text = ""
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, dict):
+            for key in dict_keys:
+                candidate = item.get(key)
+                if isinstance(candidate, str) and candidate.strip():
+                    text = candidate.strip()
+                    break
+            if not text:
+                fallback = item.get("name")
+                if isinstance(fallback, str):
+                    text = fallback.strip()
+        elif item is not None:
+            text = str(item).strip()
+
+        if not text:
+            continue
+        norm = text.lower()
+        if norm in seen:
+            continue
+        seen.add(norm)
+        out.append(text)
+
+    return out
+
+
+def _normalize_experience_entries(value: Any) -> List[Dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+
+    normalized: List[Dict[str, Any]] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        title = _safe_str(entry.get("title") or entry.get("jobTitle") or entry.get("role"))
+        company = _safe_str(entry.get("company") or entry.get("companyName") or entry.get("client"))
+        start_date = _safe_str(entry.get("startDate") or entry.get("start_date"))
+        end_date = _safe_str(entry.get("endDate") or entry.get("end_date"))
+        dates = _safe_str(entry.get("dates")) or _format_date_range(start_date, end_date)
+        description = _safe_str(entry.get("description"))
+
+        merged = dict(entry)
+        merged["title"] = title
+        merged["jobTitle"] = title or _safe_str(entry.get("jobTitle"))
+        merged["company"] = company
+        merged["companyName"] = company or _safe_str(entry.get("companyName"))
+        merged["dates"] = dates
+        merged["start_date"] = start_date
+        merged["end_date"] = end_date
+        merged["description"] = description
+        normalized.append(merged)
+
+    return normalized
+
+
+def _normalize_education_entries(value: Any) -> List[Dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+
+    normalized: List[Dict[str, Any]] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        degree = _safe_str(entry.get("degree"))
+        institution = _safe_str(entry.get("institution") or entry.get("school"))
+        start_date = _safe_str(entry.get("startDate") or entry.get("start_date"))
+        end_date = _safe_str(entry.get("endDate") or entry.get("end_date") or entry.get("graduationDate"))
+        dates = _safe_str(entry.get("dates")) or _format_date_range(start_date, end_date)
+
+        merged = dict(entry)
+        merged["degree"] = degree
+        merged["institution"] = institution
+        merged["dates"] = dates
+        merged["end_date"] = end_date
+        normalized.append(merged)
+
+    return normalized
+
+
+def _profile_to_fallback_payload(profile: Dict[str, Any]) -> Dict[str, Any]:
+    name = (profile.get("name") or "").strip()
+    if not name:
+        first = (profile.get("firstName") or "").strip()
+        last = (profile.get("lastName") or "").strip()
+        name = f"{first} {last}".strip()
+
+    raw_experience = profile.get("experience") or profile.get("workExperiences") or []
+    raw_education = profile.get("education") or profile.get("educations") or []
+    normalized_experience = _normalize_experience_entries(raw_experience)
+    normalized_education = _normalize_education_entries(raw_education)
+
+    linkedin = (
+        profile.get("linkedin")
+        or profile.get("linkedinUrl")
+        or profile.get("linkedin_url")
+        or profile.get("linkedIn")
+        or ""
+    )
+
+    return {
+        "name": name,
+        "firstName": profile.get("firstName") or "",
+        "lastName": profile.get("lastName") or "",
+        "title": profile.get("title") or profile.get("currentPosition") or "",
+        "email": profile.get("email") or "",
+        "phone": profile.get("phone") or "",
+        "address": profile.get("address") or "",
+        "linkedin": linkedin,
+        "summary": profile.get("summary") or profile.get("professionalSummary") or "",
+        "skills": _coerce_string_list(profile.get("skills"), ("name", "skill", "label")),
+        "experience": normalized_experience,
+        "education": normalized_education,
+        "languages": _coerce_string_list(profile.get("languages"), ("name", "language", "label", "lang")),
+        "certifications": profile.get("certifications") or [],
+        "projects": profile.get("projects") or [],
+        "photo": profile.get("photo"),
+    }
+
+
+def _run_fallback_generation(
+    template_path: str,
+    output_dir: str,
+    profile: Dict[str, Any],
+    output_formats: List[str],
+    debug: bool,
+) -> Dict[str, Optional[str]]:
+    employee_data = _profile_to_fallback_payload(profile)
+    docx_path = process_cv_fallback(
+        template_path=template_path,
+        employee_data=employee_data,
+        output_dir=output_dir,
+        output_pdf=False,
+        debug=debug,
+    )
+
+    pdf_path: Optional[str] = None
+    if "pdf" in output_formats:
+        pdf_path = convert_docx_to_pdf_fallback(docx_path)
+
+    return {"docx_path": docx_path, "pdf_path": pdf_path}
 
 
 @router.post("/cv")
 async def generate_cv(
-    template: UploadFile = File(...),
-    employee_data: str = Form(...),
+    request: Request,
+    template: Optional[UploadFile] = File(None),
+    employee_data: Optional[str] = Form(None),
     output_format: Optional[str] = Form("docx"),
     debug: Optional[str] = Form("false"),
     language: Optional[str] = Form("en"),
+    engine: Optional[str] = Form("fallback"),
 ):
-    """
-    Generate a CV by replacing template fields with employee data.
+    """Unified endpoint supporting both JSON/path and multipart/upload workflows."""
 
-    - **template**: CV template file (.docx)
-    - **employee_data**: JSON string with employee profile data
-    - **output_format**: Output format: "docx", "pdf", or "both" (returns DOCX with PDF preview)
-    - **debug**: Set to "true" to include a generation trace JSON alongside the output
-    """
-    debug_mode = debug and debug.lower() in ("true", "1", "yes")
-    # Validate file type - only DOCX is supported for reliable processing
-    allowed_extensions = (".docx",)
-    file_ext = os.path.splitext(template.filename or "")[1].lower()
-    if file_ext not in allowed_extensions:
+    content_type = (request.headers.get("content-type") or "").lower()
+
+    # ── JSON mode (path-based flow used by cv-generation module) ──────────
+    if "application/json" in content_type:
+        try:
+            payload = await request.json()
+            req = GenerateCvRequest.model_validate(payload)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON payload: {exc}") from exc
+
+        resolved_template = _validate_path(req.template_path, "template_path")
+        resolved_output = _validate_path(req.output_dir, "output_dir")
+        output_formats = _normalize_formats(output_formats=req.output_formats)
+
+        try:
+            if req.engine == "fallback":
+                if resolved_template.suffix.lower() != ".docx":
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Fallback engine supports only .docx templates.",
+                    )
+                result = _run_fallback_generation(
+                    template_path=str(resolved_template),
+                    output_dir=str(resolved_output),
+                    profile=req.profile,
+                    output_formats=output_formats,
+                    debug=req.debug,
+                )
+            else:
+                result = generate_cv_document(
+                    profile=req.profile,
+                    template_path=str(resolved_template),
+                    output_dir=str(resolved_output),
+                    output_formats=output_formats,
+                    target_language=req.language,
+                    translate=req.translate,
+                    filename_prefix=req.filename_prefix,
+                    cached_field_mapping=req.field_mapping,
+                )
+
+            docx_path = result.get("docx_path")
+            pdf_path = result.get("pdf_path")
+            matched_template_path = result.get("matched_template_path")
+
+            return {
+                "engine": req.engine,
+                "docx_path": docx_path,
+                "pdf_path": pdf_path,
+                "docx_relative_path": _to_relative(docx_path),
+                "pdf_relative_path": _to_relative(pdf_path),
+                "field_mapping": result.get("field_mapping"),
+                "matched_template_path": matched_template_path,
+                "matched_template_relative_path": _to_relative(matched_template_path),
+            }
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Template file not found")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    # ── Multipart mode (upload template + employee_data) ──────────────────
+    if template is None or employee_data is None:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported template format: {file_ext}. Please upload a .docx file.",
+            detail="Multipart mode requires 'template' file and 'employee_data' form field",
         )
 
-    # Parse employee data
-    try:
-        emp_data = json.loads(employee_data)
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid employee_data JSON: {e}")
+    debug_mode = str(debug or "false").lower() in ("true", "1", "yes")
+    engine_mode = str(engine or "fallback").lower()
+    if engine_mode not in ("primary", "fallback"):
+        raise HTTPException(status_code=400, detail="engine must be 'primary' or 'fallback'")
 
-    if not isinstance(emp_data, dict):
+    file_ext = os.path.splitext(template.filename or "")[1].lower()
+    if file_ext not in (".docx", ".pdf"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported template format: {file_ext}. Please upload a .docx or .pdf file.",
+        )
+
+    try:
+        profile = json.loads(employee_data)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid employee_data JSON: {exc}") from exc
+
+    if not isinstance(profile, dict):
         raise HTTPException(status_code=400, detail="employee_data must be a JSON object")
 
-    # Validate and normalise language code
-    target_lang = (language or "en").strip().lower()
-    if target_lang not in SUPPORTED_LANGUAGES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported language '{target_lang}'. Supported values: {sorted(SUPPORTED_LANGUAGES)}",
-        )
-
-    # Validate required fields
-    emp_name = (emp_data.get("name") or "").strip()
+    emp_name = (profile.get("name") or "").strip()
     if not emp_name:
-        # Try to build from firstName/lastName (backend sometimes sends those instead)
-        first = (emp_data.get("firstName") or "").strip()
-        last = (emp_data.get("lastName") or "").strip()
+        first = (profile.get("firstName") or "").strip()
+        last = (profile.get("lastName") or "").strip()
         emp_name = f"{first} {last}".strip()
         if emp_name:
-            emp_data["name"] = emp_name
+            profile["name"] = emp_name
         else:
             raise HTTPException(
                 status_code=400,
@@ -96,175 +398,161 @@ async def generate_cv(
     template_path = os.path.join(temp_dir, f"template{file_ext}")
 
     try:
-        # Save uploaded template and validate its structure
         content = await template.read()
-
         if len(content) > _MAX_TEMPLATE_BYTES:
             raise HTTPException(
                 status_code=400,
-                detail=f"Template too large ({len(content) // 1024 // 1024} MB). Max is {_MAX_TEMPLATE_BYTES // 1024 // 1024} MB.",
+                detail=(
+                    f"Template too large ({len(content) // 1024 // 1024} MB). "
+                    f"Max is {_MAX_TEMPLATE_BYTES // 1024 // 1024} MB."
+                ),
             )
 
-        with open(template_path, "wb") as f:
-            f.write(content)
+        with open(template_path, "wb") as file_handle:
+            file_handle.write(content)
 
-        # Verify it's a valid DOCX (ZIP with word/document.xml)
-        if not zipfile.is_zipfile(template_path):
+        # Keep fallback behavior aligned with the original DOCX-only engine:
+        # no PDF standardization/OCR/overlay pre-processing.
+        if engine_mode == "fallback" and file_ext != ".docx":
             raise HTTPException(
                 status_code=400,
-                detail="Uploaded file is not a valid DOCX (corrupt or not a ZIP archive).",
+                detail="Fallback engine supports only .docx templates.",
             )
-        try:
-            with zipfile.ZipFile(template_path, "r") as zf:
-                # Security: reject path-traversal attacks in ZIP entries
-                validate_zip_members(zf)
-                if "word/document.xml" not in zf.namelist():
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Uploaded file is a ZIP but not a valid DOCX (missing word/document.xml).",
+
+        if file_ext == ".docx":
+            if not zipfile.is_zipfile(template_path):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Uploaded file is not a valid DOCX (corrupt or not a ZIP archive).",
+                )
+
+            try:
+                with zipfile.ZipFile(template_path, "r") as zip_file:
+                    validate_zip_members(zip_file)
+                    if "word/document.xml" not in zip_file.namelist():
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                "Uploaded file is a ZIP but not a valid DOCX "
+                                "(missing word/document.xml)."
+                            ),
+                        )
+            except zipfile.BadZipFile as exc:
+                raise HTTPException(status_code=400, detail="Uploaded file has a corrupt ZIP structure.") from exc
+            except CVTemplateError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        formats = _normalize_formats(output_format=output_format)
+
+        if engine_mode == "fallback":
+            result = _run_fallback_generation(
+                template_path=template_path,
+                output_dir=temp_dir,
+                profile=profile,
+                output_formats=formats,
+                debug=debug_mode,
+            )
+        else:
+            # Standardize template (conversion, OCR, etc.) for primary engine only.
+            std_result = standardize_template(
+                template_path, temp_dir, profile, formats
+            )
+            if std_result["response"]:
+                r = std_result["response"]
+                if output_format == "pdf" and r.get("pdf_path"):
+                    return FileResponse(
+                        path=r["pdf_path"],
+                        filename=os.path.basename(r["pdf_path"]),
+                        media_type="application/pdf",
+                        headers={"X-CV-Format": "pdf", "X-CV-Engine": engine_mode},
                     )
-        except zipfile.BadZipFile:
-            raise HTTPException(status_code=400, detail="Uploaded file has a corrupt ZIP structure.")
-        except CVTemplateError as e:
-            raise HTTPException(status_code=400, detail=str(e))
 
-        # ── Translation layer ─────────────────────────────────────────────
-        # Apply translation AFTER validation, BEFORE template rendering.
-        # Only translatable text fields (summary, descriptions) are touched.
-        # The template itself is never modified.
-        logger.info("Applying translation layer: target language = %s", target_lang)
-        emp_data = translate_cv_best_effort(emp_data, target_lang)
+            template_path = std_result["template_path"]
+            # If it was converted, update the file_ext for correct engine logic
+            if template_path.endswith(".docx"):
+                file_ext = ".docx"
 
-        # Generate CV (always DOCX first)
-        docx_path = process_cv(
-            template_path=template_path,
-            employee_data=emp_data,
-            output_dir=temp_dir,
-            output_pdf=False,
-            debug=debug_mode,
-        )
+            result = generate_cv_document(
+                profile=profile,
+                template_path=template_path,
+                output_dir=temp_dir,
+                output_formats=formats,
+                target_language=profile.get("language") if isinstance(profile.get("language"), str) else None,
+                translate=bool(profile.get("translate", True)),
+                filename_prefix=profile.get("filename_prefix") if isinstance(profile.get("filename_prefix"), str) else None,
+                cached_field_mapping=profile.get("field_mapping") if isinstance(profile.get("field_mapping"), dict) else None,
+            )
 
-        if not os.path.exists(docx_path):
-            raise HTTPException(status_code=500, detail="CV generation failed — no output file")
+        docx_path = result.get("docx_path")
+        pdf_path = result.get("pdf_path")
 
-        # ── Translate section headings in generated DOCX ──────────────────
-        # The data fields (summary, descriptions) were already translated above.
-        # This pass replaces hardcoded template labels (e.g. "Education",
-        # "Professional Experience") using a static lookup table — no API call.
-        translate_docx_headings(docx_path, target_lang)
-
-        # Handle output format
-        output_format_lower = (output_format or "docx").lower()
-        
-        if output_format_lower == "pdf":
-            # Convert to PDF and return PDF only
-            pdf_path = convert_docx_to_pdf(docx_path)
+        if output_format and output_format.lower() == "pdf":
             if pdf_path and os.path.exists(pdf_path):
                 return FileResponse(
                     path=pdf_path,
                     filename=os.path.basename(pdf_path),
                     media_type="application/pdf",
-                    headers={"X-CV-Format": "pdf"},
+                    headers={"X-CV-Format": "pdf", "X-CV-Engine": engine_mode},
                 )
-            else:
-                # Fallback to DOCX if PDF conversion fails
-                logger.warning("PDF conversion failed, returning DOCX")
+            if docx_path and os.path.exists(docx_path):
+                logger.warning("PDF conversion failed in %s mode, returning DOCX", engine_mode)
                 return FileResponse(
                     path=docx_path,
                     filename=os.path.basename(docx_path),
                     media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    headers={"X-CV-Format": "docx", "X-PDF-Failed": "true"},
+                    headers={
+                        "X-CV-Format": "docx",
+                        "X-PDF-Failed": "true",
+                        "X-CV-Engine": engine_mode,
+                    },
                 )
-        
-        elif output_format_lower == "both":
-            # Return DOCX with PDF path in header (for preview)
-            pdf_path = convert_docx_to_pdf(docx_path)
-            headers = {"X-CV-Format": "docx"}
-            if pdf_path and os.path.exists(pdf_path):
-                headers["X-PDF-Available"] = "true"
-            
-            return FileResponse(
-                path=docx_path,
-                filename=os.path.basename(docx_path),
-                media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                headers=headers,
-            )
-        
-        else:
-            # Default: return DOCX
-            return FileResponse(
-                path=docx_path,
-                filename=os.path.basename(docx_path),
-                media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                headers={"X-CV-Format": "docx"},
-            )
+            raise HTTPException(status_code=500, detail="CV generation failed - no output file")
+
+        if not docx_path or not os.path.exists(docx_path):
+            raise HTTPException(status_code=500, detail="CV generation failed - no output file")
+
+        headers = {"X-CV-Format": "docx", "X-CV-Engine": engine_mode}
+        if pdf_path and os.path.exists(pdf_path):
+            headers["X-PDF-Available"] = "true"
+
+        return FileResponse(
+            path=docx_path,
+            filename=os.path.basename(docx_path),
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers=headers,
+        )
 
     except HTTPException:
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise
-    except (ValueError, CVValidationError, CVTemplateError) as e:
+    except (ValueError, CVValidationError, CVTemplateError) as exc:
         shutil.rmtree(temp_dir, ignore_errors=True)
-        raise HTTPException(status_code=400, detail=str(e))
-    except CVGenerationError as e:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CVGenerationError as exc:
         shutil.rmtree(temp_dir, ignore_errors=True)
-        logger.error(f"CV generation error [{e.category}]: {e.detail}", exc_info=True)
+        logger.error("CV generation error [%s]: %s", exc.category, exc.detail, exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"CV generation failed ({e.category}): {e.detail}",
-        )
-    except Exception as e:
+            detail=f"CV generation failed ({exc.category}): {exc.detail}",
+        ) from exc
+    except Exception as exc:
         shutil.rmtree(temp_dir, ignore_errors=True)
-        logger.error(f"CV generation unexpected error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="CV generation failed (internal error)")
+        logger.error("CV generation unexpected error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="CV generation failed (internal error)") from exc
 
 
-# ─── Standalone multilingual CV translation endpoint ─────────────────────────
+@router.post("/analyze-template")
+async def analyze_template_endpoint(req: AnalyzeTemplateRequest):
+    """Extract and map all fields/placeholders from a template file via primary engine."""
+    resolved = _validate_path(req.template_path, "template_path")
 
-from fastapi import Body
-from pydantic import BaseModel, field_validator
-
-
-class _TranslateRequest(BaseModel):
-    target_language: str
-    cv_data: Dict[str, Any]
-
-    @field_validator("target_language")
-    @classmethod
-    def _check_lang(cls, v: str) -> str:
-        v = v.strip().lower()
-        if v not in SUPPORTED_LANGUAGES:
-            raise ValueError(
-                f"Unsupported target_language '{v}'. "
-                f"Supported values: {sorted(SUPPORTED_LANGUAGES)}"
-            )
-        return v
-
-    @field_validator("cv_data")
-    @classmethod
-    def _check_cv_data(cls, value: Dict[str, Any]) -> Dict[str, Any]:
-        if not isinstance(value, dict) or not value:
-            raise ValueError("cv_data must be a non-empty JSON object")
-        return value
-
-
-@router.post("/cv/translate")
-async def translate_cv_endpoint(request: _TranslateRequest):
-    """
-    Translate a structured CV into a target language using Groq LLM.
-
-    Accepts a CV written in **any** language and returns the same JSON
-    structure with all human-readable fields translated into
-    ``target_language`` (``en`` or ``fr``).
-
-    - Semantic understanding is performed first, then translation.
-    - Proper names, company / school names, technical terms, and contact
-      data are **never** modified.
-    """
     try:
-        translated = translate_cv_best_effort(request.cv_data, request.target_language)
-        return {"target_language": request.target_language, "cv_data": translated}
+        result = analyze_template(str(resolved))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Template file not found")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
-        logger.error("CV translation endpoint error: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail="CV translation failed (internal error)")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return result

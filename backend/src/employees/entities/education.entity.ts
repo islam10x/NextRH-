@@ -16,13 +16,13 @@ export class Education {
     @JoinColumn({ name: 'profile_id' })
     profile: EmployeeProfile;
 
-    @Column()
+    @Column({ type: 'text' })
     degree: string;
 
-    @Column({ name: 'field_of_study', nullable: true })
+    @Column({ name: 'field_of_study', type: 'text', nullable: true })
     fieldOfStudy: string;
 
-    @Column({ nullable: true })
+    @Column({ type: 'text', nullable: true })
     institution: string;
 
     @Column({ name: 'end_date', type: 'date', nullable: true })

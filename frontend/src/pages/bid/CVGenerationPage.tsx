@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -35,6 +35,7 @@ const CVGenerationPage: React.FC = () => {
   const [isLoadingEmployees, setIsLoadingEmployees] = useState(true);
   const [templateFile, setTemplateFile] = useState<File | null>(null);
   const [language, setLanguage] = useState<'en' | 'fr'>('en');
+  const [engine, setEngine] = useState<'primary' | 'fallback'>('fallback');
   const [isGenerating, setIsGenerating] = useState(false);
   
   // Generated files
@@ -122,8 +123,8 @@ const CVGenerationPage: React.FC = () => {
 
       // Generate DOCX for download and try PDF for preview in parallel
       const [docx, pdf] = await Promise.allSettled([
-        bidService.generateCv(selectedEmployee, templateFile, 'docx', language),
-        bidService.generateCv(selectedEmployee, templateFile, 'pdf', language),
+        bidService.generateCv(selectedEmployee, templateFile, 'docx', language, engine),
+        bidService.generateCv(selectedEmployee, templateFile, 'pdf', language, engine),
       ]);
 
       // Handle DOCX result
@@ -219,7 +220,26 @@ const CVGenerationPage: React.FC = () => {
             )}
           </div>
 
-          {/* Template upload */}
+          {/* Engine selector */}
+          <div className="space-y-2">
+            <Label>Generation Engine</Label>
+            <Select value={engine} onValueChange={(v) => setEngine(v as 'primary' | 'fallback')}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="fallback">Standard — Template matching</SelectItem>
+                <SelectItem value="primary">Advanced AI — Intelligent field mapping</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {engine === 'primary'
+                ? 'Uses AI-powered field detection with Jinja2 template support and OCR for scanned documents.'
+                : 'Uses pattern-based text replacement. Works best with standard DOCX templates.'}
+            </p>
+          </div>
+
+          {/* Output language */}
           <div className="space-y-2">
             <Label>Output Language</Label>
             <Select value={language} onValueChange={(v) => setLanguage(v as 'en' | 'fr')}>

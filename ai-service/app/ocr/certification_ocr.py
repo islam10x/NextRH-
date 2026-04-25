@@ -654,20 +654,123 @@ RAW TEXT:
     
     def _extract_certification_name(self, text: str) -> str:
         """Extract certification name from text"""
+        def _is_legal_preamble(line_lower: str) -> bool:
+            if not line_lower:
+                return False
+            if line_lower.startswith(("vu le", "vu la", "vu l'", "vu les", "vu ")):
+                return True
+            return any(token in line_lower for token in ["décret", "decret", "loi n", "loi n°", "fixant", "portant", "relative"])
+
         # 0. Priority: <CODE> - <CERTIFICATION TITLE>
-        #   Example: DBSSTT0409WBTT - Dell Blade Server Solutions - Technical
-        dash_match = re.search(r'\b[A-Z0-9]{4,}?\s*-\s*([^-\\n]{3,})', text)
-        if dash_match:
-            candidate = dash_match.group(1).strip()
-            candidate = re.sub(r'\s+', ' ', candidate)
-            candidate = re.sub(r'[.,]$', '', candidate).strip()
-            # Filter generics
-            generic = {
-                'certification course', 'completion certificate', 'training certificate',
-                'certificate of completion', 'has successfully completed', 'certification'
-            }
-            if candidate and candidate.lower() not in generic and len(candidate) > 5:
-                return candidate
+        #   Example: WAF200 - Barracuda Web Application Firewall Certified Product Specialist
+        # Prefer line-based matching to avoid grabbing date ranges or signatures.
+        lines = [self._clean_text(line) for line in text.splitlines() if line.strip()]
+        issuer_hint = self._extract_issuer(text) or ""
+        if issuer_hint:
+            issuer_lower = issuer_hint.lower()
+            issuer_candidates = []
+            for line in lines:
+                lower = line.lower()
+                if issuer_lower not in lower:
+                    continue
+                if not re.search(r"\bcertif(?:icate|ied|ication)?\b", lower):
+                    continue
+                if any(token in lower for token in ["valid from", "valid until", "verify this certificate", "powered by", "this certificate", "has successfully"]):
+                    continue
+                if _is_legal_preamble(lower):
+                    continue
+                if len(line) < 12:
+                    continue
+                issuer_candidates.append(line)
+            if issuer_candidates:
+                issuer_candidates.sort(key=len, reverse=True)
+                candidate = re.sub(r"\s+", " ", issuer_candidates[0]).strip()
+                candidate = re.sub(r"[.,]$", "", candidate).strip()
+                if len(candidate) >= 12 and not self._is_generic_cert_name(candidate):
+                    return candidate
+
+        # Diploma-style documents: try to extract a diploma title from the full text first.
+        diploma_title_patterns = [
+            r"(dipl[ôo]me\s+national\s+de\s+[^\n.,]{5,120})",
+            r"(dipl[ôo]me\s+de\s+[^\n.,]{5,120})",
+            r"(licence\s+[^\n.,]{3,120})",
+            r"(master\s+[^\n.,]{3,120})",
+            r"(ing[ée]nieur\s+[^\n.,]{3,120})",
+        ]
+        for pattern in diploma_title_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                candidate = match.group(1).strip()
+                candidate = re.split(
+                    r"\s+(?:dans|mention|mentions|parcours|sp[eé]cialit[eé]s?)\b|[,;]",
+                    candidate,
+                    maxsplit=1,
+                    flags=re.IGNORECASE,
+                )[0].strip()
+                candidate = re.sub(r"\s+", " ", candidate)
+                if len(candidate) >= 12 and not self._is_generic_cert_name(candidate):
+                    return candidate
+
+        # Diploma-style documents: prefer lines that explicitly mention diploma/attestation
+        diploma_keywords = [
+            "attestation de diplome",
+            "attestation",
+            "diplome national",
+            "diplome",
+            "licence",
+            "master",
+            "ingenieur",
+        ]
+        institution_noise = [
+            "ministere",
+            "ministère",
+            "universite",
+            "université",
+            "institut",
+            "ecole",
+            "école",
+            "recherche scientifique",
+        ]
+        for idx, line in enumerate(lines):
+            lower = line.lower()
+            if not line or len(line) < 8:
+                continue
+            if _is_legal_preamble(lower):
+                continue
+            if any(token in lower for token in institution_noise):
+                continue
+            if any(keyword in lower for keyword in diploma_keywords):
+                # If the next line looks like the diploma title, merge it
+                candidate = line
+                if idx + 1 < len(lines):
+                    nxt = lines[idx + 1]
+                    nxt_lower = nxt.lower()
+                    if _is_legal_preamble(nxt_lower):
+                        nxt = ""
+                        nxt_lower = ""
+                    if nxt and not any(t in nxt_lower for t in institution_noise) and len(nxt) <= 120:
+                        candidate = f"{candidate} {nxt}".strip()
+                candidate = re.sub(r"\s+", " ", candidate).strip()
+                if len(candidate) >= 12 and not self._is_generic_cert_name(candidate):
+                    return candidate
+
+        for line in lines:
+            lower = line.lower()
+            if not line or len(line) < 8:
+                continue
+            if _is_legal_preamble(lower):
+                continue
+            if any(token in lower for token in ["valid from", "valid until", "verify this certificate", "certificate of achievement", "issued"]):
+                continue
+            if re.match(r'^\d{4}[/-]\d{1,2}[/-]\d{1,2}', line):
+                continue
+            dash_line = re.match(r'^([A-Z]{2,}\d{1,6}|[A-Z0-9]{3,})\s*-\s*(.+)$', line)
+            if dash_line:
+                candidate = dash_line.group(2).strip()
+                candidate = re.sub(r'\s+', ' ', candidate)
+                candidate = re.sub(r'[.,]$', '', candidate).strip()
+                if len(candidate) >= 10 and not self._is_generic_cert_name(candidate):
+                    return candidate
 
         # Look for common patterns
         patterns = [
@@ -929,6 +1032,18 @@ RAW TEXT:
     
     def _extract_expiration_date(self, text: str) -> Optional[str]:
         """Extract expiration date from text"""
+        # 1.5. Handle explicit validity ranges: "Valid from <date> until <date>"
+        date_token = r'(?:\d{4}[/-]\d{1,2}[/-]\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\w+\s+\d{1,2},?\s+\d{4})'
+        valid_range = re.search(
+            rf'(?:Valid\s+from)\s+({date_token})\s+(?:until|to|through|till)\s+({date_token})',
+            text,
+            re.IGNORECASE,
+        )
+        if valid_range:
+            normalized = self._normalize_date(valid_range.group(2).strip())
+            if normalized:
+                logger.info(f"Found validity range expiration date: {normalized}")
+                return normalized
         # 1. Check if this looks like a diploma or permanent attestation
         is_diploma = any(k in text.lower() for k in ["diplome", "diplôme", "attestation de diplome"])
         

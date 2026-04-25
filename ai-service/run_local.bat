@@ -4,9 +4,13 @@ setlocal
 REM Run from this script's directory
 cd /d "%~dp0"
 
+if not exist "venv" (
+  echo Creating virtual environment...
+  python -m venv venv
+)
+
 IF NOT EXIST "venv\Scripts\activate.bat" (
-  echo [ERROR] Virtual environment not found: venv\Scripts\activate.bat
-  echo Create it first with: python -m venv venv
+  echo [ERROR] Failed to create virtual environment.
   exit /b 1
 )
 

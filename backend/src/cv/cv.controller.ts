@@ -129,6 +129,7 @@ export class CvController {
         @Body('employeeId') employeeId: string,
         @Query('format') format: string,
         @Query('language') language: string,
+        @Query('engine') engine: string,
         @Res() res: Response,
     ) {
         if (!template) {
@@ -148,7 +149,8 @@ export class CvController {
         const targetLang = ['fr'].includes((language || '').toLowerCase())
             ? language.toLowerCase()
             : 'en';
-        const result = await this.cvService.generateCv(employeeId, template, outputFormat, targetLang);
+        const cvEngine = engine === 'primary' ? 'primary' : 'fallback';
+        const result = await this.cvService.generateCv(employeeId, template, outputFormat, targetLang, cvEngine);
 
         res.set({
             'Content-Type': result.mimeType,
