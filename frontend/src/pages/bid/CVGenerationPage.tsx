@@ -87,12 +87,13 @@ const CVGenerationPage: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
     
-    // Only allow .docx for reliable processing
+    // Only allow .docx or .pdf for processing
     const allowed = [
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/pdf',
     ];
     if (!allowed.includes(file.type)) {
-      toast.error('Please upload a .docx file. PDF templates are not supported.');
+      toast.error('Please upload a .docx or .pdf file.');
       return;
     }
 
@@ -223,12 +224,18 @@ const CVGenerationPage: React.FC = () => {
           {/* Engine selector */}
           <div className="space-y-2">
             <Label>Generation Engine</Label>
-            <Select value={engine} onValueChange={(v) => setEngine(v as 'primary' | 'fallback')}>
+            <Select 
+              value={engine} 
+              onValueChange={(v) => setEngine(v as 'primary' | 'fallback')}
+              disabled={templateFile?.name.toLowerCase().endsWith('.pdf')}
+            >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="fallback">Standard — Template matching</SelectItem>
+                <SelectItem value="fallback" disabled={templateFile?.name.toLowerCase().endsWith('.pdf')}>
+                  Standard — Template matching
+                </SelectItem>
                 <SelectItem value="primary">Advanced AI — Intelligent field mapping</SelectItem>
               </SelectContent>
             </Select>
@@ -255,7 +262,7 @@ const CVGenerationPage: React.FC = () => {
 
           {/* Template upload */}
           <div className="space-y-2">
-            <Label>CV Template (.docx only)</Label>
+            <Label>CV Template (.docx or .pdf)</Label>
             <div
               className={cn(
                 'border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors',
@@ -266,7 +273,7 @@ const CVGenerationPage: React.FC = () => {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".docx"
+                accept=".docx,.pdf"
                 className="hidden"
                 onChange={handleFileChange}
               />
@@ -283,7 +290,7 @@ const CVGenerationPage: React.FC = () => {
                   <Upload className="h-8 w-8 mx-auto text-muted-foreground" />
                   <p className="text-sm text-muted-foreground">Click to upload a CV template</p>
                   <p className="text-xs text-muted-foreground">
-                    Supports .docx format for reliable template processing
+                    Supports .docx and .pdf formats (PDF uses advanced AI overlay)
                   </p>
                 </div>
               )}
