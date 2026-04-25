@@ -1036,79 +1036,80 @@ def standardize_template(
     if "pdf" not in output_formats:
         output_formats.append("pdf")
 
-    # For PDFs, first try to use the overlay method which preserves the original layout.
-    # If it's scanned, we might try to build a DOCX from it first.
-    is_scanned = is_pdf_scanned(template_path)
-    
-    if is_scanned and os.getenv("CV_TEMPLATE_DOCX_FROM_SCAN", "1") != "0":
-        docx_template_path = build_docx_template_from_scanned_pdf(
-            template_path,
-            output_dir=os.path.dirname(template_path),
-        )
-        if docx_template_path:
-            logger.info(f"Using auto-generated DOCX template for scanned PDF: {docx_template_path}")
+    if template_ext != ".docx":
+        # For PDFs, first try to use the overlay method which preserves the original layout.
+        # If it's scanned, we might try to build a DOCX from it first.
+        is_scanned = is_pdf_scanned(template_path)
+        
+        if is_scanned and os.getenv("CV_TEMPLATE_DOCX_FROM_SCAN", "1") != "0":
+            docx_template_path = build_docx_template_from_scanned_pdf(
+                template_path,
+                output_dir=os.path.dirname(template_path),
+            )
+            if docx_template_path:
+                logger.info(f"Using auto-generated DOCX template for scanned PDF: {docx_template_path}")
+                return {
+                    "template_path": docx_template_path,
+                    "template_ext": ".docx",
+                    "auto_template_used": True,
+                    "temp_dir": None,
+                    "matched_template_path": None,
+                    "response": None,
+                }
+
+        # Attempt PDF text overlay (works for both native and scanned PDFs)
+        overlay_mapping = None
+        if isinstance(cached_field_mapping, dict):
+            overlay_mapping = cached_field_mapping.get("overlay")
+            if overlay_mapping is None and (
+                cached_field_mapping.get("fields") or cached_field_mapping.get("tables")
+            ):
+                overlay_mapping = cached_field_mapping
+
+        if overlay_mapping is None and os.getenv("CV_TEMPLATE_OVERLAY_AUTO", "1") != "0":
+            overlay_mapping = build_auto_overlay_mapping(template_path, context)
+
+        if overlay_mapping and (overlay_mapping.get("fields") or overlay_mapping.get("tables")):
+            prefix = _safe_filename(context.get("full_name") or "cv")
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            base_name = f"{prefix}_{timestamp}"
+            pdf_path = os.path.join(output_dir, f"{base_name}.pdf")
+            logger.info(f"Using overlay mode for PDF: {template_path}")
+            apply_pdf_overlay(template_path, pdf_path, context, overlay_mapping)
             return {
-                "template_path": docx_template_path,
-                "template_ext": ".docx",
-                "auto_template_used": True,
+                "template_path": template_path,
+                "template_ext": ".pdf",
+                "auto_template_used": False,
                 "temp_dir": None,
                 "matched_template_path": None,
-                "response": None,
+                "response": {
+                    "docx_path": None,
+                    "pdf_path": pdf_path,
+                    "field_mapping": {"overlay": overlay_mapping},
+                },
             }
 
-    # Attempt PDF text overlay (works for both native and scanned PDFs)
-    overlay_mapping = None
-    if isinstance(cached_field_mapping, dict):
-        overlay_mapping = cached_field_mapping.get("overlay")
-        if overlay_mapping is None and (
-            cached_field_mapping.get("fields") or cached_field_mapping.get("tables")
-        ):
-            overlay_mapping = cached_field_mapping
-
-    if overlay_mapping is None and os.getenv("CV_TEMPLATE_OVERLAY_AUTO", "1") != "0":
-        overlay_mapping = build_auto_overlay_mapping(template_path, context)
-
-    if overlay_mapping and (overlay_mapping.get("fields") or overlay_mapping.get("tables")):
-        prefix = _safe_filename(context.get("full_name") or "cv")
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        base_name = f"{prefix}_{timestamp}"
-        pdf_path = os.path.join(output_dir, f"{base_name}.pdf")
-        logger.info(f"Using overlay mode for PDF: {template_path}")
-        apply_pdf_overlay(template_path, pdf_path, context, overlay_mapping)
-        return {
-            "template_path": template_path,
-            "template_ext": template_ext,
-            "auto_template_used": False,
-            "temp_dir": None,
-            "matched_template_path": None,
-            "response": {
-                "docx_path": None,
-                "pdf_path": pdf_path,
-                "field_mapping": {"overlay": overlay_mapping},
-            },
-        }
-
-    # If overlay didn't find any fields, handle fallback based on whether it's scanned or native
-    if is_scanned:
-        logger.info(f"Scanned PDF detected but no overlay found, running OCR rebuild: {template_path}")
-        template_path = rebuild_scanned_template(template_path)
-        template_ext = ".docx"
-    else:
-        logger.info(f"Converting native PDF template to DOCX using pdf2docx: {template_path}")
-        from pdf2docx import Converter
-
-        temp_dir = tempfile.mkdtemp()
-        converted_docx_path = os.path.join(temp_dir, "converted_template.docx")
-
-        try:
-            cv = Converter(template_path)
-            cv.convert(converted_docx_path)
-            cv.close()
-            template_path = converted_docx_path
+        # If overlay didn't find any fields, handle fallback based on whether it's scanned or native
+        if is_scanned:
+            logger.info(f"Scanned PDF detected but no overlay found, running OCR rebuild: {template_path}")
+            template_path = rebuild_scanned_template(template_path)
             template_ext = ".docx"
-        except Exception as e:
-            logger.error(f"Failed to convert PDF template to DOCX: {e}")
-            raise RuntimeError(f"PDF to DOCX conversion failed: {str(e)}")
+        else:
+            logger.info(f"Converting native PDF template to DOCX using pdf2docx: {template_path}")
+            from pdf2docx import Converter
+
+            temp_dir = tempfile.mkdtemp()
+            converted_docx_path = os.path.join(temp_dir, "converted_template.docx")
+
+            try:
+                cv = Converter(template_path)
+                cv.convert(converted_docx_path)
+                cv.close()
+                template_path = converted_docx_path
+                template_ext = ".docx"
+            except Exception as e:
+                logger.error(f"Failed to convert PDF template to DOCX: {e}")
+                raise RuntimeError(f"PDF to DOCX conversion failed: {str(e)}")
 
     return {
         "template_path": template_path,
