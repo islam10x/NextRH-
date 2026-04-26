@@ -35,7 +35,7 @@ const CVGenerationPage: React.FC = () => {
   const [isLoadingEmployees, setIsLoadingEmployees] = useState(true);
   const [templateFile, setTemplateFile] = useState<File | null>(null);
   const [language, setLanguage] = useState<'en' | 'fr'>('en');
-  const [engine, setEngine] = useState<'primary' | 'fallback'>('fallback');
+  const [engine, setEngine] = useState<'primary' | 'fallback'>('primary');
   const [isGenerating, setIsGenerating] = useState(false);
   
   // Generated files
@@ -105,6 +105,9 @@ const CVGenerationPage: React.FC = () => {
     }
 
     setTemplateFile(file);
+    if (file.name.toLowerCase().endsWith('.pdf')) {
+      setEngine('primary');
+    }
     resetGeneration();
   };
 
@@ -122,32 +125,47 @@ const CVGenerationPage: React.FC = () => {
         ? [emp.firstName, emp.lastName].filter(Boolean).join('_') || 'Employee'
         : 'Employee';
 
-      // Generate DOCX for download and try PDF for preview in parallel
-      const [docx, pdf] = await Promise.allSettled([
-        bidService.generateCv(selectedEmployee, templateFile, 'docx', language, engine),
-        bidService.generateCv(selectedEmployee, templateFile, 'pdf', language, engine),
-      ]);
+      const isPdfTemplate = templateFile.name.toLowerCase().endsWith('.pdf');
+      const effectiveEngine = isPdfTemplate ? 'primary' : engine;
 
-      // Handle DOCX result
-      if (docx.status === 'fulfilled') {
-        setDocxBlob(docx.value);
-        setGeneratedFilename(`${empName}_CV.docx`);
-      } else {
-        const reason = docx.reason?.response?.data
-          ? await docx.reason.response.data.text?.() || docx.reason.message
-          : docx.reason?.message || 'Generation failed';
-        throw new Error(reason);
-      }
-
-      // Handle PDF result (for preview — not critical)
-      if (pdf.status === 'fulfilled' && pdf.value.type === 'application/pdf') {
-        setPdfBlob(pdf.value);
-        const url = URL.createObjectURL(pdf.value);
-        setPdfUrl(url);
+      if (isPdfTemplate) {
+        // PDF templates should stay in PDF path (overlay flow).
+        const generatedPdf = await bidService.generateCv(
+          selectedEmployee,
+          templateFile,
+          'pdf',
+          language,
+          effectiveEngine,
+        );
+        setPdfBlob(generatedPdf);
+        setPdfUrl(URL.createObjectURL(generatedPdf));
         setPdfError(false);
+        setDocxBlob(null);
+        setGeneratedFilename(`${empName}_CV.pdf`);
       } else {
-        // PDF conversion not available - will show DOCX download only
-        setPdfError(true);
+        // DOCX templates: generate DOCX for download + PDF for preview.
+        const [docx, pdf] = await Promise.allSettled([
+          bidService.generateCv(selectedEmployee, templateFile, 'docx', language, effectiveEngine),
+          bidService.generateCv(selectedEmployee, templateFile, 'pdf', language, effectiveEngine),
+        ]);
+
+        if (docx.status === 'fulfilled') {
+          setDocxBlob(docx.value);
+          setGeneratedFilename(`${empName}_CV.docx`);
+        } else {
+          const reason = docx.reason?.response?.data
+            ? await docx.reason.response.data.text?.() || docx.reason.message
+            : docx.reason?.message || 'Generation failed';
+          throw new Error(reason);
+        }
+
+        if (pdf.status === 'fulfilled' && pdf.value.type === 'application/pdf') {
+          setPdfBlob(pdf.value);
+          setPdfUrl(URL.createObjectURL(pdf.value));
+          setPdfError(false);
+        } else {
+          setPdfError(true);
+        }
       }
 
       setPreviewOpen(true);
@@ -161,11 +179,13 @@ const CVGenerationPage: React.FC = () => {
   };
 
   const handleDownload = () => {
-    if (!docxBlob) return;
-    const url = URL.createObjectURL(docxBlob);
+    const blob = docxBlob || pdfBlob;
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    const ext = docxBlob ? 'docx' : 'pdf';
     const a = document.createElement('a');
     a.href = url;
-    a.download = generatedFilename || 'Generated_CV.docx';
+    a.download = generatedFilename || `Generated_CV.${ext}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -185,7 +205,7 @@ const CVGenerationPage: React.FC = () => {
       <Card>
         <CardHeader>
           <CardTitle>CV Configuration</CardTitle>
-          <CardDescription>Select employee and upload a template CV (.docx format)</CardDescription>
+          <CardDescription>Select employee and upload a template CV (.docx or .pdf)</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           {/* Employee selector */}
@@ -334,7 +354,7 @@ const CVGenerationPage: React.FC = () => {
                 )}
                 <Button size="sm" onClick={handleDownload}>
                   <Download className="h-4 w-4 mr-1" />
-                  Download DOCX
+                  {docxBlob ? 'Download DOCX' : 'Download PDF'}
                 </Button>
               </div>
             </div>
@@ -398,9 +418,9 @@ const CVGenerationPage: React.FC = () => {
             <Button variant="outline" onClick={() => setPreviewOpen(false)}>
               Close
             </Button>
-            <Button onClick={handleDownload} disabled={!docxBlob}>
+            <Button onClick={handleDownload} disabled={!docxBlob && !pdfBlob}>
               <Download className="h-4 w-4 mr-2" />
-              Download DOCX
+              {docxBlob ? 'Download DOCX' : 'Download PDF'}
             </Button>
           </DialogFooter>
         </DialogContent>

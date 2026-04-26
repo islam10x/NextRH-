@@ -52,7 +52,7 @@ export const bidService = {
     templateFile: File,
     format: 'docx' | 'pdf' = 'docx',
     language: 'en' | 'fr' = 'en',
-    engine: 'primary' | 'fallback' = 'fallback',
+    engine: 'primary' | 'fallback' = 'primary',
   ): Promise<Blob> {
     const formData = new FormData();
     formData.append('template', templateFile);

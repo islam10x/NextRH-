@@ -772,7 +772,7 @@ export class CvService {
         templateFile: Express.Multer.File,
         outputFormat: 'docx' | 'pdf' = 'docx',
         language: string = 'en',
-        engine: 'primary' | 'fallback' = 'fallback',
+        engine: 'primary' | 'fallback' = 'primary',
     ): Promise<{ buffer: Buffer; filename: string; mimeType: string }> {
         // 1. Load employee profile data
         const profileData = await this.getMyProfile(employeeId);
@@ -784,54 +784,13 @@ export class CvService {
             );
         }
 
-        // Build the employee_data payload expected by the AI service
-        const employeePayload = {
-            name: profileData.name,
-            title: profileData.currentPosition || '',
-            email: profileData.email || '',
-            phone: profileData.phone || '',
-            address: profileData.address || '',
-            summary: profileData.professionalSummary || '',
-            skills: profileData.skills || [],
-            experience: (profileData.workExperiences || [])
-                .filter((exp: any) => exp.jobTitle && exp.companyName)
-                .map((exp: any) => ({
-                    title: exp.jobTitle,
-                    company: exp.companyName,
-                    dates: [exp.startDate, exp.isCurrent ? 'Present' : exp.endDate]
-                        .filter(Boolean)
-                        .join(' - '),
-                    description: exp.description || '',
-                })),
-            education: (profileData.educations || []).map((edu: any) => ({
-                degree: edu.degree,
-                institution: edu.institution,
-                dates: edu.endDate || '',
-            })),
-            languages: [],
-            certifications: (profileData.certifications || []).map(
-                (c: any) => c.name || '',
-            ),
-            projects: (profileData.projects || []).map((p: any) => {
-                const rawName = (p.name || '').trim();
-                const isUnknown = !rawName || rawName.toLowerCase() === 'unknown project';
-                return {
-                    name: isUnknown ? (p.generatedTitle || '') : rawName,
-                    description: p.description || '',
-                    role: p.role || '',
-                    skills: p.skills || [],
-                    client: p.client || '',
-                    startDate: p.startDate || '',
-                    endDate: p.endDate || '',
-                };
-            }),
-        };
-
         // 2. Call AI service /generation/cv
         const formData = new FormData();
         const blob = new Blob([templateFile.buffer as any], { type: templateFile.mimetype });
         formData.append('template', blob, templateFile.originalname);
-        formData.append('employee_data', JSON.stringify(employeePayload));
+        // Keep this payload raw (islam-branch behavior): the AI service is the source of truth
+        // for normalization/mapping in primary engine.
+        formData.append('employee_data', JSON.stringify(profileData));
         formData.append('output_format', outputFormat);
         formData.append('language', language);
         formData.append('engine', engine);

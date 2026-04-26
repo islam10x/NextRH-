@@ -116,9 +116,10 @@ export class CvController {
             fileFilter: (_req, file, cb) => {
                 const allowed = [
                     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                    'application/pdf',
                 ];
                 if (!allowed.includes((file.mimetype || '').toLowerCase())) {
-                    return cb(new BadRequestException('Template must be .docx format'), false);
+                    return cb(new BadRequestException('Template must be .docx or .pdf format'), false);
                 }
                 return cb(null, true);
             },
@@ -149,7 +150,7 @@ export class CvController {
         const targetLang = ['fr'].includes((language || '').toLowerCase())
             ? language.toLowerCase()
             : 'en';
-        const cvEngine = engine === 'primary' ? 'primary' : 'fallback';
+        const cvEngine = engine === 'fallback' ? 'fallback' : 'primary';
         const result = await this.cvService.generateCv(employeeId, template, outputFormat, targetLang, cvEngine);
 
         res.set({
