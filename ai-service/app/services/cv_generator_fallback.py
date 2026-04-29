@@ -1,4 +1,4 @@
-"""
+﻿"""
 CV Generation Service (Production-Ready)
 =========================================
 Handles DOCX templates with complex layouts including textboxes, shapes, tables.
@@ -59,6 +59,8 @@ def _xml_safe_text(text: str) -> str:
         return text
     # Strip characters that are illegal in XML 1.0
     return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text)
+
+
 
 
 @contextmanager
@@ -1411,32 +1413,32 @@ def _build_replacements(
         if employee.get('address'):
             det_addr = detected['address']
             emp_addr = employee['address']
-            pairs.append((det_addr, emp_addr))
+        pairs.append((det_addr, emp_addr))
 
-            # Fragment pairs: TXBX templates split "City, Country" into
-            # "City" and ", Country" paragraphs.
-            # SAFETY: only generate fragments when BOTH addresses follow a simple
-            # 2-part "City, Country" pattern.  Skip when the employee address is
-            # a complex multi-part street address (3+ commas) or when the mapped
-            # city-part is not a recognisable place name (e.g. just a number).
-            det_comma_count = det_addr.count(',')
-            emp_comma_count = emp_addr.count(',')
-            _simple_addr = (det_comma_count == 1 and emp_comma_count <= 1)
-            if _simple_addr and ',' in det_addr:
-                det_parts = [p.strip() for p in det_addr.split(',', 1)]
-                emp_parts_addr = [p.strip() for p in emp_addr.split(',', 1)] if ',' in emp_addr else [emp_addr.strip(), '']
-                # Only create city fragment if the employee city looks like a name (has letters)
-                emp_city_has_alpha = bool(re.search(r'[A-Za-zÀ-ÿ]{2,}', emp_parts_addr[0]))
-                if det_parts[0] and emp_parts_addr[0] and det_parts[0] != emp_parts_addr[0] and emp_city_has_alpha:
-                    pairs.append((det_parts[0], emp_parts_addr[0]))
-                if len(det_parts) > 1 and len(emp_parts_addr) > 1 and emp_parts_addr[1]:
-                    det_suffix = ', ' + det_parts[1]
-                    emp_suffix = ', ' + emp_parts_addr[1]
-                    if det_suffix != emp_suffix:
-                        pairs.append((det_suffix, emp_suffix))
-                    # Also handle " Country" alone (no comma prefix in paragraph)
-                    if det_parts[1] != emp_parts_addr[1]:
-                        pairs.append((det_parts[1], emp_parts_addr[1]))
+        # Fragment pairs: TXBX templates split "City, Country" into
+        # "City" and ", Country" paragraphs.
+        # SAFETY: only generate fragments when BOTH addresses follow a simple
+        # 2-part "City, Country" pattern.  Skip when the employee address is
+        # a complex multi-part street address (3+ commas) or when the mapped
+        # city-part is not a recognisable place name (e.g. just a number).
+        det_comma_count = det_addr.count(',')
+        emp_comma_count = emp_addr.count(',')
+        _simple_addr = (det_comma_count == 1 and emp_comma_count <= 1)
+        if _simple_addr and ',' in det_addr:
+            det_parts = [p.strip() for p in det_addr.split(',', 1)]
+            emp_parts_addr = [p.strip() for p in emp_addr.split(',', 1)] if ',' in emp_addr else [emp_addr.strip(), '']
+            # Only create city fragment if the employee city looks like a name (has letters)
+            emp_city_has_alpha = bool(re.search(r'[A-Za-zÀ-ÿ]{2,}', emp_parts_addr[0]))
+            if det_parts[0] and emp_parts_addr[0] and det_parts[0] != emp_parts_addr[0] and emp_city_has_alpha:
+                pairs.append((det_parts[0], emp_parts_addr[0]))
+            if len(det_parts) > 1 and len(emp_parts_addr) > 1 and emp_parts_addr[1]:
+                det_suffix = ', ' + det_parts[1]
+                emp_suffix = ', ' + emp_parts_addr[1]
+                if det_suffix != emp_suffix:
+                    pairs.append((det_suffix, emp_suffix))
+                # Also handle " Country" alone (no comma prefix in paragraph)
+                if det_parts[1] != emp_parts_addr[1]:
+                    pairs.append((det_parts[1], emp_parts_addr[1]))
         else:
             # Employee has no address — erase every address fragment so
             # the previous employee's address does not bleed through.
