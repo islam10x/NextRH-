@@ -47,15 +47,7 @@ export class CvController {
     }
 
     /**
-     * One-time backfill: populate project dates from stored metadata.json files
-     */
-    @Post('backfill-project-dates')
-    async backfillProjectDates() {
-        return this.cvService.backfillProjectDates();
-    }
-
-    /**
-     * Rania's Logic: Endpoint for employees to upload CV files
+     * Endpoint for employees to upload CV files
      */
     @Post('upload')
     @UseGuards(JwtAuthGuard, RolesGuard)
@@ -129,7 +121,6 @@ export class CvController {
         @UploadedFile() template: Express.Multer.File,
         @Body('employeeId') employeeId: string,
         @Query('format') format: string,
-        @Query('language') language: string,
         @Query('engine') engine: string,
         @Res() res: Response,
     ) {
@@ -147,16 +138,19 @@ export class CvController {
         }
 
         const outputFormat = format === 'pdf' ? 'pdf' : 'docx';
-        const targetLang = ['fr'].includes((language || '').toLowerCase())
-            ? language.toLowerCase()
-            : 'en';
-        const cvEngine = engine === 'fallback' ? 'fallback' : 'primary';
-        const result = await this.cvService.generateCv(employeeId, template, outputFormat, targetLang, cvEngine);
+        const selectedEngine = engine === 'fallback' ? 'fallback' : 'primary';
+        const result = await this.cvService.generateCv(
+            employeeId,
+            template,
+            outputFormat,
+            selectedEngine,
+        );
 
         res.set({
             'Content-Type': result.mimeType,
             'Content-Disposition': `attachment; filename="${encodeURIComponent(result.filename)}"`,
             'Content-Length': result.buffer.length,
+            'X-CV-Engine': result.engine,
         });
         res.send(result.buffer);
     }
@@ -172,7 +166,7 @@ export class CvController {
     async generateFromStored(
         @Body() body: { templateEmployeeId: string; targetEmployeeId: string },
         @Query('format') format: string,
-        @Query('language') language: string,
+        @Query('engine') engine: string,
         @Res() res: Response,
     ) {
         if (!body.templateEmployeeId || !body.targetEmployeeId) {
@@ -185,20 +179,19 @@ export class CvController {
         }
 
         const outputFormat = format === 'pdf' ? 'pdf' : 'docx';
-        const targetLang = ['fr'].includes((language || '').toLowerCase())
-            ? language.toLowerCase()
-            : 'en';
+        const selectedEngine = engine === 'fallback' ? 'fallback' : 'primary';
         const result = await this.cvService.generateCvFromStoredTemplate(
             body.templateEmployeeId,
             body.targetEmployeeId,
             outputFormat,
-            targetLang,
+            selectedEngine,
         );
 
         res.set({
             'Content-Type': result.mimeType,
             'Content-Disposition': `attachment; filename="${encodeURIComponent(result.filename)}"`,
             'Content-Length': result.buffer.length,
+            'X-CV-Engine': result.engine,
         });
         res.send(result.buffer);
     }

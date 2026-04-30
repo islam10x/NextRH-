@@ -124,7 +124,7 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
         p["displayTitle"] = name or generated
         projects.append(p)
 
-    work_experiences = list(profile.get("workExperiences") or [])
+    work_experiences = list(profile.get("work_experiences") or profile.get("workExperiences") or [])
 
     # Attach internal projects under the Next Step experience entry only.
     def _dedupe_preserve_order(items: List[str]) -> List[str]:
@@ -227,6 +227,8 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
         "certifications": profile.get("certifications") or [],
         "projects": projects,
         "languages": profile.get("languages") or [],
+        "interests": profile.get("interests") or [],
+        "references": profile.get("references") or [],
         "awards": profile.get("awards") or profile.get("distinctions") or [],
         "last_update": _safe_text(profile.get("lastUpdate")),
         "last_degree": "",
@@ -635,7 +637,7 @@ def _clear_table_rows(table: Any) -> None:
         table._tbl.remove(table.rows[1]._tr)
 
 
-def _safe_text(value: Any, fallback: str = "N/A") -> str:
+def _safe_text(value: Any, fallback: str = "") -> str:
     text = str(value).strip() if value is not None else ""
     return text if text else fallback
 
@@ -773,17 +775,85 @@ def _fill_common_placeholders(doc: DocxDocument, context: Dict[str, Any]) -> Non
     _process_tables(doc.tables, header_mode=False)
 
     # Process headers and footers across all sections
+    from docx.text.paragraph import Paragraph
     for section in doc.sections:
-        # Standard, first-page, and even-page headers
-        for header in [section.header, section.first_page_header, section.even_page_header]:
-            if header:
-                _process_paragraphs(header.paragraphs, header_mode=True)
-                _process_tables(header.tables, header_mode=True)
-        # Standard, first-page, and even-page footers
-        for footer in [section.footer, section.first_page_footer, section.even_page_footer]:
-            if footer:
-                _process_paragraphs(footer.paragraphs, header_mode=True)
-                _process_tables(footer.tables, header_mode=True)
+        # Standard, first-page, and even-page headers/footers
+        containers = [
+            section.header, section.first_page_header, section.even_page_header,
+            section.footer, section.first_page_footer, section.even_page_footer
+        ]
+        for container in containers:
+            if container:
+                _process_paragraphs(container.paragraphs, header_mode=True)
+                _process_tables(container.tables, header_mode=True)
+                # Process all textboxes in this header/footer container
+                for elem in container._element.iter():
+                    if elem.tag.endswith('txbxContent'):
+                        # Find all paragraphs inside this textbox
+                        paragraphs = [Paragraph(p, doc) for p in elem.xpath('.//*[local-name()="p"]')]
+                        _process_paragraphs(paragraphs, header_mode=True)
+
+    # Also process textboxes in the main document body
+    for elem in doc.element.iter():
+        if elem.tag.endswith('txbxContent'):
+            paragraphs = [Paragraph(p, doc) for p in elem.xpath('.//*[local-name()="p"]')]
+            _process_paragraphs(paragraphs, header_mode=True)
+
+def _apply_aggressive_xml_replacements(docx_path: str, context: Dict[str, Any]):
+    """Post-render XML repair for headers/footers and textboxes.
+
+    Uses the fallback engine's detection + replacement pipeline so it handles
+    split-run text, mc:Fallback VML blocks, and DrawingML shapes correctly.
+    """
+    try:
+        from app.services.cv_generator_fallback import (
+            _extract_all_text,
+            _detect_personal_info,
+            _build_replacements,
+            _apply_paragraph_replacements,
+        )
+    except Exception as exc:
+        logger.warning("[aggressive_xml] Could not import fallback pipeline: %s", exc)
+        return
+
+    try:
+        # 1. Extract all text from the rendered docx (joins split runs per paragraph).
+        full_text, paragraphs = _extract_all_text(docx_path)
+        if not full_text.strip():
+            return
+
+        # 2. Detect what personal data the template/rendered doc still has.
+        detected = _detect_personal_info(full_text, paragraphs)
+        if not detected:
+            logger.info("[aggressive_xml] No personal info detected — skipping.")
+            return
+
+        # 3. Build old→new replacement pairs using the employee context.
+        full_name = context.get("full_name", "")
+        parts = full_name.split()
+        employee = {
+            "name":       full_name,
+            "title":      context.get("current_position", ""),
+            "email":      context.get("email", ""),
+            "phone":      context.get("phone", ""),
+            "address":    context.get("address", ""),
+            "linkedin":   context.get("linkedin", ""),
+            "first_name": parts[0] if parts else "",
+            "last_name":  " ".join(parts[1:]) if len(parts) > 1 else "",
+        }
+
+        replacements = _build_replacements(detected, employee)
+        if not replacements:
+            logger.info("[aggressive_xml] No replacement pairs built — skipping.")
+            return
+
+        # 4. Apply to all word/*.xml files (document, headers, footers, textboxes).
+        count = _apply_paragraph_replacements(docx_path, replacements)
+        logger.info("[aggressive_xml] Applied %d replacement(s) across XML files.", count)
+
+    except Exception as exc:
+        logger.warning("[aggressive_xml] Replacement pass failed (non-fatal): %s", exc)
+
 
 def _resolve_rule_value(section: str, field: str, item: Dict[str, Any]) -> str:
     field = field or ""
@@ -1036,80 +1106,101 @@ def standardize_template(
     if "pdf" not in output_formats:
         output_formats.append("pdf")
 
-    if template_ext != ".docx":
-        # For PDFs, first try to use the overlay method which preserves the original layout.
-        # If it's scanned, we might try to build a DOCX from it first.
-        is_scanned = is_pdf_scanned(template_path)
-        
-        if is_scanned and os.getenv("CV_TEMPLATE_DOCX_FROM_SCAN", "1") != "0":
+    # If the template is a PDF, convert it to DOCX so DocxTemplate can expand
+    # Jinja tags and lists. For scanned PDFs, run OCR rebuild instead.
+    if is_pdf_scanned(template_path):
+        docx_template_path = None
+        if os.getenv("CV_TEMPLATE_DOCX_FROM_SCAN", "1") != "0":
             docx_template_path = build_docx_template_from_scanned_pdf(
                 template_path,
                 output_dir=os.path.dirname(template_path),
             )
-            if docx_template_path:
-                logger.info(f"Using auto-generated DOCX template for scanned PDF: {docx_template_path}")
-                return {
-                    "template_path": docx_template_path,
-                    "template_ext": ".docx",
-                    "auto_template_used": True,
-                    "temp_dir": None,
-                    "matched_template_path": None,
-                    "response": None,
-                }
 
-        # Attempt PDF text overlay (works for both native and scanned PDFs)
-        overlay_mapping = None
-        if isinstance(cached_field_mapping, dict):
-            overlay_mapping = cached_field_mapping.get("overlay")
-            if overlay_mapping is None and (
-                cached_field_mapping.get("fields") or cached_field_mapping.get("tables")
-            ):
-                overlay_mapping = cached_field_mapping
-
-        if overlay_mapping is None and os.getenv("CV_TEMPLATE_OVERLAY_AUTO", "1") != "0":
-            overlay_mapping = build_auto_overlay_mapping(template_path, context)
-
-        if overlay_mapping and (overlay_mapping.get("fields") or overlay_mapping.get("tables")):
-            prefix = _safe_filename(context.get("full_name") or "cv")
-            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            base_name = f"{prefix}_{timestamp}"
-            pdf_path = os.path.join(output_dir, f"{base_name}.pdf")
-            logger.info(f"Using overlay mode for PDF: {template_path}")
-            apply_pdf_overlay(template_path, pdf_path, context, overlay_mapping)
+        if docx_template_path:
+            logger.info(f"Using auto-generated DOCX template: {docx_template_path}")
             return {
-                "template_path": template_path,
-                "template_ext": ".pdf",
-                "auto_template_used": False,
+                "template_path": docx_template_path,
+                "template_ext": ".docx",
+                "auto_template_used": True,
                 "temp_dir": None,
                 "matched_template_path": None,
-                "response": {
-                    "docx_path": None,
-                    "pdf_path": pdf_path,
-                    "field_mapping": {"overlay": overlay_mapping},
-                },
+                "response": None,
             }
-
-        # If overlay didn't find any fields, handle fallback based on whether it's scanned or native
-        if is_scanned:
-            logger.info(f"Scanned PDF detected but no overlay found, running OCR rebuild: {template_path}")
-            template_path = rebuild_scanned_template(template_path)
-            template_ext = ".docx"
         else:
-            logger.info(f"Converting native PDF template to DOCX using pdf2docx: {template_path}")
-            from pdf2docx import Converter
+            if os.getenv("CV_TEMPLATE_RETRIEVE", "1") != "0":
+                min_score = 0.12
+                try:
+                    min_score = float(os.getenv("CV_TEMPLATE_RETRIEVE_MIN_SCORE", "0.12"))
+                except Exception:
+                    min_score = 0.12
+                library_dir = os.getenv("CV_TEMPLATE_LIBRARY_DIR") or os.path.dirname(template_path)
+                result = find_closest_template(
+                    template_path,
+                    templates_dir=library_dir,
+                    min_score=min_score,
+                    top_k=3,
+                )
+                match = result.get("best") if isinstance(result, dict) else None
+                if match:
+                    matched_path, _score = match
+                    logger.info(f"Using retrieved template: {matched_path}")
+                    return {
+                        "template_path": matched_path,
+                        "template_ext": ".docx",
+                        "auto_template_used": False,
+                        "temp_dir": None,
+                        "matched_template_path": matched_path,
+                        "response": None,
+                    }
 
-            temp_dir = tempfile.mkdtemp()
-            converted_docx_path = os.path.join(temp_dir, "converted_template.docx")
+            if template_ext != ".docx":
+                overlay_mapping = None
+                if isinstance(cached_field_mapping, dict):
+                    overlay_mapping = cached_field_mapping.get("overlay")
+                    if overlay_mapping is None and (
+                        cached_field_mapping.get("fields") or cached_field_mapping.get("tables")
+                    ):
+                        overlay_mapping = cached_field_mapping
 
-            try:
-                cv = Converter(template_path)
-                cv.convert(converted_docx_path)
-                cv.close()
-                template_path = converted_docx_path
+                if overlay_mapping is None and os.getenv("CV_TEMPLATE_OVERLAY_AUTO", "1") != "0":
+                    overlay_mapping = build_auto_overlay_mapping(template_path, context)
+
+                if overlay_mapping and (overlay_mapping.get("fields") or overlay_mapping.get("tables")):
+                    prefix = _safe_filename(context.get("full_name") or "cv")
+                    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                    base_name = f"{prefix}_{timestamp}"
+                    pdf_path = os.path.join(output_dir, f"{base_name}.pdf")
+                    logger.info(f"Using overlay mode for scanned PDF: {template_path}")
+                    apply_pdf_overlay(template_path, pdf_path, context, overlay_mapping)
+                    return {
+                        "template_path": template_path,
+                        "template_ext": template_ext,
+                        "response": {
+                            "docx_path": None,
+                            "pdf_path": pdf_path,
+                            "field_mapping": {"overlay": overlay_mapping},
+                        },
+                    }
+
+                logger.info(f"Scanned PDF detected, running OCR rebuild: {template_path}")
+                template_path = rebuild_scanned_template(template_path)
                 template_ext = ".docx"
-            except Exception as e:
-                logger.error(f"Failed to convert PDF template to DOCX: {e}")
-                raise RuntimeError(f"PDF to DOCX conversion failed: {str(e)}")
+    else:
+        logger.info(f"Converting PDF template to DOCX using pdf2docx: {template_path}")
+        from pdf2docx import Converter
+
+        temp_dir = tempfile.mkdtemp()
+        converted_docx_path = os.path.join(temp_dir, "converted_template.docx")
+
+        try:
+            cv = Converter(template_path)
+            cv.convert(converted_docx_path)
+            cv.close()
+            template_path = converted_docx_path
+            template_ext = ".docx"
+        except Exception as e:
+            logger.error(f"Failed to convert PDF template to DOCX: {e}")
+            raise RuntimeError(f"PDF to DOCX conversion failed: {str(e)}")
 
     return {
         "template_path": template_path,
@@ -1349,6 +1440,13 @@ def generate_cv_document(
         else:
             raise
     doc.save(docx_path)
+    
+    # --- Aggressive XML cleanup pass (Header/Footer/DrawingML) ---
+    try:
+        _apply_aggressive_xml_replacements(docx_path, context)
+        logger.info("[DEBUG] Aggressive XML cleanup pass finished.")
+    except Exception as exc:
+        logger.warning(f"[WARN] Aggressive XML cleanup failed: {exc}")
 
     if auto_template_used:
         try:

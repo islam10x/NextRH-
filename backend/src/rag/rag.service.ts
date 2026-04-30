@@ -97,7 +97,14 @@ export class RagService {
             const payload = await response.json();
             const elapsedMs = Date.now() - startedAt;
             const context = Array.isArray(payload?.context) ? payload.context : [];
-            const results = this.buildResults(context, message);
+            const referencedNames = Array.isArray(payload?.referenced_employees) ? payload.referenced_employees : null;
+            let results = this.buildResults(context, message);
+
+            // Only show cards for employees actually mentioned in the AI's answer
+            if (referencedNames) {
+                const nameSet = new Set(referencedNames.map((n) => n.toLowerCase()));
+                results = results.filter((r) => nameSet.has(r.name.toLowerCase()));
+            }
             const extractedEntities = this.extractEntities(context);
             const resultCount = this.resolveResultCount(context, extractedEntities, results);
             await this.safeLogQuery(userId, message, extractedEntities, resultCount, elapsedMs);
@@ -162,6 +169,14 @@ export class RagService {
                             // Build result cards from context and send them first
                             const results = this.buildResults(contextArr, message);
                             yield JSON.stringify({ type: 'results', data: results }) + '\n';
+                        } else if (event.type === 'referenced_employees') {
+                            const referencedNames = event.data;
+                            if (Array.isArray(referencedNames)) {
+                                const results = this.buildResults(contextArr, message);
+                                const nameSet = new Set(referencedNames.map((n) => n.toLowerCase()));
+                                const filteredResults = results.filter((r) => nameSet.has(r.name.toLowerCase()));
+                                yield JSON.stringify({ type: 'results', data: filteredResults }) + '\n';
+                            }
                         } else if (event.type === 'token') {
                             fullAnswer += event.data || '';
                             yield trimmed + '\n';

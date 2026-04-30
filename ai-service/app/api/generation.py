@@ -1,10 +1,3 @@
-"""
-CV Generation API Endpoint
-===========================
-Unified endpoint supporting both primary and fallback CV generation engines.
-Accepts both JSON (path-based) and multipart (file upload) workflows.
-"""
-
 from __future__ import annotations
 
 import json
@@ -278,6 +271,9 @@ def _run_fallback_generation(
     if "pdf" in output_formats:
         pdf_path = convert_docx_to_pdf_fallback(docx_path)
 
+    if output_formats == ["pdf"] and pdf_path:
+        return {"docx_path": docx_path, "pdf_path": pdf_path}
+
     return {"docx_path": docx_path, "pdf_path": pdf_path}
 
 
@@ -288,14 +284,13 @@ async def generate_cv(
     employee_data: Optional[str] = Form(None),
     output_format: Optional[str] = Form("docx"),
     debug: Optional[str] = Form("false"),
-    language: Optional[str] = Form("en"),
-    engine: Optional[str] = Form("fallback"),
+    engine: Optional[str] = Form("primary"),
 ):
     """Unified endpoint supporting both JSON/path and multipart/upload workflows."""
 
     content_type = (request.headers.get("content-type") or "").lower()
 
-    # ── JSON mode (path-based flow used by cv-generation module) ──────────
+    # JSON mode (legacy path-based flow used by cv-generation module)
     if "application/json" in content_type:
         try:
             payload = await request.json()
@@ -354,7 +349,7 @@ async def generate_cv(
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))
 
-    # ── Multipart mode (upload template + employee_data) ──────────────────
+    # Multipart mode (upload template + employee_data)
     if template is None or employee_data is None:
         raise HTTPException(
             status_code=400,
@@ -362,7 +357,7 @@ async def generate_cv(
         )
 
     debug_mode = str(debug or "false").lower() in ("true", "1", "yes")
-    engine_mode = str(engine or "fallback").lower()
+    engine_mode = str(engine or "primary").lower()
     if engine_mode not in ("primary", "fallback"):
         raise HTTPException(status_code=400, detail="engine must be 'primary' or 'fallback'")
 
@@ -419,28 +414,27 @@ async def generate_cv(
                 detail="Fallback engine supports only .docx templates.",
             )
 
-        if file_ext == ".docx":
-            if not zipfile.is_zipfile(template_path):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Uploaded file is not a valid DOCX (corrupt or not a ZIP archive).",
-                )
+        if not zipfile.is_zipfile(template_path):
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded file is not a valid DOCX (corrupt or not a ZIP archive).",
+            )
 
-            try:
-                with zipfile.ZipFile(template_path, "r") as zip_file:
-                    validate_zip_members(zip_file)
-                    if "word/document.xml" not in zip_file.namelist():
-                        raise HTTPException(
-                            status_code=400,
-                            detail=(
-                                "Uploaded file is a ZIP but not a valid DOCX "
-                                "(missing word/document.xml)."
-                            ),
-                        )
-            except zipfile.BadZipFile as exc:
-                raise HTTPException(status_code=400, detail="Uploaded file has a corrupt ZIP structure.") from exc
-            except CVTemplateError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            with zipfile.ZipFile(template_path, "r") as zip_file:
+                validate_zip_members(zip_file)
+                if "word/document.xml" not in zip_file.namelist():
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Uploaded file is a ZIP but not a valid DOCX "
+                            "(missing word/document.xml)."
+                        ),
+                    )
+        except zipfile.BadZipFile as exc:
+            raise HTTPException(status_code=400, detail="Uploaded file has a corrupt ZIP structure.") from exc
+        except CVTemplateError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         formats = _normalize_formats(output_format=output_format)
 
@@ -460,12 +454,15 @@ async def generate_cv(
             if std_result["response"]:
                 r = std_result["response"]
                 if output_format == "pdf" and r.get("pdf_path"):
-                    return FileResponse(
+                     return FileResponse(
                         path=r["pdf_path"],
                         filename=os.path.basename(r["pdf_path"]),
                         media_type="application/pdf",
                         headers={"X-CV-Format": "pdf", "X-CV-Engine": engine_mode},
                     )
+                # If we already have a response (e.g. from overlay mode), we could return it
+                # but usually we want to proceed to return the file.
+                # For now, if response exists but isn't what we wanted, we proceed with the path.
 
             template_path = std_result["template_path"]
             # If it was converted, update the file_ext for correct engine logic

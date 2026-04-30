@@ -407,7 +407,7 @@ def build_chunks(employee: EmployeeRow, payload: dict[str, Any]) -> list[tuple[s
             if cert.get("is_uploaded"):
                 lines.append("Status: Verified via direct upload")
             else:
-                lines.append("Status: Mentioned on CV")
+                lines.append("Status: Reported on CV")
                 
             if cert.get("credential_id"):
                 lines.append(f"Credential ID: {cert['credential_id']}")

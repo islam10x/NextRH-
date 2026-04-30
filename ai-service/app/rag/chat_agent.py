@@ -18,13 +18,14 @@ from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.documents import Document as LCDocument
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_core.runnables import RunnableLambda, RunnableWithMessageHistory
+from langchain_core.output_parsers import StrOutputParser
 from langchain_ollama import OllamaEmbeddings
 
 from app.config import settings
 from app.utils.llm import build_rag_chat_llm, parse_json_object
 
-TOP_K = 8
-TOP_K_PER_MATCHED_EMPLOYEE = 12
+TOP_K = 5
+TOP_K_PER_MATCHED_EMPLOYEE = 8
 NO_INFO_REPLY = "I don't have that information."
 
 
@@ -718,10 +719,19 @@ def _build_structured_facts(
     project_ranking.sort(key=lambda item: item[1], reverse=True)
     experience_years_ranking.sort(key=lambda item: item[1], reverse=True)
 
+    query_tokens = [t for t in _normalize_for_match(query_text).split() if len(t) >= 3]
+    query_token_matches = []
+    if query_tokens:
+        for name, blob in employee_search_blobs.items():
+            matches = [t for t in query_tokens if _contains_word(blob, t)]
+            if matches:
+                query_token_matches.append({"employee": name, "matched_keywords": _dedupe_keep_order(matches)})
+
     payload = {
         "total_employees": total_employees,
         "employee_count_in_context": len(employee_rows),
         "employees": employee_rows,
+        "query_token_matches": query_token_matches,
         "company_to_employees": [
             {
                 "company": company_groups[key]["company"],
@@ -1423,8 +1433,9 @@ Reasoning guidelines:
 3) Respect query constraints exactly (for example "other than X", "least", "same", "all", "except").
 4) Resolve minor spelling mistakes in names using StructuredFacts employee names when unambiguous.
 5) Stay consistent with RecentChatHistory unless newly retrieved facts clearly change the answer.
-6) If information is missing or ambiguous, reply exactly: "I don't have that information."
-7) Keep answers concise and factual.
+6) Use the "query_token_matches" in StructuredFacts as a hint: if an employee matches keywords from the query, carefully check their certifications, skills, and projects for related details.
+7) If information is missing or ambiguous, reply exactly: "I don't have that information."
+8) Keep answers concise and factual.
 
 RecentChatHistory:
 {recent_chat_history}
@@ -1449,7 +1460,7 @@ Context:
             "[chunk_type={chunk_type} | employee={name} | chunk_id={chunk_id}]\n{page_content}"
         ),
         document_separator="\n\n---\n\n",
-    )
+    ) | StrOutputParser()
 
     def _safe_chain_invoke(chain_obj, payload: dict[str, object]) -> str:
         try:
@@ -1510,9 +1521,28 @@ Context:
         if not _is_answer_grounded(str(answer or ""), structured_facts, docs):
             answer = NO_INFO_REPLY
 
+        # Extract referenced employees from the answer
+        referenced_employees = []
+        try:
+            facts_obj = json.loads(structured_facts)
+            all_employees = facts_obj.get("employees", [])
+            ans_norm = _normalize_for_match(str(answer or ""))
+            for emp in all_employees:
+                name = str(emp.get("name") or "").strip()
+                if not name: continue
+                name_norm = _normalize_for_match(name)
+                if name_norm in ans_norm:
+                    referenced_employees.append(name)
+                else:
+                    parts = [p for p in name_norm.split() if len(p) >= 3]
+                    if parts and any(f" {p} " in f" {ans_norm} " or ans_norm.startswith(f"{p} ") or ans_norm.endswith(f" {p}") for p in parts):
+                        referenced_employees.append(name)
+        except Exception: pass
+
         return {
             "answer": answer,
             "context": docs,
+            "referenced_employees": _dedupe_keep_order(referenced_employees),
         }
 
     chain = RunnableLambda(_invoke)
@@ -1577,7 +1607,13 @@ Context:
                 "structured_facts": structured_facts,
                 "recent_chat_history": recent_history_blob,
             }):
-                token = str(chunk or "")
+                if isinstance(chunk, str):
+                    token = chunk
+                elif hasattr(chunk, "content"):
+                    token = str(chunk.content or "")
+                else:
+                    token = str(chunk or "")
+
                 if token:
                     full_answer += token
                     yield _json.dumps({"type": "token", "data": token}) + "\n"
@@ -1593,6 +1629,27 @@ Context:
         if full_answer and not _is_answer_grounded(full_answer, structured_facts, docs):
             yield _json.dumps({"type": "replace", "data": NO_INFO_REPLY}) + "\n"
             full_answer = NO_INFO_REPLY
+
+        # Final cleanup: yield referenced employees so backend can filter results
+        referenced_employees = []
+        try:
+            facts_obj = json.loads(structured_facts)
+            all_employees = facts_obj.get("employees", [])
+            ans_norm = _normalize_for_match(full_answer)
+            for emp in all_employees:
+                name = str(emp.get("name") or "").strip()
+                if not name: continue
+                name_norm = _normalize_for_match(name)
+                if name_norm in ans_norm:
+                    referenced_employees.append(name)
+                else:
+                    parts = [p for p in name_norm.split() if len(p) >= 3]
+                    if parts and any(f" {p} " in f" {ans_norm} " or ans_norm.startswith(f"{p} ") or ans_norm.endswith(f" {p}") for p in parts):
+                        referenced_employees.append(name)
+        except Exception: pass
+
+        if referenced_employees:
+            yield _json.dumps({"type": "referenced_employees", "data": _dedupe_keep_order(referenced_employees)}) + "\n"
 
         yield _json.dumps({"type": "done"}) + "\n"
         history.add_user_message(user_input)

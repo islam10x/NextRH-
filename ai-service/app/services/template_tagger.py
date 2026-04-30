@@ -137,7 +137,7 @@ def _build_date_line(text: str, start_var: str, end_var: str) -> str:
         f"{{% if {end_var} %}}"
         f"{{% if {start_var} %}} - {{% endif %}}{{{{ {end_var} }}}}"
         f"{{% elif {start_var} %}}{open_suffix}{{% endif %}}"
-        f"{{% if not {start_var} and not {end_var} %}}N/A{{% endif %}}"
+        f"{{% if not {start_var} and not {end_var} %}}{{% endif %}}"
     )
 
 
@@ -250,6 +250,12 @@ _HEADING_KEYWORDS: Dict[str, set] = {
         "awards", "distinctions", "honors", "récompenses", "recompenses",
         "prix"
     },
+    "interests": {
+        "interests", "hobbies", "centres d'intérêt", "centres d'interet", "loisirs"
+    },
+    "references": {
+        "references", "références", "referencias"
+    },
 }
 
 # Always use LLM classification for repeating entry sections.
@@ -259,6 +265,7 @@ LLM_ENTRY_SECTIONS = {"experience", "education", "projects", "certifications"}
 # Pre-normalized keyword sets for accent-insensitive matching.
 def _normalize_heading_text(text: str) -> str:
     text = (text or "").lower().strip(":").strip()
+    text = text.replace("’", "'").replace("‘", "'").replace("`", "'")
     # Strip accents/diacritics (e.g., "Expérience" -> "experience")
     text = "".join(
         ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch)
@@ -452,9 +459,9 @@ def auto_tag_template(docx_path: str) -> str:
             heading_para = all_paras[section.heading_idx]
             original_text = heading_para.text.strip()
             if original_text:
-                # Escape single quotes for Jinja2 parsing
-                safe_default = original_text.replace("'", "\\'")
-                new_text = f"{{{{ section_titles.get('{section.section_type}', '{safe_default}') }}}}"
+                # Escape double quotes and control characters for Jinja2 parsing
+                safe_default = original_text.replace('"', '\\"').replace('\n', ' ').replace('\t', ' ')
+                new_text = f"{{{{ section_titles.get('{section.section_type}', \"{safe_default}\") }}}}"
                 
                 # Replace inline string completely preserving all native MS Word template formatting
                 _replace_text_in_paragraph(heading_para, original_text, new_text)
@@ -468,21 +475,24 @@ def auto_tag_template(docx_path: str) -> str:
         "skills": "skills",
         "languages": "languages",
         "awards": "awards",
+        "interests": "interests",
+        "references": "references",
+        "summary": "professional_summary",
     }
     
     for section in sections:
         cond_var = _SECTION_CONDITIONS.get(section.section_type)
         if cond_var and section.heading_idx is not None and section.paragraph_indices:
             logger.info(f"[DEBUG] Wrapping section '{section.section_type}' in {{% if {cond_var} %}}")
-            first_para = all_paras[section.paragraph_indices[0]]
+            # Wrap the entire section including the heading so empty sections are hidden
+            heading_para = all_paras[section.heading_idx]
             last_para = all_paras[section.paragraph_indices[-1]]
 
-            # Keep the heading visible; only the content block is conditional.
-            _insert_paragraph_before(first_para, f"{{%p if {cond_var} %}}")
+            _insert_paragraph_before(heading_para, f"{{%p if {cond_var} %}}")
 
             # Insert in reverse order because addnext inserts directly after the same anchor.
             _insert_paragraph_after(last_para, "{%p endif %}")
-            _insert_paragraph_after(last_para, "N/A")
+            _insert_paragraph_after(last_para, "")
             _insert_paragraph_after(last_para, "{%p else %}")
 
     # --- Step 7: inject for-loops for repeating sections ---
@@ -493,6 +503,9 @@ def auto_tag_template(docx_path: str) -> str:
         elif section.section_type == "skills" and len(section.paragraph_indices) > 1:
             logger.info("[DEBUG] Processing repeating loop for section: skills")
             _inject_skills_loop(doc, all_paras, section)
+        elif section.section_type in {"languages", "interests", "references"}:
+            logger.info(f"[DEBUG] Processing repeating loop for section: {section.section_type}")
+            _inject_simple_list_loop(doc, all_paras, section, section.section_type)
 
     # --- Step 7.5: remove leftover placeholder lines ---
     for para in list(all_paras):
@@ -574,7 +587,8 @@ def _is_heading(para) -> bool:
     # Regular bold text or ALL CAPS text is too common inside actual job descriptions/titles
     # and shouldn't act as a section boundary.
     if is_large and len(text) < 40:
-        return True
+        if _classify_heading_text(text) != "other":
+            return True
             
     return False
 
@@ -811,10 +825,14 @@ def _tag_header_section(paragraphs, section: Section) -> List[TagReplacement]:
 # ============================================================================
 
 def _tag_summary_section(paragraphs, section: Section) -> List[TagReplacement]:
-    """Tag the summary/profile section with ``{{ professional_summary }}``."""
+    """Tag the summary/profile section with ``{{ professional_summary }}``.
+    
+    Wraps the tag in {%p if %} so the paragraph is hidden when no summary exists.
+    """
     replacements: List[TagReplacement] = []
     for idx in section.paragraph_indices:
-        text = (paragraphs[idx].text or "").strip()
+        para = paragraphs[idx]
+        text = (para.text or "").strip()
         if text and len(text) > 10:
             replacements.append(TagReplacement(idx, text, "{{ professional_summary }}"))
             break  # Only tag the first substantial paragraph
@@ -1102,6 +1120,41 @@ def _inject_skills_loop(doc, paragraphs, section: Section):
                 _remove_paragraph(para)
 
 
+def _inject_simple_list_loop(doc, paragraphs, section: Section, list_key: str):
+    """Inject a for-loop for simple list sections (languages, interests, references).
+
+    Handles two common template formats:
+    1. Single paragraph with comma/tab-separated values: replace the whole line.
+    2. Multi-paragraph (one item per line): wrap first, delete rest.
+    """
+    content_indices = [
+        idx for idx in section.paragraph_indices
+        if (paragraphs[idx].text or "").strip()
+    ]
+    if not content_indices:
+        return
+
+    # Item variable name (e.g. "languages" -> "language")
+    item_var = list_key[:-1] if list_key.endswith('s') else "item"
+
+    if len(content_indices) == 1:
+        # Single paragraph with multiple items separated by commas/tabs/spaces
+        para = paragraphs[content_indices[0]]
+        text = (para.text or "").strip()
+        # Replace entire line with a join of the list
+        _replace_text_in_paragraph(para, text, f"{{{{ {list_key} | join(', ') }}}}")
+    else:
+        # Multi-paragraph: one item per line, use a for-loop like skills
+        first_idx = content_indices[0]
+        first_para = paragraphs[first_idx]
+        text = (first_para.text or "").strip()
+        _replace_text_in_paragraph(first_para, text, f"{{{{ {item_var} }}}}")
+        _insert_paragraph_before(first_para, f"{{%p for {item_var} in {list_key} %}}")
+        _insert_paragraph_after(first_para, "{%p endfor %}")
+        for idx in content_indices[1:]:
+            _remove_paragraph(paragraphs[idx])
+
+
 def _detect_entry_boundaries(
     paragraphs, content_indices: List[int]
 ) -> List[List[int]]:
@@ -1109,6 +1162,8 @@ def _detect_entry_boundaries(
 
     Heuristic: each entry starts with a "title-like" paragraph that shares
     the same formatting characteristics as the first paragraph.
+    Also supports date-anchored boundaries for entries without bold formatting
+    (common in flat education/certification sections).
     """
     if not content_indices:
         return []
@@ -1121,6 +1176,9 @@ def _detect_entry_boundaries(
         if r.font.size:
             first_size = r.font.size
             break
+
+    # Check if the first paragraph is a date line (flat template style like Canadian CV)
+    first_is_date = bool(_DATE_RANGE_RE.search(first_para.text or ""))
 
     entries: List[List[int]] = []
     current_entry: List[int] = []
@@ -1146,8 +1204,12 @@ def _detect_entry_boundaries(
 
             # Same formatting as the first paragraph = new entry boundary
             same_dummy_text = (first_para.text.strip().lower() == para.text.strip().lower() and len(para.text.strip()) > 3)
-            
+
             if same_dummy_text:
+                if len(current_entry) >= 2:
+                    is_boundary = True
+            elif first_is_date and _DATE_RANGE_RE.search(text):
+                # Flat sections (no bold) — split on date lines like the first para
                 if len(current_entry) >= 2:
                     is_boundary = True
             elif first_bold and para_bold:
@@ -1297,6 +1359,13 @@ def _tag_entry_content(
                     used_by_llm.add(idx)
                     continue
                 if label == "description":
+                    if desc_tagged:
+                        # Description was already emitted (e.g. via bullet loop).
+                        # Residual sub-header paragraphs like 'Projet de développement mobile:'
+                        # must be removed to avoid duplicate {{ exp.description }} tags.
+                        _remove_paragraph(para)
+                        used_by_llm.add(idx)
+                        continue
                     if idx in bullet_indices and _apply_bullet_lines_loop(
                         paragraphs,
                         bullet_indices,
@@ -1565,9 +1634,11 @@ def _tag_entry_content(
             desc_tagged = True
             continue
 
-        # Remove extra placeholder lines after description is tagged.
-        if desc_tagged and _PLACEHOLDER_TEXT_RE.search(text):
-            _remove_paragraph(para)
+        # All known fields (title, company, date, desc) have been tagged.
+        # Any remaining paragraphs are residual template content (sub-headers, extra
+        # institution names like 'Lycée Blaise Pascal', decorative lines, etc.).
+        # Remove them so they don't bleed into the output.
+        _remove_paragraph(para)
 
 
 # ============================================================================

@@ -26,6 +26,17 @@ const AIChatPage: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
   const sessionId = useMemo(() => {
     const key = 'rag_session_id';
@@ -60,35 +71,92 @@ const AIChatPage: React.FC = () => {
 
   const handleSend = async (query: string) => {
     if (!query.trim()) return;
-    const userMsg: ChatMessage = { id: Date.now().toString(), role: 'user', content: query, timestamp: new Date().toISOString() };
-    setMessages(prev => [...prev, userMsg].slice(-MAX_MESSAGES));
+
+    const userMsgId = Date.now().toString();
+    const userMsg: ChatMessage = { 
+      id: userMsgId, 
+      role: 'user', 
+      content: query, 
+      timestamp: new Date().toISOString() 
+    };
+
+    const aiMsgId = (Date.now() + 1).toString();
+    const initialAiMsg: ChatMessage = {
+      id: aiMsgId,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date().toISOString(),
+      results: [],
+    };
+
+    setMessages(prev => [...prev, userMsg, initialAiMsg].slice(-MAX_MESSAGES));
     setInput('');
     setIsLoading(true);
 
     try {
-      const response = await api.post<RagChatResponse>('/rag/chat', {
-        message: query,
-        session_id: sessionId,
+      const token = sessionStorage.getItem('access_token');
+      const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+      
+      const response = await fetch(`${baseUrl}/rag/chat/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          message: query,
+          session_id: sessionId,
+        }),
       });
-      const answer = response.data?.answer || 'I could not find results for that query.';
-      const results = response.data?.results || [];
-      const aiMsg: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: answer,
-        timestamp: new Date().toISOString(),
-        results,
-      };
-      setMessages(prev => [...prev, aiMsg].slice(-MAX_MESSAGES));
+
+      if (!response.ok) throw new Error(`Stream error: ${response.statusText}`);
+      if (!response.body) throw new Error('No response body');
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+
+          try {
+            const event = JSON.parse(trimmed);
+            if (event.type === 'results') {
+              setMessages(prev => prev.map(m => 
+                m.id === aiMsgId ? { ...m, results: event.data } : m
+              ));
+            } else if (event.type === 'token') {
+              setMessages(prev => prev.map(m => 
+                m.id === aiMsgId ? { ...m, content: m.content + (event.data || '') } : m
+              ));
+            } else if (event.type === 'replace') {
+              setMessages(prev => prev.map(m => 
+                m.id === aiMsgId ? { ...m, content: event.data || '' } : m
+              ));
+            } else if (event.type === 'done') {
+              setIsLoading(false);
+            }
+          } catch (e) {
+            console.warn('Failed to parse stream line', trimmed, e);
+          }
+        }
+      }
     } catch (err) {
-      console.error('RAG chat failed', err);
-      const aiMsg: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: 'Sorry, I could not reach the AI service. Please try again.',
-        timestamp: new Date().toISOString(),
-      };
-      setMessages(prev => [...prev, aiMsg].slice(-MAX_MESSAGES));
+      console.error('RAG chat stream failed', err);
+      setMessages(prev => prev.map(m => 
+        m.id === aiMsgId 
+          ? { ...m, content: 'Sorry, I could not reach the AI service. Please try again.' } 
+          : m
+      ));
     } finally {
       setIsLoading(false);
     }
@@ -105,7 +173,7 @@ const AIChatPage: React.FC = () => {
         <CardHeader className="border-b">
           <CardTitle className="flex items-center gap-2 text-lg"><Sparkles className="h-5 w-5 text-primary" />CV Search Assistant</CardTitle>
         </CardHeader>
-        <CardContent className="flex-1 p-4 space-y-4 overflow-y-auto">
+        <CardContent className="flex-1 p-4 space-y-4 overflow-y-auto" ref={scrollRef}>
           {messages.length === 0 && (
             <div className="text-center py-12">
               <Bot className="h-12 w-12 mx-auto text-muted-foreground/50 mb-4" />
@@ -189,7 +257,7 @@ const AIChatPage: React.FC = () => {
               </div>
             </div>
           ))}
-          {isLoading && (
+          {isLoading && (!messages[messages.length - 1]?.content && !messages[messages.length - 1]?.results?.length) && (
             <div className="flex gap-3">
               <Avatar className="h-8 w-8"><AvatarFallback className="bg-accent text-accent-foreground"><Bot className="h-4 w-4" /></AvatarFallback></Avatar>
               <div className="bg-muted rounded-lg p-3"><Loader2 className="h-4 w-4 animate-spin" /></div>

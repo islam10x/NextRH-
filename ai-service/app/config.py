@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     GROQ_SUMMARY_TEMPERATURE: float = 0.3
     GROQ_PAIRS_TEMPERATURE: float = 0.2
 
+    # Translation (CV generation) - uses Ollama
+    TRANSLATION_MODEL: str | None = None
+    TRANSLATION_TIMEOUT_SECONDS: float = 25.0
+    TRANSLATION_ENABLED: bool = True
+
     # APILayer Resume Parser — https://apilayer.com/marketplace/resume_parser-api
     APILAYER_API_KEY: str = ""
 

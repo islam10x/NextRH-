@@ -1465,7 +1465,7 @@ def _build_replacements(
 
     logger.info(f"Built {len(pairs)} replacement pairs:")
     for old, new in pairs:
-        logger.info(f"  '{old}' → '{new}'")
+        logger.info(f"  '{old}' -> '{new}'")
 
     return pairs
 
