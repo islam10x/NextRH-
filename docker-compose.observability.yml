@@ -140,7 +140,7 @@ services:
 
 networks:
   cv-network:
-    external: true
+    name: cv-network
 
 volumes:
   grafana-data:

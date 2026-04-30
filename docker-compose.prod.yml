@@ -162,6 +162,7 @@ services:
 
 networks:
   cv-network:
+    name: cv-network
     driver: bridge
 
 volumes:
