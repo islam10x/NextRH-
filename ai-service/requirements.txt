@@ -1,10 +1,12 @@
 fastapi
-uvicorn
+uvicorn[standard]
 python-multipart
 watchdog
 requests
 pymupdf
 python-docx
+pypdf
+pdf2docx
 tika
 
 pytesseract
@@ -15,8 +17,6 @@ pdfkit
 pydantic
 pytest
 httpx
-pypdf
-pdf2docx
 opencv-python-headless
 Pillow
 pydantic-settings
@@ -30,3 +30,7 @@ langchain-core
 langchain-community
 langchain-classic
 openai
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-instrumentation-fastapi
+opentelemetry-exporter-otlp

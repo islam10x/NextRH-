@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:10.4.0
     container_name: cv-grafana
     ports:
       - "127.0.0.1:3001:3000"
@@ -20,9 +20,13 @@ services:
     networks:
       - cv-network
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v2.51.0
     container_name: cv-prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -36,9 +40,13 @@ services:
     networks:
       - cv-network
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   loki:
-    image: grafana/loki:latest
+    image: grafana/loki:3.0.0
     container_name: cv-loki
     command: ["-config.file=/etc/loki/loki.yml"]
     volumes:
@@ -47,9 +55,13 @@ services:
     networks:
       - cv-network
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
   promtail:
-    image: grafana/promtail:latest
+    image: grafana/promtail:3.0.0
     container_name: cv-promtail
     command: ["-config.file=/etc/promtail/promtail.yml"]
     volumes:
@@ -61,9 +73,13 @@ services:
     networks:
       - cv-network
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
   tempo:
-    image: grafana/tempo:latest
+    image: grafana/tempo:2.4.1
     container_name: cv-tempo
     command: ["-config.file=/etc/tempo/tempo.yml"]
     volumes:
@@ -72,9 +88,13 @@ services:
     networks:
       - cv-network
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
+    image: otel/opentelemetry-collector-contrib:0.96.0
     container_name: cv-otel-collector
     command: ["--config=/etc/otel-collector.yml"]
     volumes:
@@ -82,9 +102,13 @@ services:
     networks:
       - cv-network
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
   node-exporter:
-    image: prom/node-exporter:latest
+    image: prom/node-exporter:v1.7.0
     container_name: cv-node-exporter
     command:
       - "--path.rootfs=/host"
@@ -93,9 +117,13 @@ services:
     networks:
       - cv-network
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 64M
 
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:latest
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: cv-cadvisor
     volumes:
       - "/:/rootfs:ro"
@@ -105,10 +133,14 @@ services:
     networks:
       - cv-network
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
 networks:
   cv-network:
-    driver: bridge
+    external: true
 
 volumes:
   grafana-data:

@@ -1,15 +1,37 @@
 from fastapi import FastAPI
+import os
+from opentelemetry import trace
+from opentelemetry.sdk.resources import RESOURCE_ATTRIBUTES, Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPTraceExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
 from app.config import settings
-from app.api import parsing, rag, generation
+from app.api import parsing, rag, generation, scoring
 from app.utils.logger import logger
 from app.rag.models import init_rag_schema
 
+# Initialize Tracing
+resource = Resource(attributes={
+    RESOURCE_ATTRIBUTES["SERVICE_NAME"]: os.getenv("OTEL_SERVICE_NAME", "ai-service")
+})
+
+provider = TracerProvider(resource=resource)
+processor = BatchSpanProcessor(OTLPTraceExporter(endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://cv-otel-collector:4317")))
+provider.add_span_processor(processor)
+trace.set_tracer_provider(provider)
+
 app = FastAPI(title=settings.APP_NAME, debug=settings.DEBUG)
+
+# Instrument FastAPI
+FastAPIInstrumentor.instrument_app(app)
 
 # Include routers
 app.include_router(parsing.router, prefix=f"{settings.API_V1_STR}/parsing", tags=["parsing"])
 app.include_router(rag.router, prefix=f"{settings.API_V1_STR}/rag", tags=["rag"])
 app.include_router(generation.router, prefix=f"{settings.API_V1_STR}/generation", tags=["generation"])
+app.include_router(scoring.router, prefix=f"{settings.API_V1_STR}/scoring", tags=["scoring"])
 
 @app.on_event("startup")
 async def startup_event():

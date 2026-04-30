@@ -39,7 +39,8 @@ services:
       CLAMAV_TIMEOUT: 60000
       N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://n8n:5678/webhook/nextrh-notification}
       N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET}
-      PROJECT_ROOT: /app
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://cv-otel-collector:4317
+      OTEL_SERVICE_NAME: backend
     volumes:
       - ./file-storage:/app/file-storage
     depends_on:
@@ -54,14 +55,12 @@ services:
     build: ./ai-service
     container_name: cv-ai-service
     environment:
-      - GROQ_API_KEY=${GROQ_API_KEY}
-      - APILAYER_API_KEY=${APILAYER_API_KEY}
       - DATABASE_URL=postgresql+psycopg://postgres:${DB_PASSWORD}@postgres:5432/cv_management
-      - OLLAMA_URL=${OLLAMA_URL}
-      - RAG_CHAT_MODEL=${RAG_CHAT_MODEL:-qwen2.5:32b}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
-      - TRANSLATION_MODEL=${TRANSLATION_MODEL:-qwen2.5:32b}
+      - OLLAMA_URL=http://ollama:11434
+      - RAG_CHAT_MODEL=${RAG_CHAT_MODEL:-qwen2.5:1.5b-instruct}
       - RAG_CHAT_TIMEOUT_SECONDS=${RAG_CHAT_TIMEOUT_SECONDS:-30}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://cv-otel-collector:4317
+      - OTEL_SERVICE_NAME=ai-service
     volumes:
       - ./file-storage:/app/file-storage
     networks:
