@@ -30,3 +30,7 @@ langchain-core
 langchain-community
 langchain-classic
 openai
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-instrumentation-fastapi
+opentelemetry-exporter-otlp

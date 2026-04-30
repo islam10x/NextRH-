@@ -49,7 +49,11 @@
         "reflect-metadata": "^0.1.13",
         "rxjs": "^7.8.1",
         "typeorm": "^0.3.17",
-        "dotenv": "^17.2.3"
+        "dotenv": "^17.2.3",
+        "@opentelemetry/api": "^1.8.0",
+        "@opentelemetry/sdk-node": "^0.49.1",
+        "@opentelemetry/auto-instrumentations-node": "^0.41.1",
+        "@opentelemetry/exporter-trace-otlp-grpc": "^0.49.1"
     },
     "devDependencies": {
         "@nestjs/cli": "^10.0.0",

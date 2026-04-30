@@ -39,6 +39,8 @@ services:
       CLAMAV_TIMEOUT: 60000
       N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://n8n:5678/webhook/nextrh-notification}
       N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://cv-otel-collector:4317
+      OTEL_SERVICE_NAME: backend
     volumes:
       - ./file-storage:/app/file-storage
     depends_on:
@@ -57,6 +59,8 @@ services:
       - OLLAMA_URL=http://ollama:11434
       - RAG_CHAT_MODEL=${RAG_CHAT_MODEL:-qwen2.5:1.5b-instruct}
       - RAG_CHAT_TIMEOUT_SECONDS=${RAG_CHAT_TIMEOUT_SECONDS:-30}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://cv-otel-collector:4317
+      - OTEL_SERVICE_NAME=ai-service
     volumes:
       - ./file-storage:/app/file-storage
     networks:
