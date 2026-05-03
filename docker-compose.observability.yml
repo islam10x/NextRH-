@@ -48,6 +48,7 @@ services:
   loki:
     image: grafana/loki:3.0.0
     container_name: cv-loki
+    user: root
     command: ["-config.file=/etc/loki/loki.yml"]
     volumes:
       - ./observability/loki.yml:/etc/loki/loki.yml:ro
