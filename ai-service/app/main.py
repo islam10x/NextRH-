@@ -1,7 +1,8 @@
 from fastapi import FastAPI
 import os
 from opentelemetry import trace
-from opentelemetry.sdk.resources import RESOURCE_ATTRIBUTES, Resource
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.semconv.resource import ResourceAttributes
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPTraceExporter
@@ -14,7 +15,7 @@ from app.rag.models import init_rag_schema
 
 # Initialize Tracing
 resource = Resource(attributes={
-    RESOURCE_ATTRIBUTES["SERVICE_NAME"]: os.getenv("OTEL_SERVICE_NAME", "ai-service")
+    ResourceAttributes.SERVICE_NAME: os.getenv("OTEL_SERVICE_NAME", "ai-service")
 })
 
 provider = TracerProvider(resource=resource)
