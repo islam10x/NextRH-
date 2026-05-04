@@ -8,9 +8,8 @@ export class GenerateCvDto {
     templateId: string;
 
     @IsOptional()
-    @IsString()
-    @MaxLength(10)
-    language?: string;
+    @IsIn(['en', 'fr'])
+    language?: 'en' | 'fr';
 
     @IsOptional()
     @IsBoolean()

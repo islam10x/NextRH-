@@ -69,23 +69,37 @@ def _pdf_has_full_page_image(pdf_path: str, coverage_threshold: float = 0.85) ->
 
 
 def _docx_has_text(docx_path: str, min_chars: int = 40) -> bool:
+    """Return True if the DOCX contains at least min_chars of readable text.
+
+    Checks regular paragraphs, table cells, AND textboxes / drawing shapes so
+    that professional CV templates (which put all content inside textboxes) are
+    not mis-classified as scanned images.
+    """
+    import zipfile
+    from lxml import etree
+
+    # Fast path: scan the raw XML for <w:t> elements so we catch text wherever
+    # it lives — body paragraphs, table cells, textboxes (w:txbxContent), and
+    # DrawingML shapes (wps:txbx).  This avoids the python-docx object model
+    # which only exposes body-level paragraphs and tables.
+    _W_T = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t"
+    total = 0
     try:
-        doc = Document(docx_path)
+        with zipfile.ZipFile(docx_path, "r") as zf:
+            xml_files = [n for n in zf.namelist() if n.startswith("word/") and n.endswith(".xml")]
+            for name in xml_files:
+                try:
+                    data = zf.read(name)
+                    root = etree.fromstring(data)
+                    for elem in root.iter(_W_T):
+                        total += len((elem.text or "").strip())
+                        if total >= min_chars:
+                            return True
+                except Exception:
+                    continue
     except Exception:
         return False
-    total = 0
-    for paragraph in doc.paragraphs:
-        total += len(paragraph.text or "")
-        if total >= min_chars:
-            return True
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for paragraph in cell.paragraphs:
-                    total += len(paragraph.text or "")
-                    if total >= min_chars:
-                        return True
-    return False
+    return total >= min_chars
 
 
 def is_pdf_scanned(pdf_path: str) -> bool:

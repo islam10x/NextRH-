@@ -34,6 +34,8 @@
 
 %% ── Graphics & Figures ──────────────────────────────────────
 \usepackage{graphicx}
+\usepackage{grffile}   % allows spaces/dots in filenames
+\usepackage{tikz}      % for curved background lines
 \usepackage{float}
 \usepackage[justification=centering]{caption}
 \graphicspath{{figures/}{../Docs/diagrams/}}
@@ -121,81 +123,100 @@
 \setlength{\parskip}{5pt plus 2pt minus 1pt}
 \setlength{\emergencystretch}{3em}
 
-%% ── Compact front-matter lists ──────────────────────────────
-\makeatletter
-\newcommand{\compactlistof}[2]{%
-  \section*{#1}%
-  \addcontentsline{toc}{section}{#1}%
-  \@starttoc{#2}%
-}
-\makeatother
-
 %% ─────────────────────────────────────────────────────────────
 \begin{document}
 
 \pagenumbering{roman}
 
 %% ════════════════════════════════════════════════════════════
-%%  TITLE PAGE
+%%  TITLE PAGE  (Horizon School style — matches official template)
 %% ════════════════════════════════════════════════════════════
 \begin{titlepage}
-\newgeometry{left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm}
+\newgeometry{left=2.5cm,right=2.5cm,top=2cm,bottom=2cm}
 \setlength{\parindent}{0pt}
 
-%%── University / Company header ─────────────────────────────
-\begin{minipage}[t]{0.54\textwidth}
-  {\small \textbf{[Nom de l'Université]}}\\[2pt]
-  {\small [Faculté / École d'Ingénieurs]}\\[2pt]
-  {\small Département Informatique}
-\end{minipage}
+%%── Background Curved Lines ─────────────────────────────────
+\begin{tikzpicture}[remember picture,overlay]
+  % Top left curved wave
+  \path[fill=primaryblue!80] 
+    (current page.north west) -- ++(10,0) 
+    to[out=180,in=90] ++(-10,-6) -- cycle;
+  
+  % Bottom right curved wave
+  \path[fill=primaryblue!80] 
+    (current page.south east) -- ++(-10,0) 
+    to[out=0,in=270] ++(10,6) -- cycle;
+\end{tikzpicture}
+
+\begin{center}
+
+%%── School header text ──────────────────────────────────────
+  {\small\itshape École supérieure privée}\\[4pt]
+  {\small\itshape Horizon des technologies numériques}\\[4pt]
+  {\tiny $\blacklozenge$ \hspace{1pt} $\blacklozenge$ \hspace{1pt} $\blacklozenge$ \hspace{1pt} $\blacklozenge$ \hspace{1pt} $\blacklozenge$}\\[4pt]
+  {\small N\textsuperscript{o} agrément : 2020/02}\\[4pt]
+  {\tiny $\blacklozenge$ \hspace{1pt} $\blacklozenge$ \hspace{1pt} $\blacklozenge$ \hspace{1pt} $\blacklozenge$ \hspace{1pt} $\blacklozenge$}
+
+  \vspace{0.8cm}
+
+%%── School logo ─────────────────────────────────────────────
+  \includegraphics[height=2.8cm]{figures/horizon_logo}
+
+  \vspace{1.5cm}
+
+%%── Report type ─────────────────────────────────────────────
+  {\Huge Final Year Project Thesis}
+
+  \vspace{0.8cm}
+  {\small\bfseries Presented in partial fulfillment of the requirements for the}
+
+  \vspace{0.6cm}
+  {\Large\bfseries National Master's Degree In Professional Computer Science}
+
+  \vspace{0.6cm}
+  {\small Specialization :}\\[6pt]
+  {\large\bfseries [Your Specialization Here]}
+
+  \vspace{0.8cm}
+  {\small\itshape By}\\[6pt]
+  {\large\itshape [Your Full Name]}
+
+  \vspace{0.8cm}
+
+%%── Decorative rule + Title block + Decorative rule ────────
+  {\color{primaryblue}\rule{0.6\linewidth}{1pt}}\\[16pt]
+  {\LARGE\bfseries Design And Implementation Of An\\[8pt]
+   [Your Project Title Here]}\\[16pt]
+  {\color{primaryblue}\rule{0.6\linewidth}{1pt}}
+
+  \vspace{0.8cm}
+  {\small\itshape Defended On [DD/MM/YYYY] Before The Jury Composed Of:}
+
+  \vspace{0.5cm}
+
+\end{center}
+
+%%── Jury table ───────────────────────────────────────────────
+\noindent
+\begin{minipage}[t]{0.55\textwidth}
+  \textbf{[Jury President Name]}\\[8pt]
+  \textbf{[Reporter Name]}\\[8pt]
+  \textbf{[Academic Supervisor Name]}\\[8pt]
+  \textbf{[Professional Supervisor Name]}
+\end{minipage}%
 \hfill
-\begin{minipage}[t]{0.42\textwidth}\raggedleft
-  \includegraphics[height=1.8cm]{figures/nextstep_logo}\\[4pt]
-  {\small Stage de Fin d'Études}\\[2pt]
-  {\small Réalisé chez \textbf{NextStep}, Tunis, Tunisie}\\[2pt]
-  {\small Année universitaire 2025--2026}
+\begin{minipage}[t]{0.40\textwidth}\raggedleft
+  President\\[8pt]
+  Reporter\\[8pt]
+  Academic Supervisor\\[8pt]
+  Professional Supervisor
 \end{minipage}
-
-\vspace{8pt}
-{\color{primaryblue}\rule{\linewidth}{1.5pt}}
-\vspace{8pt}
-
-%%── Report type ──────────────────────────────────────────────
-\begin{center}
-  {\large Mémoire de Projet de Fin d'Études}\\[4pt]
-  {\normalsize Pour l'obtention du diplôme d'\textbf{Ingénieur en Informatique}}
-\end{center}
-
-\vspace{30pt}
-
-%%── Title block ──────────────────────────────────────────────
-\begin{center}
-  {\color{primaryblue}\rule{0.38\linewidth}{0.6pt}}\\[16pt]
-  {\fontsize{32}{38}\selectfont\bfseries NextRH}\\[10pt]
-  {\LARGE\bfseries
-   Plateforme Intelligente de Gestion des\\[4pt]
-   Ressources Humaines et des Compétences\\[4pt]
-   basée sur l'Intelligence Artificielle}\\[16pt]
-  {\color{primaryblue}\rule{0.38\linewidth}{0.6pt}}
-\end{center}
-
-\vspace{36pt}
-
-%%── Author / Supervisors ─────────────────────────────────────
-\begin{center}
-\renewcommand{\arraystretch}{1.6}
-\begin{tabular}{rl}
-  \textbf{Étudiante :}            & Rania \textsc{[Nom de famille]}\\
-  \textbf{Encadrant académique :} & Dr.\ [Prénom Nom]\quad---\quad[Université]\\
-  \textbf{Encadrant entreprise :} & [Prénom Nom]\quad---\quad NextStep, Tunis\\
-\end{tabular}
-\end{center}
 
 \vfill
-{\color{primaryblue}\rule{\linewidth}{1.5pt}}
 \begin{center}
-  {\small Tunis, Tunisie\quad\textbullet\quad 2025--2026}
+  \rule{2cm}{0.4pt}\quad{\small\itshape Academic Year : [YYYY] / [YYYY]}\quad\rule{2cm}{0.4pt}
 \end{center}
+
 \restoregeometry
 \end{titlepage}
 
@@ -256,12 +277,17 @@ The deterministic \texttt{TemplateCVParser} achieves a 96\% exact-match rate on 
 %%  TABLE OF CONTENTS / FIGURES / TABLES
 %% ════════════════════════════════════════════════════════════
 \tableofcontents
-\compactlistof{List of Figures}{lof}
-\compactlistof{List of Tables}{lot}
+\clearpage
+\listoffigures
+\addcontentsline{toc}{chapter}{List of Figures}
+\clearpage
+\listoftables
+\addcontentsline{toc}{chapter}{List of Tables}
+\clearpage
 
 %% ── Acronyms list ────────────────────────────────────────────
-\section*{List of Acronyms}
-\addcontentsline{toc}{section}{List of Acronyms}
+\chapter*{List of Acronyms}
+\addcontentsline{toc}{chapter}{List of Acronyms}
 \begin{acronym}[RBAC]
   \acro{AI}{Artificial Intelligence}
   \acro{API}{Application Programming Interface}
@@ -445,7 +471,7 @@ Dense retrieval relies on bi-encoder models that map variable-length text sequen
 Once embeddings have been generated, efficient retrieval requires an index structure that supports approximate nearest-neighbour search \cite{johnson2019billion}. Dedicated vector databases such as Pinecone, Weaviate, Qdrant, and Chroma provide managed infrastructure with HNSW or IVFFlat indices. pgvector \cite{pgvector2023} is a PostgreSQL extension that adds a native \texttt{vector} column type and supports both \texttt{ivfflat} and \texttt{hnsw} indices, enabling cosine and L2 similarity search directly within a relational database. NextRH adopts pgvector to consolidate vector storage with the existing relational schema, avoiding a separate operational dependency and simplifying backup and recovery procedures.
 
 \subsection{Advanced RAG Techniques}
-Several techniques improve baseline RAG performance \cite{gao2023retrieval}. \textit{Chunking strategy}: splitting documents at semantic boundaries (sections rather than arbitrary character windows) preserves coherence within each retrieval unit. \textit{Metadata filtering}: restricting the candidate set before semantic search reduces noise; NextRH implements this as name-aware filtering---if a query mentions a specific employee, only that employee's chunks are considered. \textit{Verified-source prioritisation}: annotating chunks from human-verified certificates with a lexical prefix (\texttt{[Verified via direct upload]}) guides the model to prefer high-confidence data. These design choices are detailed in Section~\ref{sec:etl}.
+Several techniques improve baseline RAG performance \cite{gao2023retrieval}. \textit{Chunking strategy}: splitting documents at semantic boundaries (sections rather than arbitrary character windows) preserves coherence within each retrieval unit. \textit{Metadata filtering}: restricting the candidate set before semantic search reduces noise; NextRH implements this as name-aware filtering---if a query mentions a specific employee, only that employee's chunks are considered. \textit{Verified-source prioritisation}: annotating chunks from human-verified certificates with a lexical prefix (\texttt{[Verified via direct upload]}) guides the model to prefer high-confidence data. These design choices are crucial for the effectiveness of the RAG pipeline.
 
 \section{Microservices Architecture and Cloud-Native Engineering}
 

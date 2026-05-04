@@ -15,6 +15,7 @@ import { RagService } from '../rag/rag.service';
 import { FileValidationService } from '../file-validation/file-validation.service';
 import { normalizeFlexibleDate, parseFlexibleDateRange } from '../utils/date-normalizer';
 import { AIGenerationService } from '../ai-generation/ai-generation.service';
+import { CvTemplatesService } from '../cv-templates/cv-templates.service';
 
 @Injectable()
 export class CvService {
@@ -44,6 +45,7 @@ export class CvService {
         private readonly ragService: RagService,
         private readonly fileValidationService: FileValidationService,
         private readonly aiGenerationService: AIGenerationService,
+        private readonly cvTemplatesService: CvTemplatesService,
     ) {
         this.aiServiceBaseUrl =
             this.configService.get<string>('AI_SERVICE_URL')?.replace(/\/+$/, '') ||
@@ -771,9 +773,10 @@ export class CvService {
         employeeId: string,
         templateFile: Express.Multer.File,
         outputFormat: 'docx' | 'pdf' = 'docx',
-        language: string = 'en',
+        language: 'en' | 'fr' | 'original' | string = 'original',
         engine: 'primary' | 'fallback' = 'primary',
-    ): Promise<{ buffer: Buffer; filename: string; mimeType: string }> {
+        options: { requestingUserId?: string | null; recordHistory?: boolean } = {},
+    ): Promise<{ buffer: Buffer; filename: string; mimeType: string; warnings?: string }> {
         // 1. Load employee profile data
         const profileData = await this.getMyProfile(employeeId);
 
@@ -872,9 +875,17 @@ export class CvService {
         const arrayBuffer = await aiResponse.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
 
+        // Detect actual output format from AI service response headers.
+        // The AI service sets X-CV-Format to the actual format returned (which
+        // may differ from the requested format when PDF conversion fails and it
+        // falls back to DOCX).
+        const actualFormat = (aiResponse.headers.get('x-cv-format') || outputFormat).toLowerCase();
+        const isPdfFailed = aiResponse.headers.get('x-pdf-failed') === 'true';
+        const effectiveFormat = isPdfFailed ? 'docx' : actualFormat;
+
         // Derive filename from Content-Disposition or build one
         const contentDisposition = aiResponse.headers.get('content-disposition') || '';
-        const ext = outputFormat === 'pdf' ? '.pdf' : '.docx';
+        const ext = effectiveFormat === 'pdf' ? '.pdf' : '.docx';
         let filename = `${profileData.name.replace(/\s+/g, '_')}_CV${ext}`;
         const filenameMatch = contentDisposition.match(/filename="?([^";\n]+)"?/);
         if (filenameMatch) {
@@ -882,11 +893,89 @@ export class CvService {
         }
 
         const mimeType =
-            outputFormat === 'pdf'
+            effectiveFormat === 'pdf'
                 ? 'application/pdf'
                 : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
-        return { buffer, filename, mimeType };
+        if (isPdfFailed) {
+            this.logger.warn(`PDF conversion failed in AI service — returning DOCX instead (format requested: ${outputFormat})`);
+        }
+
+        // Forward the AI service's warning header (best-effort, opaque JSON) so
+        // the controller can surface it back to the client untouched.
+        const warnings = aiResponse.headers.get('x-cv-warnings') || undefined;
+
+        // Auto-save the template to the user's history once generation has
+        // succeeded (re-uploads of the same bytes bump usage stats instead of
+        // duplicating). Best-effort — a save failure must not block the
+        // response.
+        const shouldRecord = options.recordHistory !== false;
+        if (shouldRecord && options.requestingUserId) {
+            try {
+                await this.cvTemplatesService.recordGenerationUsage({
+                    userId: options.requestingUserId,
+                    file: templateFile,
+                    language,
+                });
+            } catch (exc) {
+                this.logger.warn(
+                    `Auto-saving template to history failed (non-fatal): ${(exc as Error)?.message || exc}`,
+                );
+            }
+        }
+
+        return { buffer, filename, mimeType, warnings };
+    }
+
+    /**
+     * Re-generate a CV using a template the bid manager has already used
+     * before (i.e. a row from cv-templates owned by them). Avoids the need
+     * to re-upload the same file.
+     */
+    async generateCvFromHistory(
+        userId: string,
+        templateId: string,
+        employeeId: string,
+        outputFormat: 'docx' | 'pdf' = 'docx',
+        language: 'en' | 'fr' | 'original' | string = 'original',
+        engine: 'primary' | 'fallback' = 'primary',
+    ): Promise<{ buffer: Buffer; filename: string; mimeType: string; warnings?: string }> {
+        const template = await this.cvTemplatesService.getOwnedTemplate(templateId, userId);
+        const { buffer: fileBuffer, mimetype, filename } =
+            await this.cvTemplatesService.loadTemplateBuffer(template);
+
+        const mockFile: Express.Multer.File = {
+            fieldname: 'template',
+            originalname: filename,
+            encoding: '7bit',
+            mimetype,
+            buffer: fileBuffer,
+            size: fileBuffer.length,
+            stream: null as any,
+            destination: '',
+            filename: '',
+            path: '',
+        };
+
+        const result = await this.generateCv(
+            employeeId,
+            mockFile,
+            outputFormat,
+            language,
+            engine,
+            // The template is already in history — just bump its usage row.
+            { requestingUserId: userId, recordHistory: false },
+        );
+
+        try {
+            await this.cvTemplatesService.bumpUsage(template.template_id);
+        } catch (exc) {
+            this.logger.warn(
+                `Bumping template usage failed (non-fatal): ${(exc as Error)?.message || exc}`,
+            );
+        }
+
+        return result;
     }
 
     /**

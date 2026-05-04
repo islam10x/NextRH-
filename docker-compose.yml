@@ -65,11 +65,21 @@ services:
   ai-service:
     build: ./ai-service
     container_name: cv-ai-service
+    env_file:
+      - ./ai-service/.env          # loads GROQ_API_KEY, APILAYER_API_KEY, etc.
     environment:
+      # Override local URLs with Docker service names
       - DATABASE_URL=postgresql+psycopg://postgres:${DB_PASSWORD}@postgres:5432/cv_management
       - OLLAMA_URL=http://ollama:11434
+      - BACKEND_URL=http://cv-backend:3000
+      - SHARED_STORAGE_ROOT=/app/file-storage
+      - RAG_METADATA_ROOTS=/app/file-storage/CV_Database
       - RAG_CHAT_MODEL=${RAG_CHAT_MODEL:-qwen2.5:1.5b-instruct}
       - RAG_CHAT_TIMEOUT_SECONDS=${RAG_CHAT_TIMEOUT_SECONDS:-30}
+      # LibreOffice is installed in the Docker image (see Dockerfile)
+      # LIBREOFFICE_PATH is intentionally left unset so _find_libreoffice()
+      # auto-detects /usr/bin/soffice inside the container.
+      - LIBREOFFICE_PATH=
     volumes:
       - ./file-storage:/app/file-storage
       - ./ai-service/app:/app/app

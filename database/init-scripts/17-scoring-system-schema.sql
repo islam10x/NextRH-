@@ -5,9 +5,21 @@
 -- ENUM TYPES
 -- =============================================
 
-CREATE TYPE project_complexity AS ENUM ('low', 'medium', 'high');
-CREATE TYPE participant_role AS ENUM ('contributor', 'technical_lead', 'project_lead');
-CREATE TYPE document_type AS ENUM ('pv', 'training_sheet');
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'project_complexity') THEN
+        CREATE TYPE project_complexity AS ENUM ('low', 'medium', 'high');
+    END IF;
+END$$;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'participant_role') THEN
+        CREATE TYPE participant_role AS ENUM ('contributor', 'technical_lead', 'project_lead');
+    END IF;
+END$$;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'document_type') THEN
+        CREATE TYPE document_type AS ENUM ('pv', 'training_sheet');
+    END IF;
+END$$;
 
 -- =============================================
 -- TABLES
@@ -46,8 +58,8 @@ CREATE TABLE IF NOT EXISTS project_records (
     CONSTRAINT uq_project_record UNIQUE (profile_id, project_name, client_name, completion_date)
 );
 
-CREATE INDEX idx_project_records_profile ON project_records(profile_id);
-CREATE INDEX idx_project_records_date ON project_records(completion_date);
+CREATE INDEX IF NOT EXISTS idx_project_records_profile ON project_records(profile_id);
+CREATE INDEX IF NOT EXISTS idx_project_records_date ON project_records(completion_date);
 
 -- 3. training_records — Parsed training delivery sheets (employee as trainer)
 CREATE TABLE IF NOT EXISTS training_records (
@@ -68,8 +80,8 @@ CREATE TABLE IF NOT EXISTS training_records (
     CONSTRAINT uq_training_record UNIQUE (profile_id, training_name, client_name, start_date)
 );
 
-CREATE INDEX idx_training_records_profile ON training_records(profile_id);
-CREATE INDEX idx_training_records_date ON training_records(start_date);
+CREATE INDEX IF NOT EXISTS idx_training_records_profile ON training_records(profile_id);
+CREATE INDEX IF NOT EXISTS idx_training_records_date ON training_records(start_date);
 
 -- 4. scoring_targets — Annual certification objective set by managers
 --    Only certifications have a manager-defined target; projects and trainings
@@ -124,6 +136,6 @@ CREATE TABLE IF NOT EXISTS employee_scores (
     CONSTRAINT uq_employee_score_year UNIQUE (profile_id, score_year)
 );
 
-CREATE INDEX idx_employee_scores_year ON employee_scores(score_year);
-CREATE INDEX idx_employee_scores_final ON employee_scores(final_score DESC);
-CREATE INDEX idx_employee_scores_profile ON employee_scores(profile_id);
+CREATE INDEX IF NOT EXISTS idx_employee_scores_year ON employee_scores(score_year);
+CREATE INDEX IF NOT EXISTS idx_employee_scores_final ON employee_scores(final_score DESC);
+CREATE INDEX IF NOT EXISTS idx_employee_scores_profile ON employee_scores(profile_id);

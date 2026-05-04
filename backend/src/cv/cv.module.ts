@@ -15,6 +15,7 @@ import { FileStorageModule } from '../file-storage/file-storage.module';
 import { RagModule } from '../rag/rag.module';
 import { FileValidationModule } from '../file-validation/file-validation.module';
 import { AIGenerationModule } from '../ai-generation/ai-generation.module';
+import { CvTemplatesModule } from '../cv-templates/cv-templates.module';
 
 @Module({
     imports: [
@@ -33,6 +34,7 @@ import { AIGenerationModule } from '../ai-generation/ai-generation.module';
         RagModule,
         FileValidationModule,
         AIGenerationModule,
+        CvTemplatesModule,
     ],
     controllers: [CvController],
     providers: [CvService],

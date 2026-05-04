@@ -204,7 +204,7 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
             lines = [line.strip() for line in str(desc_value or "").splitlines() if line.strip()]
         exp["description_lines"] = _normalize_lines(lines)
 
-    return {
+    context = {
         "full_name": profile.get("name") or "Employee",
         "email": _safe_text(profile.get("email")),
         "phone": _safe_text(profile.get("phone")),
@@ -234,6 +234,11 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
         "open_end_label": "Present",
         "section_titles": {},
     }
+    # Remove empty string fields (except full_name)
+    for key in ["email", "phone", "address", "linkedin", "birth_date", "marital_status", "hire_date", "current_position", "professional_summary", "total_experience_years", "last_update"]:
+        if not context[key]:
+            context.pop(key)
+    return context
 
 
 def _build_translation_payload(context: Dict[str, Any]) -> Dict[str, Any]:
@@ -606,13 +611,8 @@ def _postprocess_annexe9_tables(docx_path: str, context: Dict[str, Any]) -> None
         while len(table.rows) > 1:
             table._tbl.remove(table.rows[1]._tr)
 
-        # Add a base row to preserve table layout
+        # No data — keep header row only
         if not items:
-            row = table.add_row().cells
-            row[0].text = "N/A"
-            row[1].text = "N/A"
-            row[2].text = "N/A"
-            row[3].text = "N/A"
             continue
 
         for item in items:
@@ -635,7 +635,7 @@ def _clear_table_rows(table: Any) -> None:
         table._tbl.remove(table.rows[1]._tr)
 
 
-def _safe_text(value: Any, fallback: str = "N/A") -> str:
+def _safe_text(value: Any, fallback: str = "") -> str:
     text = str(value).strip() if value is not None else ""
     return text if text else fallback
 
@@ -669,13 +669,17 @@ def _fill_common_placeholders(doc: DocxDocument, context: Dict[str, Any]) -> Non
     def _replace_contact_line(text: str) -> Optional[str]:
         norm = _normalize_header_text(text)
         if norm.startswith("tel"):
-            return f"Tel : {context.get('phone') or 'N/A'}"
+            val = context.get('phone') or ''
+            return f"Tel : {val}" if val else None
         if norm.startswith("email"):
-            return f"Email : {context.get('email') or 'N/A'}"
+            val = context.get('email') or ''
+            return f"Email : {val}" if val else None
         if norm.startswith("adresse"):
-            return f"Adresse : {context.get('address') or 'N/A'}"
+            val = context.get('address') or ''
+            return f"Adresse : {val}" if val else None
         if norm.startswith("nom") and "prenom" in norm:
-            return f"Nom et Prenom : {context.get('full_name') or 'N/A'}"
+            val = context.get('full_name') or ''
+            return f"Nom et Prenom : {val}" if val else None
         return None
 
     def _replace_header_value_line(text: str) -> Optional[str]:
@@ -740,6 +744,126 @@ def _fill_common_placeholders(doc: DocxDocument, context: Dict[str, Any]) -> Non
                     return _safe_text(context.get("current_position"))
         return None
 
+    _SYMBOL_FONTS = frozenset({
+        'font awesome', 'fontawesome', 'wingdings', 'wingdings 2', 'wingdings 3',
+        'symbol', 'webdings', 'material icons', 'material icons outlined',
+        'glyphicons', 'glyphicons halflings', 'ionicons', 'entypo', 'feather',
+        'fa solid', 'fa brands', 'fa regular',
+    })
+    # Substring keywords that *strongly* imply an icon font even when the
+    # exact name varies between Office versions. We avoid bare 'fa' here
+    # because it produces false positives on common fonts (e.g. "Verdana FA").
+    _SYMBOL_KEYWORDS = ('awesome', 'wingding', 'webding', 'glyphicon', 'material icon')
+    # Unicode private-use area / typical icon ranges
+    _PRIVATE_USE_AREA = re.compile(
+        r'^[-\U000F0000-\U000FFFFD\U00100000-\U0010FFFD]+$'
+    )
+
+    def _run_is_icon(run) -> bool:
+        """Return True if this run contains only icon/symbol characters."""
+        try:
+            font_name = (run.font.name or "").lower().strip()
+        except Exception:
+            font_name = ""
+        if font_name and (
+            font_name in _SYMBOL_FONTS
+            or any(kw in font_name for kw in _SYMBOL_KEYWORDS)
+        ):
+            return True
+        text = (run.text or "")
+        stripped = text.strip()
+        if stripped and _PRIVATE_USE_AREA.match(stripped):
+            return True
+        # Common Unicode symbol ranges used as icons (geometric/misc symbols)
+        if stripped and all(
+            ('⌀' <= c <= '⏿')  # Miscellaneous Technical
+            or ('☀' <= c <= '➿')  # Misc Symbols + Dingbats
+            or ('⬀' <= c <= '⯿')  # Misc Symbols and Arrows
+            or ('' <= c <= '')  # Private Use Area
+            for c in stripped
+        ):
+            return True
+        return False
+
+    def _set_para_text_preserving_format(para, new_text: str) -> None:
+        """Replace paragraph text while keeping run formatting and icon characters."""
+        if not para.runs:
+            para.text = new_text
+            return
+
+        # Identify icon and text runs
+        icon_runs = [r for r in para.runs if _run_is_icon(r)]
+        text_runs = [r for r in para.runs if not _run_is_icon(r)]
+        first_text_run = text_runs[0] if text_runs else para.runs[0]
+
+        try:
+            bold = first_text_run.bold
+            italic = first_text_run.italic
+            font_name = first_text_run.font.name
+            font_size = first_text_run.font.size
+        except Exception:
+            bold = italic = None
+            font_name = None
+            font_size = None
+        try:
+            font_color = (
+                first_text_run.font.color.rgb
+                if first_text_run.font.color and first_text_run.font.color.type
+                else None
+            )
+        except Exception:
+            font_color = None
+
+        if icon_runs and new_text:
+            # Clear only non-icon runs; preserve icon runs intact
+            for r in text_runs:
+                r.text = ""
+            if text_runs:
+                text_runs[0].text = new_text
+                if bold is not None:
+                    text_runs[0].bold = bold
+                if italic is not None:
+                    text_runs[0].italic = italic
+                if font_name:
+                    text_runs[0].font.name = font_name
+                if font_size:
+                    text_runs[0].font.size = font_size
+                if font_color:
+                    from docx.shared import RGBColor  # noqa: F401
+                    text_runs[0].font.color.rgb = font_color
+            else:
+                run = para.add_run(new_text)
+                if bold is not None:
+                    run.bold = bold
+                if italic is not None:
+                    run.italic = italic
+                if font_name:
+                    run.font.name = font_name
+                if font_size:
+                    run.font.size = font_size
+                if font_color:
+                    from docx.shared import RGBColor  # noqa: F401
+                    run.font.color.rgb = font_color
+        elif not new_text:
+            # Empty replacement — clear all non-icon runs, keep icons intact
+            for r in text_runs:
+                r.text = ""
+        else:
+            # No icon runs — full replacement, preserve first-run format
+            para.clear()
+            run = para.add_run(new_text)
+            if bold is not None:
+                run.bold = bold
+            if italic is not None:
+                run.italic = italic
+            if font_name:
+                run.font.name = font_name
+            if font_size:
+                run.font.size = font_size
+            if font_color:
+                from docx.shared import RGBColor  # noqa: F401
+                run.font.color.rgb = font_color
+
     def _process_paragraphs(paragraphs, header_mode: bool = False):
         nonlocal placeholder_count
         for para in paragraphs:
@@ -747,20 +871,20 @@ def _fill_common_placeholders(doc: DocxDocument, context: Dict[str, Any]) -> Non
             if not text:
                 continue
             replacement = _replace_contact_line(text)
-            if not replacement and header_mode:
+            if replacement is None and header_mode:
                 replacement = _replace_header_value_line(text)
-            if replacement:
-                para.text = replacement
+            if replacement is not None:
+                _set_para_text_preserving_format(para, replacement)
                 continue
             if placeholder_re.match(text):
                 placeholder_count += 1
                 if placeholder_count == 1:
-                    para.text = _safe_text(context.get("full_name"))
+                    _set_para_text_preserving_format(para, context.get("full_name") or "")
                 elif placeholder_count == 2:
-                    para.text = _safe_text(context.get("current_position"))
+                    _set_para_text_preserving_format(para, context.get("current_position") or "")
                 else:
-                    # Treat additional dotted lines as N/A per user request
-                    para.text = "N/A"
+                    # Additional dotted lines with no data — clear them
+                    _set_para_text_preserving_format(para, "")
 
     def _process_tables(tables, header_mode: bool = False):
         for table in tables:
@@ -867,9 +991,7 @@ def _render_from_authoring_rules(
         col_count = len(table.columns)
 
         if not items:
-            row = table.add_row().cells
-            for col_idx in range(col_count):
-                row[col_idx].text = "N/A"
+            # No data for this section — leave table with header row only
             continue
 
         for item in items:
@@ -897,115 +1019,6 @@ def _expand_context_with_aliases(context: Dict[str, Any]) -> Dict[str, Any]:
             expanded[alias] = expanded[canonical]
     return expanded
 
-
-def generate_cv_document(
-    profile: Dict[str, Any],
-    template_path: str,
-    output_dir: str,
-    output_formats: List[str],
-    target_language: Optional[str] = None,
-    translate: bool = True,
-    filename_prefix: Optional[str] = None,
-    cached_field_mapping: Optional[Dict[str, str]] = None,
-) -> Dict[str, Any]:
-    """Generate a CV document from a template and profile data.
-
-    Args:
-        cached_field_mapping: Previously computed PDF field mapping to reuse.
-            When provided the heuristic + LLM analysis is skipped.
-
-    Returns:
-        dict with ``docx_path``, ``pdf_path``, and ``field_mapping``
-        (the computed mapping to cache on the template).
-    """
-    if not os.path.exists(template_path):
-        raise FileNotFoundError(f"Template not found: {template_path}")
-
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-
-    context = _build_context(profile)
-    if translate and target_language:
-        payload = _build_translation_payload(context)
-        translated = translate_json_payload(payload, target_language)
-        context = _apply_translations(context, translated)
-
-        # Translate description_lines in a dedicated pass for better coverage.
-        lines_payload = {
-            "work_experience_lines": [
-                exp.get("description_lines", []) for exp in context.get("work_experiences", [])
-            ],
-            "project_lines": [
-                proj.get("description_lines", []) for proj in context.get("projects", [])
-            ],
-        }
-        translated_lines = translate_json_payload(lines_payload, target_language)
-        we_lines = translated_lines.get("work_experience_lines") if isinstance(translated_lines, dict) else None
-        if isinstance(we_lines, list):
-            for idx, exp in enumerate(context.get("work_experiences", [])):
-                if idx < len(we_lines) and isinstance(we_lines[idx], list):
-                    exp["description_lines"] = _normalize_lines(we_lines[idx])
-                elif idx < len(we_lines) and we_lines[idx] is not None:
-                    exp["description_lines"] = _normalize_lines(we_lines[idx])
-
-    # Set the open-ended label after translation so it matches target language.
-    if target_language:
-        lang = target_language.lower()
-        if lang.startswith("fr"):
-            context["open_end_label"] = "Aujourd'hui"
-        elif lang.startswith("en"):
-            context["open_end_label"] = "Present"
-        elif lang.startswith("es"):
-            context["open_end_label"] = "Actualidad"
-        elif lang.startswith("de"):
-            context["open_end_label"] = "Heute"
-        elif lang.startswith("it"):
-            context["open_end_label"] = "Presente"
-        elif lang.startswith("ar"):
-            context["open_end_label"] = "حاليًا"
-        else:
-            context["open_end_label"] = "Present"
-
-    # Derive last degree fields when available.
-    if not context.get("last_degree") and not context.get("last_degree_year"):
-        degree, year = _derive_last_degree(context)
-        context["last_degree"] = degree
-        context["last_degree_year"] = year
-
-    # Precompute date ranges for table-friendly templates.
-    open_end_label = context.get("open_end_label") or "Present"
-    for exp in context.get("work_experiences", []) or []:
-        start = exp.get("startDate") or ""
-        end = exp.get("endDate") or ""
-        if start and not end:
-            end = open_end_label
-        if start and end:
-            exp["date_range"] = f"{start} - {end}"
-        else:
-            exp["date_range"] = str(start or end or "")
-
-    for proj in context.get("projects", []) or []:
-        start = proj.get("startDate") or ""
-        end = proj.get("endDate") or ""
-        if start and not end:
-            end = open_end_label
-        if start and end:
-            proj["date_range"] = f"{start} - {end}"
-        else:
-            proj["date_range"] = str(start or end or "")
-
-    for edu in context.get("educations", []) or []:
-        start = edu.get("startDate") or ""
-        end = edu.get("endDate") or edu.get("graduationDate") or ""
-        if start and not end:
-            end = open_end_label
-        if start and end:
-            edu["date_range"] = f"{start} - {end}"
-        else:
-            edu["date_range"] = str(start or end or edu.get("year") or "")
-
-    prefix = filename_prefix or _safe_filename(context.get("full_name") or "cv")
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    base_name = f"{prefix}_{timestamp}"
 
 def standardize_template(
     template_path: str,
@@ -1095,21 +1108,31 @@ def standardize_template(
             template_path = rebuild_scanned_template(template_path)
             template_ext = ".docx"
         else:
+            # Native PDF: MUST use pdf2docx. OCR rebuild is only for scanned PDFs —
+            # applying it to a native PDF produces garbled text and unusable results.
             logger.info(f"Converting native PDF template to DOCX using pdf2docx: {template_path}")
-            from pdf2docx import Converter
-
+            try:
+                from pdf2docx import Converter
+            except ImportError:
+                raise RuntimeError(
+                    "pdf2docx is required to convert native PDF templates but is not installed. "
+                    "Run: pip install pdf2docx  (then restart the service)."
+                )
             temp_dir = tempfile.mkdtemp()
             converted_docx_path = os.path.join(temp_dir, "converted_template.docx")
-
             try:
                 cv = Converter(template_path)
                 cv.convert(converted_docx_path)
                 cv.close()
+                if not os.path.exists(converted_docx_path) or os.path.getsize(converted_docx_path) < 100:
+                    raise RuntimeError("pdf2docx produced an empty or missing output file.")
                 template_path = converted_docx_path
                 template_ext = ".docx"
+            except RuntimeError:
+                raise
             except Exception as e:
                 logger.error(f"Failed to convert PDF template to DOCX: {e}")
-                raise RuntimeError(f"PDF to DOCX conversion failed: {str(e)}")
+                raise RuntimeError(f"PDF to DOCX conversion failed: {e}")
 
     return {
         "template_path": template_path,
@@ -1356,6 +1379,20 @@ def generate_cv_document(
             logger.info("[DEBUG] Annexe 9 tables post-processed.")
         except Exception as exc:
             logger.warning(f"[WARN] Annexe 9 post-processing failed: {exc}")
+
+    try:
+        from app.services.cv_generator_fallback import _relax_table_row_heights, _enable_shape_autofit
+        _relax_table_row_heights(docx_path)
+        _enable_shape_autofit(docx_path)
+    except Exception as exc:
+        logger.warning("Post-processing overflow fixes failed (non-fatal): %s", exc)
+
+    if translate and target_language and target_language not in ("original", "orig"):
+        try:
+            from app.services.cv_generator_fallback import _translate_section_headings_in_docx
+            _translate_section_headings_in_docx(docx_path, target_language)
+        except Exception as exc:
+            logger.warning("Section heading translation failed (non-fatal): %s", exc)
 
     pdf_path = None
     if "pdf" in output_formats:
@@ -1837,8 +1874,22 @@ def _build_pdf_field_map(context: Dict[str, Any]) -> Dict[str, str]:
 
 def _convert_to_pdf(docx_path: str, output_dir: str) -> str:
     """Convert DOCX to PDF using LibreOffice headless."""
+    # Use LIBREOFFICE_PATH env var (same as cv_generator_fallback._find_libreoffice)
+    _soffice = os.environ.get("LIBREOFFICE_PATH") or ""
+    if not _soffice or not os.path.exists(_soffice):
+        import sys as _sys
+        if _sys.platform == "win32":
+            for _cand in [
+                r"C:\Program Files\LibreOffice\program\soffice.exe",
+                r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+            ]:
+                if os.path.exists(_cand):
+                    _soffice = _cand
+                    break
+        if not _soffice:
+            _soffice = "soffice"  # fallback: must be in PATH
     cmd = [
-        "soffice",
+        _soffice,
         "--headless",
         "--convert-to",
         "pdf",

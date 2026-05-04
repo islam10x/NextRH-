@@ -5,7 +5,21 @@ __pycache__
 .Python
 env/
 venv/
+.venv/
 .env
-.venv
 .git
 .gitignore
+# Pytest cache (locks during build)
+.pytest_cache/
+pytest-cache-files*/
+# Test outputs
+*.docx
+test_output.docx
+out.docx
+test_templates/
+tests/
+# Upload temp dir
+uploads/
+# IDE
+.vscode/
+.idea/

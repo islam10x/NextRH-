@@ -161,6 +161,7 @@ export class CvGenerationService {
     async getGeneratedFile(generatedId: string, format: 'docx' | 'pdf') {
         const record = await this.generatedRepo.findOne({
             where: { generated_cv_id: generatedId },
+            relations: ['profile', 'profile.user', 'template'],
         });
         if (!record) {
             throw new NotFoundException('Generated CV not found');
@@ -170,9 +171,19 @@ export class CvGenerationService {
             throw new NotFoundException(`No ${format.toUpperCase()} file available`);
         }
         const absPath = this.resolveAbsolutePath(filePath);
+        // Build a meaningful filename: Name_Template_YYYY-MM-DD.pdf
+        const safe = (value: string) => String(value || '').trim().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_\-]/g, '');
+        const date = record.generatedAt ? record.generatedAt.toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+        const user = record.profile?.user;
+        const name = user
+            ? [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || 'CV'
+            : 'CV';
+        const templateName = record.template && record.template.templateName ? record.template.templateName : 'Template';
+        const ext = format === 'pdf' ? 'pdf' : 'docx';
+        const filename = `${safe(name)}_${safe(templateName)}_${date}.${ext}`;
         return {
             path: absPath,
-            filename: path.basename(absPath),
+            filename,
             mime:
                 format === 'pdf'
                     ? 'application/pdf'

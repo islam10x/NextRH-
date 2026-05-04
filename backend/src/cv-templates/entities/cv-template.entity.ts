@@ -47,6 +47,15 @@ export class CvTemplate {
     @Column({ name: 'detected_fields', type: 'jsonb', nullable: true })
     detectedFields?: string[] | null;
 
+    @Column({ name: 'file_hash', length: 64, nullable: true })
+    fileHash?: string | null;
+
+    @Column({ name: 'usage_count', type: 'int', default: 0 })
+    usageCount: number;
+
+    @Column({ name: 'last_used_at', type: 'timestamp', nullable: true })
+    lastUsedAt?: Date | null;
+
     @ManyToOne(() => User, { nullable: true })
     @JoinColumn({ name: 'uploaded_by' })
     uploadedBy?: User | null;

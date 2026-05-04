@@ -318,7 +318,7 @@ def _identify_section_from_text(text: str) -> Optional[str]:
 
 
 def _replace_sections_in_layout_table(
-    tbl: Any, body: Any, employee: Dict[str, Any],
+    tbl: Any, body: Any, employee: Dict[str, Any], preferred_language: Optional[str] = None,
 ) -> int:
     """Replace CV section content inside a layout-table's cells.
 
@@ -360,7 +360,7 @@ def _replace_sections_in_layout_table(
 
             content_paras = cell_paras[sec_idx + 1: next_sec_idx]
 
-            new_content = _build_section_content(section_name, employee)
+            new_content = _build_section_content(section_name, employee, preferred_language)
             if new_content is None:
                 # No employee data — remove existing content
                 for elem in content_paras:
@@ -1408,43 +1408,68 @@ def _build_replacements(
         if not detected.get('linkedin'):  # only if real URL not already handled
             pairs.append((ph_li, new_li))
 
+    def _split_emp_address_for_two_lines(addr: str) -> Optional[Tuple[str, str]]:
+        parts = [p.strip() for p in addr.split(',') if p and p.strip()]
+        if len(parts) < 2:
+            return None
+        if len(parts) >= 3 and re.fullmatch(r'\d+[A-Za-z]?', parts[0]):
+            first = f"{parts[0]}, {parts[1]}".strip()
+            second = ', '.join(parts[2:]).strip()
+            return (first, second) if first and second else None
+        first = parts[0]
+        second = ', '.join(parts[1:]).strip()
+        return (first, second) if first and second else None
+
     # Address / location — replace with employee's, or clear if employee has none
     if detected.get('address'):
-        if employee.get('address'):
-            det_addr = detected['address']
-            emp_addr = employee['address']
-        pairs.append((det_addr, emp_addr))
+        det_addr = detected['address']
+        emp_addr = (employee.get('address') or '').strip()
+        prec_line = (detected.get('address_preceding_line') or '').strip()
+        if emp_addr:
+            addr_for_det = emp_addr
+            if prec_line:
+                split_addr = _split_emp_address_for_two_lines(emp_addr)
+                if split_addr:
+                    first_line, second_line = split_addr
+                    pairs.append((prec_line, first_line))
+                    addr_for_det = second_line
+                else:
+                    # Keep previous behavior when we can't split cleanly:
+                    # erase stale template street line.
+                    pairs.append((prec_line, ''))
+            pairs.append((det_addr, addr_for_det))
 
-        # Fragment pairs: TXBX templates split "City, Country" into
-        # "City" and ", Country" paragraphs.
-        # SAFETY: only generate fragments when BOTH addresses follow a simple
-        # 2-part "City, Country" pattern.  Skip when the employee address is
-        # a complex multi-part street address (3+ commas) or when the mapped
-        # city-part is not a recognisable place name (e.g. just a number).
-        det_comma_count = det_addr.count(',')
-        emp_comma_count = emp_addr.count(',')
-        _simple_addr = (det_comma_count == 1 and emp_comma_count <= 1)
-        if _simple_addr and ',' in det_addr:
-            det_parts = [p.strip() for p in det_addr.split(',', 1)]
-            emp_parts_addr = [p.strip() for p in emp_addr.split(',', 1)] if ',' in emp_addr else [emp_addr.strip(), '']
-            # Only create city fragment if the employee city looks like a name (has letters)
-            emp_city_has_alpha = bool(re.search(r'[A-Za-zÀ-ÿ]{2,}', emp_parts_addr[0]))
-            if det_parts[0] and emp_parts_addr[0] and det_parts[0] != emp_parts_addr[0] and emp_city_has_alpha:
-                pairs.append((det_parts[0], emp_parts_addr[0]))
-            if len(det_parts) > 1 and len(emp_parts_addr) > 1 and emp_parts_addr[1]:
-                det_suffix = ', ' + det_parts[1]
-                emp_suffix = ', ' + emp_parts_addr[1]
-                if det_suffix != emp_suffix:
-                    pairs.append((det_suffix, emp_suffix))
-                # Also handle " Country" alone (no comma prefix in paragraph)
-                if det_parts[1] != emp_parts_addr[1]:
-                    pairs.append((det_parts[1], emp_parts_addr[1]))
+            # Fragment pairs: TXBX templates split "City, Country" into
+            # "City" and ", Country" paragraphs.
+            # SAFETY: only generate fragments when BOTH addresses follow a simple
+            # 2-part "City, Country" pattern.  Skip when the employee address is
+            # a complex multi-part street address (3+ commas) or when the mapped
+            # city-part is not a recognisable place name (e.g. just a number).
+            det_comma_count = det_addr.count(',')
+            emp_comma_count = addr_for_det.count(',')
+            _simple_addr = (det_comma_count == 1 and emp_comma_count <= 1)
+            if _simple_addr and ',' in det_addr:
+                det_parts = [p.strip() for p in det_addr.split(',', 1)]
+                emp_parts_addr = [p.strip() for p in addr_for_det.split(',', 1)] if ',' in addr_for_det else [addr_for_det.strip(), '']
+                # Only create city fragment if the employee city looks like a name (has letters)
+                emp_city_has_alpha = bool(re.search(r'[A-Za-zÀ-ÿ]{2,}', emp_parts_addr[0]))
+                if det_parts[0] and emp_parts_addr[0] and det_parts[0] != emp_parts_addr[0] and emp_city_has_alpha:
+                    pairs.append((det_parts[0], emp_parts_addr[0]))
+                if len(det_parts) > 1 and len(emp_parts_addr) > 1 and emp_parts_addr[1]:
+                    det_suffix = ', ' + det_parts[1]
+                    emp_suffix = ', ' + emp_parts_addr[1]
+                    if det_suffix != emp_suffix:
+                        pairs.append((det_suffix, emp_suffix))
+                    # Also handle " Country" alone (no comma prefix in paragraph)
+                    if det_parts[1] != emp_parts_addr[1]:
+                        pairs.append((det_parts[1], emp_parts_addr[1]))
         else:
             # Employee has no address — erase every address fragment so
             # the previous employee's address does not bleed through.
-            det_addr = detected['address']
             pairs.append((det_addr, ''))
             logger.debug("Clearing template address (employee has none): %r", det_addr)
+            if prec_line:
+                pairs.append((prec_line, ''))
             # Also clear fragment parts if simple City, Country format
             if det_addr.count(',') == 1:
                 det_parts = [p.strip() for p in det_addr.split(',', 1)]
@@ -1453,6 +1478,11 @@ def _build_replacements(
                 if det_parts[1]:
                     pairs.append((', ' + det_parts[1], ''))
                     pairs.append((det_parts[1], ''))
+            else:
+                # Clear comma-separated fragments for complex addresses too.
+                for frag in [f.strip() for f in det_addr.split(',') if f.strip()]:
+                    if len(frag) >= 3:
+                        pairs.append((frag, ''))
 
     # Clear preceding street line (e.g. "234 5th Ave,") when the address
     # was detected from a US-format "City, ST ZIP" on the next paragraph.
@@ -2642,7 +2672,31 @@ def _identify_section_lxml(p_elem: Any) -> Optional[str]:
     return None
 
 
-def _groq_generate_skills(employee: Dict[str, Any], api_key: str) -> Optional[str]:
+def _normalize_language_code(language: Optional[str]) -> str:
+    """Normalize a language hint to 'fr', 'en', or 'original'."""
+    lang = (language or "original").strip().lower()
+    if lang in {"fr", "fr-fr", "french", "francais", "français"}:
+        return "fr"
+    if lang in {"en", "en-us", "en-gb", "english"}:
+        return "en"
+    return "original"
+
+
+def _language_instruction(language: Optional[str]) -> str:
+    """Return a strict language instruction for LLM prompts."""
+    lang = _normalize_language_code(language)
+    if lang == "fr":
+        return "Write strictly in French. Do not output English."
+    if lang == "en":
+        return "Write strictly in English. Do not output French."
+    return "Write in the same language as the profile/template data."
+
+
+def _groq_generate_skills(
+    employee: Dict[str, Any],
+    api_key: str,
+    preferred_language: Optional[str] = None,
+) -> Optional[str]:
     """
     Ask Groq to synthesize a concise skills paragraph from the employee's
     full profile (skills array, certifications, education, projects).
@@ -2669,11 +2723,12 @@ def _groq_generate_skills(employee: Dict[str, Any], api_key: str) -> Optional[st
         'projects_summary': [p for p in projs if p][:5],
     }
 
+    lang_rule = _language_instruction(preferred_language)
     prompt = (
         "Based on this employee profile, produce a single short paragraph "
         "(max 60 words) of technical skills and competencies, "
         "written as a comma-separated list suitable for a CV skills section. "
-        "Use the language of the profile data. "
+        f"{lang_rule} "
         "Do NOT include certifications verbatim — extract only skill keywords. "
         "Return ONLY the skills text, no commentary.\n\n"
         f"Profile:\n{json.dumps(profile, ensure_ascii=False)}"
@@ -2699,7 +2754,11 @@ def _groq_generate_skills(employee: Dict[str, Any], api_key: str) -> Optional[st
     return None
 
 
-def _groq_generate_summary(employee: Dict[str, Any], api_key: str) -> Optional[str]:
+def _groq_generate_summary(
+    employee: Dict[str, Any],
+    api_key: str,
+    preferred_language: Optional[str] = None,
+) -> Optional[str]:
     """
     Ask Groq to generate a professional summary paragraph for the employee.
 
@@ -2729,10 +2788,11 @@ def _groq_generate_summary(employee: Dict[str, Any], api_key: str) -> Optional[s
         ],
     }
 
+    lang_rule = _language_instruction(preferred_language)
     prompt = (
         "Based on this employee profile, write a professional CV summary paragraph "
         "(3–4 sentences, max 80 words). Use a confident, professional tone. "
-        "Write in the same language as the profile data. "
+        f"{lang_rule} "
         "Return ONLY the summary text — no title, no labels, no commentary.\n\n"
         f"Profile:\n{json.dumps(profile, ensure_ascii=False)}"
     )
@@ -2775,7 +2835,11 @@ def _groq_generate_summary(employee: Dict[str, Any], api_key: str) -> Optional[s
     return None
 
 
-def _build_section_content(section: str, employee: Dict[str, Any]) -> Optional[List[Dict]]:
+def _build_section_content(
+    section: str,
+    employee: Dict[str, Any],
+    preferred_language: Optional[str] = None,
+) -> Optional[List[Dict]]:
     """
     Return a list of {text, bold, bullet} dicts for a CV section,
     built from the employee's structured data.
@@ -2795,7 +2859,7 @@ def _build_section_content(section: str, employee: Dict[str, Any]) -> Optional[L
             # Attempt Groq generation when no pre-written summary is in the profile
             api_key = settings.GROQ_API_KEY
             if api_key:
-                generated = _groq_generate_summary(employee, api_key)
+                generated = _groq_generate_summary(employee, api_key, preferred_language)
                 if generated:
                     text = generated
                     logger.info("[_build_section_content] Groq summary injected")
@@ -2870,7 +2934,7 @@ def _build_section_content(section: str, employee: Dict[str, Any]) -> Optional[L
         # Try Groq synthesis first; fall back to formatted list
         api_key = settings.GROQ_API_KEY
         if api_key and (certs or projs):
-            synthesized = _groq_generate_skills(employee, api_key)
+            synthesized = _groq_generate_skills(employee, api_key, preferred_language)
             if synthesized:
                 return [{'text': synthesized, 'bold': False, 'bullet': False}]
         # Fallback: build from skills array + tech keywords extracted from cert names
@@ -4026,7 +4090,11 @@ def _replace_language_textboxes_in_range(body_elements: list, employee_langs: li
     return modified
 
 
-def _replace_cv_sections(docx_path: str, employee: Dict[str, Any]) -> int:
+def _replace_cv_sections(
+    docx_path: str,
+    employee: Dict[str, Any],
+    preferred_language: Optional[str] = None,
+) -> int:
     """
     Find CV section headings in the document body and replace their content
     with the employee's structured data.
@@ -4080,7 +4148,7 @@ def _replace_cv_sections(docx_path: str, employee: Dict[str, Any]) -> int:
                     "— replacing sections in table cells"
                 )
                 count = _replace_sections_in_layout_table(
-                    layout_tbl, body, employee,
+                    layout_tbl, body, employee, preferred_language,
                 )
                 if count:
                     # Write back
@@ -4120,7 +4188,7 @@ def _replace_cv_sections(docx_path: str, employee: Dict[str, Any]) -> int:
             )
             content_children = body_children[heading_pos + 1 : next_pos]
 
-            new_content = _build_section_content(section_name, employee)
+            new_content = _build_section_content(section_name, employee, preferred_language)
             if new_content is None:
                 # No employee data for this section — remove content (but preserve
                 # textbox-container heading paragraphs: they are visual layout elements
@@ -4380,7 +4448,7 @@ def _replace_cv_sections(docx_path: str, employee: Dict[str, Any]) -> int:
             return False
 
         if 'summary' not in sections_rebuilt and sections_found:
-            summary_content = _build_section_content('summary', employee)
+            summary_content = _build_section_content('summary', employee, preferred_language)
             if summary_content:
                 first_sec_pos = body_children.index(sections_found[0][1])
                 summary_candidates = [
@@ -4414,7 +4482,7 @@ def _replace_cv_sections(docx_path: str, employee: Dict[str, Any]) -> int:
 
         # --- Experience block: body paragraphs between last header and education ---
         if 'experience' not in sections_rebuilt:
-            exp_content = _build_section_content('experience', employee)
+            exp_content = _build_section_content('experience', employee, preferred_language)
             if exp_content:
                 edu_heading = next((h for s, h in sections_found if s == 'education'), None)
                 if edu_heading is not None:
@@ -4670,7 +4738,7 @@ def _replace_cv_sections_in_textboxes(
                 n_pos = live.index(next_h_elem) if next_h_elem in live else len(live)
                 content_elems = live[h_pos + 1: n_pos]
 
-                new_content = _build_section_content(sec_name, employee)
+                new_content = _build_section_content(sec_name, employee, preferred_language)
                 if new_content is None:
                     for elem in content_elems:
                         try:
@@ -4813,7 +4881,7 @@ def _replace_cv_sections_in_textboxes(
                             if t and len(t) > 15:
                                 old_para_texts.append(t)
 
-                    new_content = _build_section_content(sec_name, employee)
+                    new_content = _build_section_content(sec_name, employee, preferred_language)
                     if new_content is None:
                         # No data — blank all content textboxes
                         for c_txbx, _ in candidates:
@@ -5435,7 +5503,10 @@ def _detect_template_mode(docx_path: str) -> str:
     return "direct"
 
 
-def _build_context_from_employee(employee: Dict[str, Any]) -> Dict[str, Any]:
+def _build_context_from_employee(
+    employee: Dict[str, Any],
+    preferred_language: Optional[str] = None,
+) -> Dict[str, Any]:
     """Build Jinja2 context from employee data.
 
     Every value is coerced to a safe type (string / list) so that the
@@ -5467,7 +5538,7 @@ def _build_context_from_employee(employee: Dict[str, Any]) -> Dict[str, Any]:
         api_key = settings.GROQ_API_KEY
         if api_key:
             try:
-                generated = _groq_generate_summary(employee, api_key)
+                generated = _groq_generate_summary(employee, api_key, preferred_language)
                 if generated:
                     ctx["summary"] = generated
                     logger.info("[_build_context] Groq summary injected")
@@ -5523,6 +5594,7 @@ def _generate_with_placeholders(
     employee: Dict[str, Any],
     output_path: str,
     gen_ctx: Optional[GenerationContext] = None,
+    preferred_language: Optional[str] = None,
 ) -> str:
     """Generate using docxtpl for placeholder templates.
 
@@ -5543,7 +5615,7 @@ def _generate_with_placeholders(
         p.message = "Template loaded successfully"
 
     with gen_ctx.phase("build_context") as p:
-        ctx = _build_context_from_employee(employee)
+        ctx = _build_context_from_employee(employee, preferred_language)
         # Ensure all string values are XML-safe
         for key, value in ctx.items():
             if isinstance(value, str):
@@ -5615,12 +5687,104 @@ Return a JSON object with two keys:
 
 Return ONLY valid JSON — no prose, no markdown fences, no explanation.
 
+Language rule:
+- For any generated prose in replacement values (for example summary/objective text),
+  {language_hint}
+- Keep employee proper nouns (company names, product names, acronyms) unchanged.
+
 TEMPLATE TEXT:
 {template_text}
 
 EMPLOYEE DATA:
 {employee_json}
 """
+
+
+_AUTO_CLEAR_SECTION_KEYWORDS: Dict[str, List[str]] = {
+    # Sidebar-only sections frequently present in generic templates but usually
+    # absent from structured employee payloads.
+    'communication': [
+        'communication',
+        'communications',
+        'communication skills',
+        'soft skills',
+        'compétences relationnelles',
+        'aptitudes relationnelles',
+        'compétences de communication',
+    ],
+    'direction': [
+        'direction',
+        'leadership',
+        'management',
+        'gestion',
+        'managerial skills',
+        'leadership skills',
+        'management skills',
+        'encadrement',
+    ],
+}
+
+
+def _normalize_heading_label(text: str) -> str:
+    return re.sub(r'[^a-z0-9]+', ' ', (text or '').strip().lower()).strip()
+
+
+def _is_heading_label_match(text: str, keyword: str) -> bool:
+    t = _normalize_heading_label(text)
+    k = _normalize_heading_label(keyword)
+    if not t or not k:
+        return False
+    if t == k:
+        return True
+    return t.startswith(k + ' ') or re.search(rf'\b{re.escape(k)}\b', t) is not None
+
+
+def _has_optional_section_data(employee: Dict[str, Any], canonical: str) -> bool:
+    if canonical == 'communication':
+        keys = ('communication', 'communications', 'communicationSkills', 'soft_skills', 'softSkills')
+    elif canonical == 'direction':
+        keys = ('direction', 'leadership', 'management', 'managerialSkills', 'managerial_skills')
+    else:
+        keys = ()
+
+    for key in keys:
+        value = employee.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+        if isinstance(value, (list, tuple, dict)) and len(value) > 0:
+            return True
+    return False
+
+
+def _derive_deterministic_sections_to_clear(
+    paragraphs: List[str],
+    employee: Dict[str, Any],
+) -> List[str]:
+    """Find optional template sections to clear without relying on Groq.
+
+    We only consider short heading-like lines to avoid false positives.
+    """
+    extra: List[str] = []
+    seen_norm: set[str] = set()
+
+    for para in paragraphs or []:
+        text = (para or '').strip()
+        if not text or len(text) > 70:
+            continue
+        if re.search(r'@|https?://|\d{2,}[/-]\d{2,}', text, re.I):
+            continue
+
+        for canonical, keywords in _AUTO_CLEAR_SECTION_KEYWORDS.items():
+            if _has_optional_section_data(employee, canonical):
+                continue
+            if any(_is_heading_label_match(text, kw) for kw in keywords):
+                norm = _normalize_heading_label(text)
+                if norm and norm not in seen_norm:
+                    seen_norm.add(norm)
+                    extra.append(text)
+                break
+
+    return extra
 
 
 def _build_groq_input_text(full_text: str, paragraphs: List[str], max_chars: int = 5500) -> str:
@@ -5693,6 +5857,7 @@ def _ai_get_replacements(
     template_text: str,
     employee: Dict[str, Any],
     paragraphs: Optional[List[str]] = None,
+    preferred_language: Optional[str] = None,
 ) -> Tuple[List[Tuple[str, str]], List[str]]:
     """
     Call Groq LLM to identify every personal data string in the template
@@ -5735,10 +5900,12 @@ def _ai_get_replacements(
         _populated.append("interests/centres d'intérêt")
     populated_sections_str = ', '.join(_populated) if _populated else 'see employee JSON'
 
+    language_hint = _language_instruction(preferred_language)
     prompt = _AI_PROMPT.format(
         template_text=trunc_text,
         employee_json=json.dumps(employee, ensure_ascii=False, indent=2),
         populated_sections=populated_sections_str,
+        language_hint=language_hint,
     )
 
     client = Groq(api_key=api_key, timeout=settings.GROQ_TIMEOUT_SECONDS)
@@ -5846,6 +6013,28 @@ def _ai_get_replacements(
                     f"(employee has data): {skipped}")
     sections_to_clear = filtered_stc
 
+    # ── Deterministic supplement (LLM-independent) ─────────────────────
+    # Some templates include optional sidebar sections such as
+    # "Communication"/"Direction" that Groq may occasionally miss.
+    # Detect those headings from template paragraphs and clear them when the
+    # employee profile has no dedicated data for them.
+    deterministic_stc = _derive_deterministic_sections_to_clear(paragraphs, employee)
+    if deterministic_stc:
+        existing_norm = {_normalize_heading_label(s) for s in sections_to_clear}
+        added = []
+        for sec in deterministic_stc:
+            norm = _normalize_heading_label(sec)
+            if norm and norm not in existing_norm:
+                sections_to_clear.append(sec)
+                existing_norm.add(norm)
+                added.append(sec)
+        if added:
+            logger.info(
+                "Deterministic clear detection added %d section(s): %s",
+                len(added),
+                added,
+            )
+
     logger.info(f"AI produced {len(pairs)} replacement pairs:")
     for old, new in pairs:
         logger.info(f"  '{old}' → '{new}'")
@@ -5871,6 +6060,19 @@ def _clear_template_sections(docx_path: str, sections_to_clear: List[str]) -> in
         return 0
 
     W = NS_W
+    def _norm_label(s: str) -> str:
+        return re.sub(r'[^a-z0-9]+', ' ', (s or '').strip().lower()).strip()
+
+    def _label_match(text: str, label: str) -> bool:
+        t = _norm_label(text)
+        l = _norm_label(label)
+        if not t or not l:
+            return False
+        if t == l:
+            return True
+        # Accept common variants: "communication skills", "direction / management", etc.
+        return t.startswith(l + ' ') or re.search(rf'\b{re.escape(l)}\b', t) is not None
+
     temp_dir = tempfile.mkdtemp()
     cleared = 0
     try:
@@ -5887,7 +6089,7 @@ def _clear_template_sections(docx_path: str, sections_to_clear: List[str]) -> in
             t_elems = list(txbx.iter(f'{{{W}}}t'))
             text = ''.join(t.text or '' for t in t_elems).strip()
             for label in sections_to_clear:
-                if text.upper() == label.upper() or text.strip() == label.strip():
+                if _label_match(text, label):
                     # Clear only this textbox
                     for t in t_elems:
                         t.text = ''
@@ -5930,7 +6132,7 @@ def _clear_template_sections(docx_path: str, sections_to_clear: List[str]) -> in
                     if child.tag != f'{{{W}}}p':
                         continue
                     texts = ''.join(t.text or '' for t in child.iter(f'{{{W}}}t')).strip()
-                    if texts.upper() == label.upper() or texts.strip() == label.strip():
+                    if _label_match(texts, label):
                         # Found heading — remove it and its safe content range
                         current_body = list(body)
                         idx = current_body.index(child)
@@ -5987,7 +6189,7 @@ def _clear_template_sections(docx_path: str, sections_to_clear: List[str]) -> in
                     t.text or '' for t in child.iter(f'{{{W}}}t')
                 ).strip()
                 for label in sections_to_clear:
-                    if cell_text.upper() == label.upper() or cell_text.strip() == label.strip():
+                    if _label_match(cell_text, label):
                         # Clear all subsequent paragraphs in this cell up to the
                         # next section-like heading paragraph
                         for content_p in tc_children[h_idx + 1:]:
@@ -6477,6 +6679,7 @@ def _generate_with_replacement(
     employee: Dict[str, Any],
     output_path: str,
     gen_ctx: Optional[GenerationContext] = None,
+    preferred_language: Optional[str] = None,
 ) -> str:
     """Replacement pipeline — single pass with full mapping.
 
@@ -6560,7 +6763,7 @@ def _generate_with_replacement(
                     logger.info("[gen] GROQ_API_KEY not set — summary will use fallback")
                     summary = None
                 else:
-                    summary = _groq_generate_summary(employee, api_key)
+                    summary = _groq_generate_summary(employee, api_key, preferred_language)
                 if summary:
                     employee = dict(employee)
                     employee['summary'] = summary
@@ -6595,7 +6798,12 @@ def _generate_with_replacement(
     # Phase 5: Groq AI pairs — supplement (fills any gap the structured map missed)
     with gen_ctx.phase("ai_supplement") as p:
         try:
-            ai_pairs, sections_to_clear = _ai_get_replacements(full_text, employee, paragraphs)
+            ai_pairs, sections_to_clear = _ai_get_replacements(
+                full_text,
+                employee,
+                paragraphs,
+                preferred_language=preferred_language,
+            )
         except Exception as exc:
             p.status = "failed"
             p.error = str(exc)
@@ -6624,7 +6832,11 @@ def _generate_with_replacement(
     sections_replaced = 0
     with gen_ctx.phase("section_replacement") as p:
         try:
-            sections_replaced = _replace_cv_sections(output_path, employee)
+            sections_replaced = _replace_cv_sections(
+                output_path,
+                employee,
+                preferred_language=preferred_language,
+            )
             p.details["sections_replaced"] = sections_replaced
             p.message = f"{sections_replaced} sections replaced"
             if sections_replaced:
@@ -7055,6 +7267,7 @@ def process_cv(
     output_dir: str,
     output_pdf: bool = False,
     debug: bool = False,
+    language: str = "original",
 ) -> str:
     """
     Process a CV template and replace personal information with employee data.
@@ -7103,6 +7316,8 @@ def process_cv(
             f"{validation_report.valid_field_count}/"
             f"{validation_report.original_field_count} fields valid"
         )
+    preferred_language = _normalize_language_code(language)
+    logger.info(f"Target language hint: {preferred_language}")
     
     os.makedirs(output_dir, exist_ok=True)
     
@@ -7144,9 +7359,21 @@ def process_cv(
     
     try:
         if mode == "placeholder":
-            _generate_with_placeholders(template_path, employee_data, output_path, ctx)
+            _generate_with_placeholders(
+                template_path,
+                employee_data,
+                output_path,
+                ctx,
+                preferred_language=preferred_language,
+            )
         else:
-            _generate_with_replacement(template_path, employee_data, output_path, ctx)
+            _generate_with_replacement(
+                template_path,
+                employee_data,
+                output_path,
+                ctx,
+                preferred_language=preferred_language,
+            )
     except CVGenerationError:
         ctx.save_trace()
         raise

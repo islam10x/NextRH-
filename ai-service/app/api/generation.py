@@ -15,7 +15,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -25,10 +25,16 @@ from app.services.cv_generator import (
     generate_cv_document,
     standardize_template,
 )
+from app.services.pdf_overlay import build_auto_overlay_mapping
 from app.services.cv_generator_fallback import (
     convert_docx_to_pdf as convert_docx_to_pdf_fallback,
 )
 from app.services.cv_generator_fallback import process_cv as process_cv_fallback
+from app.services.cv_translation import (
+    SUPPORTED_LANGUAGES as CV_TRANSLATION_SUPPORTED_LANGUAGES,
+    translate_cv_best_effort,
+    translate_docx_headings,
+)
 from app.services.cv_io import validate_zip_members
 from app.utils.logger import logger
 
@@ -40,6 +46,16 @@ REPO_ROOT = Path(_env_root).resolve() if _env_root else Path(__file__).resolve()
 
 # Hard ceiling: reject templates bigger than 50 MB to avoid memory exhaustion.
 _MAX_TEMPLATE_BYTES = 50 * 1024 * 1024
+
+_DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+_PDF_MIME = "application/pdf"
+_SUPPORTED_TEMPLATE_EXTS = (".docx", ".pdf")
+_SUPPORTED_ENGINES = ("primary", "fallback")
+
+
+def _cleanup_dir(path_str: str) -> None:
+    """Best-effort temp-dir cleanup, used as a FastAPI BackgroundTask."""
+    shutil.rmtree(path_str, ignore_errors=True)
 
 
 class GenerateCvRequest(BaseModel):
@@ -238,6 +254,29 @@ def _profile_to_fallback_payload(profile: Dict[str, Any]) -> Dict[str, Any]:
         or ""
     )
 
+    raw_address = _safe_str(profile.get("address"))
+    if not raw_address:
+        address_parts = [
+            _safe_str(profile.get("addressLine1") or profile.get("street")),
+            _safe_str(profile.get("addressLine2")),
+            _safe_str(profile.get("postalCode") or profile.get("zip") or profile.get("zipCode")),
+            _safe_str(profile.get("city") or profile.get("town")),
+            _safe_str(profile.get("state") or profile.get("province") or profile.get("region")),
+            _safe_str(profile.get("country")),
+            _safe_str(profile.get("location")),
+        ]
+        dedup_parts: List[str] = []
+        seen_addr: set[str] = set()
+        for part in address_parts:
+            if not part:
+                continue
+            key = part.lower()
+            if key in seen_addr:
+                continue
+            seen_addr.add(key)
+            dedup_parts.append(part)
+        raw_address = ", ".join(dedup_parts)
+
     return {
         "name": name,
         "firstName": profile.get("firstName") or "",
@@ -245,7 +284,7 @@ def _profile_to_fallback_payload(profile: Dict[str, Any]) -> Dict[str, Any]:
         "title": profile.get("title") or profile.get("currentPosition") or "",
         "email": profile.get("email") or "",
         "phone": profile.get("phone") or "",
-        "address": profile.get("address") or "",
+        "address": raw_address,
         "linkedin": linkedin,
         "summary": profile.get("summary") or profile.get("professionalSummary") or "",
         "skills": _coerce_string_list(profile.get("skills"), ("name", "skill", "label")),
@@ -258,37 +297,424 @@ def _profile_to_fallback_payload(profile: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+
 def _run_fallback_generation(
     template_path: str,
     output_dir: str,
     profile: Dict[str, Any],
     output_formats: List[str],
     debug: bool,
-) -> Dict[str, Optional[str]]:
+    language: str = "original",
+) -> Dict[str, Any]:
     employee_data = _profile_to_fallback_payload(profile)
+
+    fallback_warnings: List[Dict[str, Any]] = []
+
+    # Apply Rania's Groq-powered translation pipeline (translate_cv_best_effort)
+    # before rendering. Only the supported languages (en/fr) are translated;
+    # 'original'/unsupported codes pass through unchanged.
+    lang = (language or "original").strip().lower()
+    should_translate_headings = bool(lang) and lang in CV_TRANSLATION_SUPPORTED_LANGUAGES
+    if should_translate_headings:
+        logger.info("Translating employee data to '%s' via Groq (cv_translation)", lang)
+        try:
+            employee_data = translate_cv_best_effort(employee_data, lang)
+        except Exception as exc:
+            logger.warning("CV data translation failed (non-fatal): %s", exc)
+
     docx_path = process_cv_fallback(
         template_path=template_path,
         employee_data=employee_data,
         output_dir=output_dir,
         output_pdf=False,
         debug=debug,
+        language=lang,
     )
+
+    if should_translate_headings:
+        try:
+            translate_docx_headings(docx_path, lang)
+        except Exception as exc:
+            logger.warning("Section heading translation failed (non-fatal): %s", exc)
 
     pdf_path: Optional[str] = None
     if "pdf" in output_formats:
-        pdf_path = convert_docx_to_pdf_fallback(docx_path)
+        try:
+            pdf_path = convert_docx_to_pdf_fallback(docx_path)
+        except FileNotFoundError:
+            logger.warning(
+                "LibreOffice (soffice) not found — PDF conversion skipped. "
+                "Install LibreOffice to enable PDF output."
+            )
+            fallback_warnings.append({
+                "code": "pdf_conversion_unavailable",
+                "severity": "info",
+                "message": (
+                    "PDF preview is unavailable because LibreOffice is not "
+                    "installed on the AI service. The DOCX file is still ready."
+                ),
+            })
+        except Exception as exc:
+            logger.warning("PDF conversion failed (non-fatal): %s", exc)
+            fallback_warnings.append({
+                "code": "pdf_conversion_failed",
+                "severity": "warning",
+                "message": f"PDF conversion failed: {exc}",
+            })
 
-    return {"docx_path": docx_path, "pdf_path": pdf_path}
+    return {
+        "docx_path": docx_path,
+        "pdf_path": pdf_path,
+        "warnings": fallback_warnings,
+    }
+
+
+
+def _validate_template_ext(filename: Optional[str]) -> str:
+    """Return a lowercase extension or raise 400 if unsupported."""
+    file_ext = os.path.splitext(filename or "")[1].lower()
+    if file_ext not in _SUPPORTED_TEMPLATE_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported template format: {file_ext or '(none)'}. Upload a .docx or .pdf file.",
+        )
+    return file_ext
+
+
+def _validate_engine(engine_value: Optional[str]) -> str:
+    engine_mode = (engine_value or "fallback").strip().lower()
+    if engine_mode not in _SUPPORTED_ENGINES:
+        raise HTTPException(status_code=400, detail="engine must be 'primary' or 'fallback'")
+    return engine_mode
+
+
+def _parse_employee_data(raw: str) -> Dict[str, Any]:
+    """Decode and lightly normalize the employee_data JSON form field."""
+    try:
+        profile = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid employee_data JSON: {exc}") from exc
+
+    if not isinstance(profile, dict):
+        raise HTTPException(status_code=400, detail="employee_data must be a JSON object")
+
+    name = (profile.get("name") or "").strip()
+    if not name:
+        first = (profile.get("firstName") or "").strip()
+        last = (profile.get("lastName") or "").strip()
+        name = f"{first} {last}".strip()
+
+    if not name:
+        raise HTTPException(
+            status_code=400,
+            detail="employee_data must include 'name' (or 'firstName'/'lastName')",
+        )
+    profile["name"] = name
+    return profile
+
+
+async def _persist_uploaded_template(
+    upload: UploadFile, temp_dir: str, file_ext: str
+) -> str:
+    """Stream the uploaded template to disk, enforcing the size cap."""
+    template_path = os.path.join(temp_dir, f"template{file_ext}")
+    content = await upload.read()
+    if len(content) > _MAX_TEMPLATE_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Template too large ({len(content) // 1024 // 1024} MB). "
+                f"Max is {_MAX_TEMPLATE_BYTES // 1024 // 1024} MB."
+            ),
+        )
+    with open(template_path, "wb") as file_handle:
+        file_handle.write(content)
+    return template_path
+
+
+def _validate_docx_template(template_path: str) -> None:
+    """Raise 400 if the file is not a valid DOCX archive."""
+    if not zipfile.is_zipfile(template_path):
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file is not a valid DOCX (corrupt or not a ZIP archive).",
+        )
+    try:
+        with zipfile.ZipFile(template_path, "r") as zip_file:
+            validate_zip_members(zip_file)
+            if "word/document.xml" not in zip_file.namelist():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Uploaded file is a ZIP but not a valid DOCX (missing word/document.xml).",
+                )
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=400, detail="Uploaded file has a corrupt ZIP structure.") from exc
+    except CVTemplateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _collect_template_warnings(
+    template_path: str, engine_mode: str, profile: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """Return a list of `{code, message, severity}` warnings for the user.
+
+    Best-effort: any failure here returns an empty list so generation isn't
+    blocked. Warnings include unmapped Jinja2 placeholders (primary engine),
+    missing section headings (both engines), and missing profile fields the
+    template appears to want.
+    """
+    warnings: List[Dict[str, Any]] = []
+    try:
+        analysis = analyze_template(template_path)
+    except Exception as exc:
+        logger.warning("Template pre-analysis failed (non-fatal): %s", exc)
+        return warnings
+
+    # Primary engine cares about unmapped placeholders; fallback engine doesn't
+    # use them, so skip that warning entirely in fallback mode.
+    if engine_mode == "primary":
+        unmapped_count = analysis.get("unmapped_count") or 0
+        if unmapped_count:
+            unmapped_names = [
+                f.get("name")
+                for f in (analysis.get("fields") or [])
+                if f.get("source") == "unmatched" and f.get("name")
+            ]
+            warnings.append({
+                "code": "unmapped_placeholders",
+                "severity": "warning",
+                "message": (
+                    f"{unmapped_count} placeholder(s) in this template don't match a known "
+                    "profile field and will be left unfilled."
+                ),
+                "details": unmapped_names[:20],
+            })
+
+    rules = analysis.get("authoring_rules") or {}
+    sections_found = {s.get("section") for s in (rules.get("sections") or [])}
+    expected_sections = {"experience", "education", "skills"}
+    missing_sections = sorted(expected_sections - sections_found)
+    if missing_sections:
+        warnings.append({
+            "code": "missing_section_headings",
+            "severity": "info",
+            "message": (
+                "No clear section headings detected for: "
+                + ", ".join(missing_sections)
+                + ". The engine will still try to place content, but explicit "
+                "headings improve accuracy."
+            ),
+            "details": missing_sections,
+        })
+
+    # Profile-side warnings: surface fields the user is missing that templates
+    # commonly want, so the generated CV doesn't have suspicious blanks.
+    missing_profile_fields: List[str] = []
+    for key, label in (
+        ("summary", "professional summary"),
+        ("email", "email"),
+        ("phone", "phone"),
+        ("address", "address"),
+    ):
+        value = profile.get(key)
+        if not value or (isinstance(value, str) and not value.strip()):
+            missing_profile_fields.append(label)
+    if missing_profile_fields:
+        warnings.append({
+            "code": "missing_profile_fields",
+            "severity": "info",
+            "message": (
+                "The selected employee profile is missing: "
+                + ", ".join(missing_profile_fields)
+                + ". These fields will be blank in the output."
+            ),
+            "details": missing_profile_fields,
+        })
+
+    return warnings
+
+
+def _encode_warnings_header(warnings: List[Dict[str, Any]]) -> Optional[str]:
+    """Serialize warnings to a JSON string safe for an HTTP header value."""
+    if not warnings:
+        return None
+    try:
+        encoded = json.dumps(warnings, ensure_ascii=True, separators=(",", ":"))
+    except Exception:
+        return None
+    # Keep the header reasonably bounded — most servers/proxies cap header size
+    # around 8 KB. Cut to ~6 KB to leave room for the rest of the response.
+    if len(encoded) > 6000:
+        encoded = json.dumps(warnings[:5], ensure_ascii=True, separators=(",", ":"))
+    return encoded
+
+
+def _file_response(
+    path: str, *, mime: str, engine: str, extra_headers: Optional[Dict[str, str]] = None,
+) -> FileResponse:
+    """Build a FileResponse with consistent CV headers.
+
+    Note: we deliberately don't set `background=` here — FastAPI auto-attaches
+    any tasks added via the injected `BackgroundTasks` dependency to the
+    returned response, so the temp-dir cleanup runs after the bytes flush.
+    """
+    headers = {
+        "X-CV-Format": "pdf" if mime == _PDF_MIME else "docx",
+        "X-CV-Engine": engine,
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+    return FileResponse(
+        path=path,
+        filename=os.path.basename(path),
+        media_type=mime,
+        headers=headers,
+    )
+
+
+def _select_response_path(
+    docx_path: Optional[str],
+    pdf_path: Optional[str],
+    output_format: str,
+    engine: str,
+    warnings: Optional[List[Dict[str, Any]]] = None,
+) -> FileResponse:
+    """Pick the right file to return based on requested output_format."""
+    want_pdf = (output_format or "").lower() == "pdf"
+
+    extra: Dict[str, str] = {}
+    encoded_warnings = _encode_warnings_header(warnings or [])
+    if encoded_warnings:
+        extra["X-CV-Warnings"] = encoded_warnings
+
+    if want_pdf:
+        if pdf_path and os.path.exists(pdf_path):
+            return _file_response(pdf_path, mime=_PDF_MIME, engine=engine, extra_headers=extra or None)
+        if docx_path and os.path.exists(docx_path):
+            logger.warning("PDF conversion failed in %s mode, returning DOCX as fallback", engine)
+            extra["X-PDF-Failed"] = "true"
+            return _file_response(
+                docx_path,
+                mime=_DOCX_MIME,
+                engine=engine,
+                extra_headers=extra,
+            )
+        raise HTTPException(status_code=500, detail="CV generation failed - no output file")
+
+    if not docx_path or not os.path.exists(docx_path):
+        raise HTTPException(status_code=500, detail="CV generation failed - no output file")
+
+    if pdf_path and os.path.exists(pdf_path):
+        extra["X-PDF-Available"] = "true"
+    return _file_response(docx_path, mime=_DOCX_MIME, engine=engine, extra_headers=extra or None)
+
+
+async def _handle_json_request(request: Request) -> Dict[str, Any]:
+    """Path-based flow used by the cv-generation NestJS module."""
+    try:
+        payload = await request.json()
+        req = GenerateCvRequest.model_validate(payload)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON payload: {exc}") from exc
+
+    resolved_template = _validate_path(req.template_path, "template_path")
+    resolved_output = _validate_path(req.output_dir, "output_dir")
+    output_formats = _normalize_formats(output_formats=req.output_formats)
+
+    _tmp_dir: Optional[str] = None
+    try:
+        if req.engine == "fallback":
+            template_for_fallback = str(resolved_template)
+            # If PDF, convert to DOCX first
+            if resolved_template.suffix.lower() == ".pdf":
+                try:
+                    import tempfile as _tf
+                    _tmp_dir = _tf.mkdtemp(prefix="cv_fb_pdf_")
+                    std_result = standardize_template(template_for_fallback, _tmp_dir, req.profile, ["docx"])
+                    if std_result.get("response"):
+                        raise RuntimeError("PDF standardization returned an unexpected direct response")
+                    converted = std_result["template_path"]
+                    if not converted or not os.path.exists(converted) or converted == template_for_fallback:
+                        raise RuntimeError("Conversion produced no output file.")
+                    template_for_fallback = converted
+                    logger.info("Converted PDF to DOCX for fallback (JSON mode): %s", converted)
+                except HTTPException:
+                    raise
+                except Exception as exc:
+                    msg = str(exc)
+                    logger.error("PDF-to-DOCX conversion failed (JSON mode): %s", msg, exc_info=True)
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Could not convert the PDF template to DOCX: {msg} "
+                            "Please install pdf2docx (pip install pdf2docx) and restart "
+                            "the service, or use a DOCX template instead."
+                        ),
+                    )
+            result = _run_fallback_generation(
+                template_path=template_for_fallback,
+                output_dir=str(resolved_output),
+                profile=req.profile,
+                output_formats=output_formats,
+                debug=req.debug,
+                language=req.language or "original",
+            )
+        else:
+            result = generate_cv_document(
+                profile=req.profile,
+                template_path=str(resolved_template),
+                output_dir=str(resolved_output),
+                output_formats=output_formats,
+                target_language=req.language,
+                translate=req.translate,
+                filename_prefix=req.filename_prefix,
+                cached_field_mapping=req.field_mapping,
+            )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Template file not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CVGenerationError as exc:
+        logger.error("CV generation error [%s]: %s", exc.category, exc.detail, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"CV generation failed ({exc.category}): {exc.detail}",
+        ) from exc
+    except Exception as exc:
+        logger.error("CV generation unexpected error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="CV generation failed (internal error)") from exc
+    finally:
+        # Always clean up the temporary PDF→DOCX conversion directory after
+        # generation has completed, regardless of success or failure.
+        if _tmp_dir:
+            shutil.rmtree(_tmp_dir, ignore_errors=True)
+
+    docx_path = result.get("docx_path")
+    pdf_path = result.get("pdf_path")
+    matched_template_path = result.get("matched_template_path")
+
+    return {
+        "engine": req.engine,
+        "docx_path": docx_path,
+        "pdf_path": pdf_path,
+        "docx_relative_path": _to_relative(docx_path),
+        "pdf_relative_path": _to_relative(pdf_path),
+        "field_mapping": result.get("field_mapping"),
+        "matched_template_path": matched_template_path,
+        "matched_template_relative_path": _to_relative(matched_template_path),
+        "warnings": result.get("warnings") or [],
+    }
 
 
 @router.post("/cv")
 async def generate_cv(
     request: Request,
+    background_tasks: BackgroundTasks,
     template: Optional[UploadFile] = File(None),
     employee_data: Optional[str] = Form(None),
     output_format: Optional[str] = Form("docx"),
     debug: Optional[str] = Form("false"),
-    language: Optional[str] = Form("en"),
+    language: Optional[str] = Form("original"),
     engine: Optional[str] = Form("fallback"),
 ):
     """Unified endpoint supporting both JSON/path and multipart/upload workflows."""
@@ -297,62 +723,7 @@ async def generate_cv(
 
     # ── JSON mode (path-based flow used by cv-generation module) ──────────
     if "application/json" in content_type:
-        try:
-            payload = await request.json()
-            req = GenerateCvRequest.model_validate(payload)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid JSON payload: {exc}") from exc
-
-        resolved_template = _validate_path(req.template_path, "template_path")
-        resolved_output = _validate_path(req.output_dir, "output_dir")
-        output_formats = _normalize_formats(output_formats=req.output_formats)
-
-        try:
-            if req.engine == "fallback":
-                if resolved_template.suffix.lower() != ".docx":
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Fallback engine supports only .docx templates.",
-                    )
-                result = _run_fallback_generation(
-                    template_path=str(resolved_template),
-                    output_dir=str(resolved_output),
-                    profile=req.profile,
-                    output_formats=output_formats,
-                    debug=req.debug,
-                )
-            else:
-                result = generate_cv_document(
-                    profile=req.profile,
-                    template_path=str(resolved_template),
-                    output_dir=str(resolved_output),
-                    output_formats=output_formats,
-                    target_language=req.language,
-                    translate=req.translate,
-                    filename_prefix=req.filename_prefix,
-                    cached_field_mapping=req.field_mapping,
-                )
-
-            docx_path = result.get("docx_path")
-            pdf_path = result.get("pdf_path")
-            matched_template_path = result.get("matched_template_path")
-
-            return {
-                "engine": req.engine,
-                "docx_path": docx_path,
-                "pdf_path": pdf_path,
-                "docx_relative_path": _to_relative(docx_path),
-                "pdf_relative_path": _to_relative(pdf_path),
-                "field_mapping": result.get("field_mapping"),
-                "matched_template_path": matched_template_path,
-                "matched_template_relative_path": _to_relative(matched_template_path),
-            }
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail="Template file not found")
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+        return await _handle_json_request(request)
 
     # ── Multipart mode (upload template + employee_data) ──────────────────
     if template is None or employee_data is None:
@@ -362,183 +733,143 @@ async def generate_cv(
         )
 
     debug_mode = str(debug or "false").lower() in ("true", "1", "yes")
-    engine_mode = str(engine or "fallback").lower()
-    if engine_mode not in ("primary", "fallback"):
-        raise HTTPException(status_code=400, detail="engine must be 'primary' or 'fallback'")
+    engine_mode = _validate_engine(engine)
+    file_ext = _validate_template_ext(template.filename)
 
-    file_ext = os.path.splitext(template.filename or "")[1].lower()
-    if file_ext not in (".docx", ".pdf"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported template format: {file_ext}. Please upload a .docx or .pdf file.",
-        )
-
-    try:
-        profile = json.loads(employee_data)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid employee_data JSON: {exc}") from exc
-
-    if not isinstance(profile, dict):
-        raise HTTPException(status_code=400, detail="employee_data must be a JSON object")
-
-    emp_name = (profile.get("name") or "").strip()
-    if not emp_name:
-        first = (profile.get("firstName") or "").strip()
-        last = (profile.get("lastName") or "").strip()
-        emp_name = f"{first} {last}".strip()
-        if emp_name:
-            profile["name"] = emp_name
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="employee_data must include 'name' (or 'firstName'/'lastName')",
-            )
+    # Fallback engine only handles DOCX natively; PDF templates are converted
+    # to DOCX inside the main try block via standardize_template.
+    profile = _parse_employee_data(employee_data)
 
     temp_dir = tempfile.mkdtemp(prefix="cv_gen_")
-    template_path = os.path.join(temp_dir, f"template{file_ext}")
+    # On success, the FileResponse's BackgroundTasks (injected) cleans the dir
+    # *after* the bytes are flushed to the client. On error paths we need
+    # explicit cleanup since BackgroundTasks won't fire without a response.
+    background_tasks.add_task(_cleanup_dir, temp_dir)
+    success = False
 
     try:
-        content = await template.read()
-        if len(content) > _MAX_TEMPLATE_BYTES:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Template too large ({len(content) // 1024 // 1024} MB). "
-                    f"Max is {_MAX_TEMPLATE_BYTES // 1024 // 1024} MB."
-                ),
-            )
-
-        with open(template_path, "wb") as file_handle:
-            file_handle.write(content)
-
-        # Keep fallback behavior aligned with the original DOCX-only engine:
-        # no PDF standardization/OCR/overlay pre-processing.
-        if engine_mode == "fallback" and file_ext != ".docx":
-            raise HTTPException(
-                status_code=400,
-                detail="Fallback engine supports only .docx templates.",
-            )
+        template_path = await _persist_uploaded_template(template, temp_dir, file_ext)
 
         if file_ext == ".docx":
-            if not zipfile.is_zipfile(template_path):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Uploaded file is not a valid DOCX (corrupt or not a ZIP archive).",
-                )
-
-            try:
-                with zipfile.ZipFile(template_path, "r") as zip_file:
-                    validate_zip_members(zip_file)
-                    if "word/document.xml" not in zip_file.namelist():
-                        raise HTTPException(
-                            status_code=400,
-                            detail=(
-                                "Uploaded file is a ZIP but not a valid DOCX "
-                                "(missing word/document.xml)."
-                            ),
-                        )
-            except zipfile.BadZipFile as exc:
-                raise HTTPException(status_code=400, detail="Uploaded file has a corrupt ZIP structure.") from exc
-            except CVTemplateError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            _validate_docx_template(template_path)
 
         formats = _normalize_formats(output_format=output_format)
 
+        # If PDF uploaded with fallback engine, convert to DOCX first.
+        # A failed conversion is always surfaced as a clear error — we never
+        # silently fall back to OCR on a native PDF because that produces
+        # unusable garbled output.
+        if engine_mode == "fallback" and file_ext == ".pdf":
+            try:
+                std_result = standardize_template(template_path, temp_dir, profile, ["docx"])
+                if std_result.get("response"):
+                    raise RuntimeError("PDF standardization returned an unexpected direct response")
+                converted_path = std_result["template_path"]
+                if not converted_path or not os.path.exists(converted_path) or converted_path == template_path:
+                    raise RuntimeError("Conversion produced no output file.")
+                _validate_docx_template(converted_path)
+                template_path = converted_path
+                logger.info("Converted PDF template to DOCX for fallback engine: %s", template_path)
+            except HTTPException:
+                raise
+            except Exception as exc:
+                msg = str(exc)
+                logger.error("PDF-to-DOCX conversion for fallback engine failed: %s", msg, exc_info=True)
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Could not convert the PDF template to DOCX: {msg} "
+                        "Please install pdf2docx (pip install pdf2docx) and restart "
+                        "the service, or use a DOCX template instead."
+                    ),
+                )
+
+        # Pre-flight analysis — surface warnings about the template/profile
+        # combination before the engine runs. Best-effort, never blocks.
+        try:
+            pre_warnings = _collect_template_warnings(template_path, engine_mode, profile)
+        except Exception as exc:
+            logger.warning("Template warning collection failed (non-fatal): %s", exc)
+            pre_warnings = []
+
         if engine_mode == "fallback":
+            # Rania's Advanced AI engine — lxml + Groq pattern-based replacement.
             result = _run_fallback_generation(
                 template_path=template_path,
                 output_dir=temp_dir,
                 profile=profile,
                 output_formats=formats,
                 debug=debug_mode,
+                language=language or "original",
             )
         else:
-            # Standardize template (conversion, OCR, etc.) for primary engine only.
-            std_result = standardize_template(
-                template_path, temp_dir, profile, formats
-            )
+            # Islam's Standard engine — Jinja2/docxtpl authoring-rules renderer.
+            std_result = standardize_template(template_path, temp_dir, profile, formats)
             if std_result["response"]:
                 r = std_result["response"]
-                if output_format == "pdf" and r.get("pdf_path"):
-                    return FileResponse(
-                        path=r["pdf_path"],
-                        filename=os.path.basename(r["pdf_path"]),
-                        media_type="application/pdf",
-                        headers={"X-CV-Format": "pdf", "X-CV-Engine": engine_mode},
-                    )
+                if (output_format or "").lower() == "pdf" and r.get("pdf_path"):
+                    success = True
+                    return _file_response(r["pdf_path"], mime=_PDF_MIME, engine=engine_mode)
 
             template_path = std_result["template_path"]
-            # If it was converted, update the file_ext for correct engine logic
-            if template_path.endswith(".docx"):
-                file_ext = ".docx"
+
+            # Resolve target language: the `language` form param takes precedence.
+            # 'original' / '' / None all mean "do not translate".
+            _req_lang = (language or "").strip().lower()
+            profile_lang = _req_lang if _req_lang not in ("", "original", "orig") else None
+            should_translate = profile_lang is not None
+
+            cached_mapping = (
+                profile.get("field_mapping") if isinstance(profile.get("field_mapping"), dict) else None
+            )
+            filename_prefix = (
+                profile.get("filename_prefix") if isinstance(profile.get("filename_prefix"), str) else None
+            )
 
             result = generate_cv_document(
                 profile=profile,
                 template_path=template_path,
                 output_dir=temp_dir,
                 output_formats=formats,
-                target_language=profile.get("language") if isinstance(profile.get("language"), str) else None,
-                translate=bool(profile.get("translate", True)),
-                filename_prefix=profile.get("filename_prefix") if isinstance(profile.get("filename_prefix"), str) else None,
-                cached_field_mapping=profile.get("field_mapping") if isinstance(profile.get("field_mapping"), dict) else None,
+                target_language=profile_lang,
+                translate=should_translate,
+                filename_prefix=filename_prefix,
+                cached_field_mapping=cached_mapping,
             )
 
-        docx_path = result.get("docx_path")
-        pdf_path = result.get("pdf_path")
+        # Merge engine-side warnings (e.g. unfilled fields, Groq unavailable
+        # from the fallback engine) with pre-flight analysis warnings.
+        engine_warnings = result.get("warnings") if isinstance(result, dict) else None
+        merged_warnings = list(pre_warnings)
+        if isinstance(engine_warnings, list):
+            merged_warnings.extend(w for w in engine_warnings if isinstance(w, dict))
 
-        if output_format and output_format.lower() == "pdf":
-            if pdf_path and os.path.exists(pdf_path):
-                return FileResponse(
-                    path=pdf_path,
-                    filename=os.path.basename(pdf_path),
-                    media_type="application/pdf",
-                    headers={"X-CV-Format": "pdf", "X-CV-Engine": engine_mode},
-                )
-            if docx_path and os.path.exists(docx_path):
-                logger.warning("PDF conversion failed in %s mode, returning DOCX", engine_mode)
-                return FileResponse(
-                    path=docx_path,
-                    filename=os.path.basename(docx_path),
-                    media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    headers={
-                        "X-CV-Format": "docx",
-                        "X-PDF-Failed": "true",
-                        "X-CV-Engine": engine_mode,
-                    },
-                )
-            raise HTTPException(status_code=500, detail="CV generation failed - no output file")
-
-        if not docx_path or not os.path.exists(docx_path):
-            raise HTTPException(status_code=500, detail="CV generation failed - no output file")
-
-        headers = {"X-CV-Format": "docx", "X-CV-Engine": engine_mode}
-        if pdf_path and os.path.exists(pdf_path):
-            headers["X-PDF-Available"] = "true"
-
-        return FileResponse(
-            path=docx_path,
-            filename=os.path.basename(docx_path),
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers=headers,
+        response = _select_response_path(
+            result.get("docx_path"),
+            result.get("pdf_path"),
+            output_format or "docx",
+            engine_mode,
+            warnings=merged_warnings,
         )
+        success = True
+        return response
 
     except HTTPException:
-        shutil.rmtree(temp_dir, ignore_errors=True)
         raise
     except (ValueError, CVValidationError, CVTemplateError) as exc:
-        shutil.rmtree(temp_dir, ignore_errors=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except CVGenerationError as exc:
-        shutil.rmtree(temp_dir, ignore_errors=True)
         logger.error("CV generation error [%s]: %s", exc.category, exc.detail, exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"CV generation failed ({exc.category}): {exc.detail}",
         ) from exc
     except Exception as exc:
-        shutil.rmtree(temp_dir, ignore_errors=True)
         logger.error("CV generation unexpected error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail="CV generation failed (internal error)") from exc
+    finally:
+        if not success:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 @router.post("/analyze-template")
@@ -556,3 +887,30 @@ async def analyze_template_endpoint(req: AnalyzeTemplateRequest):
         raise HTTPException(status_code=500, detail=str(exc))
 
     return result
+
+
+@router.post("/build-overlay-mapping")
+async def build_overlay_mapping_endpoint(req: AnalyzeTemplateRequest):
+    """Compute a label→position overlay mapping for a PDF template.
+
+    Used at template-upload time to cache the mapping so the primary engine
+    can preserve the PDF's exact layout on every subsequent generation
+    without recomputing positions for each request.
+    """
+    resolved = _validate_path(req.template_path, "template_path")
+    if resolved.suffix.lower() != ".pdf":
+        raise HTTPException(status_code=400, detail="Overlay mapping only applies to PDF templates")
+    if not resolved.exists():
+        raise HTTPException(status_code=404, detail="Template file not found")
+
+    # The mapper accepts a context dict to fill date-derived fields. At upload
+    # time we don't have an employee — the empty context just means the few
+    # context-dependent rules (last_degree, open_end_label) skip themselves;
+    # all label-anchored fields are still detected.
+    try:
+        mapping = build_auto_overlay_mapping(str(resolved), {})
+    except Exception as exc:
+        logger.error("Overlay mapping build failed for %s: %s", resolved, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Overlay mapping failed: {exc}")
+
+    return mapping
