@@ -16,6 +16,7 @@ from jinja2 import TemplateSyntaxError
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import BooleanObject
 
+from app.config import settings
 from app.services.translation_service import translate_json_payload
 from app.services.ocr_rebuilder import is_docx_scanned, is_pdf_scanned, rebuild_scanned_template
 from app.services.pdf_overlay import apply_pdf_overlay, build_auto_overlay_mapping
@@ -25,6 +26,7 @@ from app.services.template_retrieval import find_closest_template
 logger = logging.getLogger(__name__)
 
 _SOFFICE_SEMAPHORE = asyncio.Semaphore(1)
+_MAX_SHAPE_CY = 20_000_000
 
 # ---------------------------------------------------------------------------
 # DOCX placeholder aliases – maps common alternative names to canonical keys
@@ -241,6 +243,213 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
     return context
 
 
+def _build_context_from_employee(profile: Dict[str, Any]) -> Dict[str, Any]:
+    """Backward-compatible alias for older tests and callers."""
+    full_name = str(profile.get("name") or "").strip()
+    if not full_name:
+        first = str(profile.get("firstName") or "").strip()
+        last = str(profile.get("lastName") or "").strip()
+        full_name = f"{first} {last}".strip()
+
+    parts = [part for part in full_name.split() if part]
+    first_name = str(profile.get("firstName") or (parts[0] if parts else "")).strip()
+    last_name = str(profile.get("lastName") or (parts[-1] if len(parts) > 1 else "")).strip()
+    short_last_name = parts[-1] if len(parts) > 1 else last_name
+
+    raw_skills = profile.get("skills") or []
+    if not isinstance(raw_skills, list):
+        raw_skills = [raw_skills]
+    skills = [str(skill).strip() for skill in raw_skills if str(skill).strip()]
+
+    summary = str(profile.get("summary") or "")
+
+    return {
+        "name": full_name,
+        "full_name": full_name,
+        "email": str(profile.get("email") or ""),
+        "phone": str(profile.get("phone") or ""),
+        "title": str(profile.get("title") or ""),
+        "current_position": str(profile.get("title") or ""),
+        "summary": summary,
+        "skills": skills,
+        "skills_text": ", ".join(skills),
+        "prenom": first_name,
+        "nom": short_last_name,
+        "address": str(profile.get("address") or ""),
+        "linkedin": str(profile.get("linkedin") or ""),
+    }
+
+
+def _build_section_content(
+    section: str,
+    employee: Dict[str, Any],
+    preferred_language: Optional[str] = None,
+):
+    """Backward-compatible section builder used by legacy tests.
+
+    The live fallback runtime uses the richer implementation in
+    cv_generator_fallback. This wrapper preserves the older, flatter output
+    shape expected by legacy unit tests that still import from cv_generator.
+    """
+    def _s(value: Any) -> str:
+        return str(value or "").strip()
+
+    def _year_only(value: Any) -> str:
+        text = _s(value)
+        if re.search(r'\b(?:present|current|ongoing|today|now)\b', text, re.I):
+            return text
+        match = re.search(r"\b(19|20)\d{2}\b", text)
+        return match.group(0) if match else text
+
+    def _meta_line(*parts: Any) -> str:
+        values = [_s(part) for part in parts if _s(part)]
+        return "  —  ".join(values)
+
+    if section == "summary":
+        text = _s(employee.get("summary"))
+        return [{"text": text, "bold": False, "bullet": False}] if text else None
+
+    if section == "experience":
+        raw = employee.get("experience")
+        if not isinstance(raw, list) or not raw:
+            return None
+        lines: List[Dict[str, Any]] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            title = _s(entry.get("title") or entry.get("jobTitle"))
+            company = _s(entry.get("company") or entry.get("companyName"))
+            dates = _year_only(
+                entry.get("dates")
+                or entry.get("date_range")
+                or entry.get("period")
+                or entry.get("start_date")
+                or entry.get("startDate")
+            )
+            desc = _s(entry.get("description") or entry.get("responsibilities") or entry.get("tasks"))
+            if len(desc) > 1500:
+                desc = desc[:1500].rsplit(" ", 1)[0] + "…"
+            if not title and not company:
+                continue
+            if title:
+                lines.append({"text": title, "bold": True, "bullet": False})
+            meta = _meta_line(company, dates)
+            if meta:
+                lines.append({"text": meta, "bold": False, "bullet": False, "compact": True})
+            for part in desc.splitlines():
+                part = part.strip().lstrip("•●-– ").strip()
+                if part:
+                    lines.append({"text": part, "bold": False, "bullet": True, "compact": True})
+        return lines or None
+
+    if section == "education":
+        raw = employee.get("education")
+        if not isinstance(raw, list) or not raw:
+            return None
+        lines: List[Dict[str, Any]] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            degree = _s(entry.get("degree"))
+            institution = _s(entry.get("institution") or entry.get("school") or entry.get("university"))
+            dates = _year_only(entry.get("dates") or entry.get("end_date") or entry.get("graduationDate"))
+            if not degree and not institution:
+                continue
+            parts = [part for part in (degree, institution, dates) if part]
+            if parts:
+                lines.append({"text": " | ".join(parts), "bold": False, "bullet": False})
+        return lines or None
+
+    if section == "skills":
+        raw = employee.get("skills")
+        items = raw if isinstance(raw, list) else ([raw] if raw else [])
+        values = [_s(item.get("name") if isinstance(item, dict) else item) for item in items]
+        values = [value for value in values if value]
+        if not values:
+            certs = employee.get("certifications") or []
+            cert_items = certs if isinstance(certs, list) else [certs]
+            tech_values: List[str] = []
+            seen: set[str] = set()
+            tech_re = re.compile(
+                r'\b(DELL|HP|IBM|VMware|Microsoft|Compellent|PowerVault|PowerEdge|'
+                r'FluidFS|Hyper-V|StorageWorks|BladeCenter|MCSA|MCSE|Cisco|Linux|'
+                r'Windows|Server|Storage|Blade|Cloud|NAS|SAN|vSphere|ESXi|'
+                r'SQL|Exchange|SharePoint|Azure|AWS|Docker|Kubernetes|Python|Java|'
+                r'React|Angular|Node)\b',
+                re.I,
+            )
+            for cert in cert_items:
+                cert_name = _s(cert.get("name") if isinstance(cert, dict) else cert)
+                for match in tech_re.finditer(cert_name):
+                    token = match.group()
+                    key = token.lower()
+                    if key not in seen:
+                        seen.add(key)
+                        tech_values.append(token)
+            values = tech_values
+        if not values:
+            return None
+        return [{"text": ", ".join(values), "bold": False, "bullet": False}] if values else None
+
+    if section == "certifications":
+        raw = employee.get("certifications")
+        if not raw:
+            return None
+        items = raw if isinstance(raw, list) else [raw]
+        values = [
+            _s(item.get("name") if isinstance(item, dict) else item)
+            for item in items
+        ]
+        values = [value for value in values if value]
+        return [{"text": value, "bold": False, "bullet": True} for value in values] or None
+
+    if section == "languages":
+        raw = employee.get("languages")
+        if not raw:
+            return None
+        items = raw if isinstance(raw, list) else [raw]
+        values = [
+            _s(item.get("name") if isinstance(item, dict) else item)
+            for item in items
+        ]
+        values = [value for value in values if value]
+        return [{"text": ", ".join(values), "bold": False, "bullet": False}] if values else None
+
+    if section == "interests":
+        raw = employee.get("interests")
+        if not raw:
+            return None
+        items = raw if isinstance(raw, list) else [raw]
+        values = [
+            _s(item.get("name") if isinstance(item, dict) else item)
+            for item in items
+        ]
+        values = [value for value in values if value]
+        return [{"text": value, "bold": False, "bullet": True} for value in values] or None
+
+    if section == "projects":
+        raw = employee.get("projects")
+        if not raw:
+            return None
+        items = raw if isinstance(raw, list) else [raw]
+        lines: List[Dict[str, Any]] = []
+        for item in items:
+            if isinstance(item, dict):
+                name = _s(item.get("name") or item.get("title"))
+                desc = _s(item.get("description") or item.get("role"))
+                if name:
+                    lines.append({"text": name, "bold": False, "bullet": False})
+                if desc:
+                    lines.append({"text": desc, "bold": False, "bullet": True})
+            else:
+                text = _s(item)
+                if text:
+                    lines.append({"text": text, "bold": False, "bullet": False})
+        return lines or None
+
+    return None
+
+
 def _build_translation_payload(context: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "current_position": context.get("current_position"),
@@ -352,31 +561,21 @@ def _normalize_header_text(value: str) -> str:
     return normalized
 
 
+# Section keyword sets — sourced from the unified taxonomy so synonyms
+# stay aligned with template_tagger and cv_generator_fallback.  We expose
+# the *normalized* (accent-stripped, lowercased) form here because every
+# call site below normalizes its own input via _normalize_header_text.
+from app.services.cv_section_taxonomy import (
+    SECTION_KEYWORDS_NORMALIZED as _CANON_NORMALIZED,
+)
+
 _SECTION_KEYWORDS = {
-    "experience": {
-        "experience", "experience professionnelle", "work experience", "employment",
-        "parcours", "emploi", "poste", "fonctions", "carriere", "career",
-    },
-    "education": {
-        "education", "formation", "formation academique", "academique",
-        "diplome", "etudes", "etudes superieures", "scolarite",
-        "academic", "academics", "qualification",
-    },
-    "projects": {
-        "projets", "projects", "project", "realisations", "missions",
-        "key projects", "notable projects",
-    },
-    "certifications": {
-        "certificat", "certification", "certifications", "certificate", "licenses", "licence",
-    },
-    "skills": {
-        "competences", "skills", "competencies", "expertise",
-        "technologies", "outils", "tech stack",
-    },
-    "summary": {"profil", "summary", "resume", "synthese", "presentation", "about", "overview"},
-    "contact": {"contact", "coordonnees", "informations personnelles", "contact info"},
-    "languages": {"langues", "languages", "idiomas", "idiomes"},
-    "awards": {"distinctions", "awards", "recompenses", "honors", "prix"},
+    section: set(_CANON_NORMALIZED[section])
+    for section in (
+        "experience", "education", "projects", "certifications",
+        "skills", "summary", "contact", "languages", "awards",
+    )
+    if section in _CANON_NORMALIZED
 }
 
 
@@ -1514,6 +1713,103 @@ def _infer_attribute(section: str, tokens: set[str]) -> Optional[str]:
                      "competences", "technologies", "outils"}:
             return "skills"
     return None
+
+
+try:
+    from app.services.cv_generator_fallback import (
+        NS_A as _FALLBACK_NS_A,
+        NS_MC as _FALLBACK_NS_MC,
+        NS_W as _FALLBACK_NS_W,
+        NS_WPS as _FALLBACK_NS_WPS,
+        _WPS_TXBX as _FALLBACK_WPS_TXBX,
+        _build_replacements as _fallback_build_replacements,
+        _build_section_content as _fallback_build_section_content,
+        _compute_input_hash as _fallback_compute_input_hash,
+        _detect_template_mode as _fallback_detect_template_mode,
+        _detect_personal_info as _fallback_detect_personal_info,
+        _extract_all_text as _fallback_extract_all_text,
+        _fill_table_section as _fallback_fill_table_section,
+        _get_paragraph_texts as _fallback_get_paragraph_texts,
+        _identify_section_lxml as _fallback_identify_section_lxml,
+        _is_contact_field_value as _fallback_is_contact_field_value,
+        _is_mega_contact_para as _fallback_is_mega_contact_para,
+        _make_para_elem as _fallback_make_para_elem,
+        _xml_safe_text as _fallback_xml_safe_text,
+        cleanEmployeeData as _fallback_clean_employee_data,
+        process_cv as _fallback_process_cv,
+    )
+
+    _extract_all_text = _fallback_extract_all_text
+    _get_paragraph_texts = _fallback_get_paragraph_texts
+    _detect_personal_info = _fallback_detect_personal_info
+    _detect_template_mode = _fallback_detect_template_mode
+    _compute_input_hash = _fallback_compute_input_hash
+    _build_replacements = _fallback_build_replacements
+    _identify_section_lxml = _fallback_identify_section_lxml
+    _fill_table_section = _fallback_fill_table_section
+    _is_mega_contact_para = _fallback_is_mega_contact_para
+    _is_contact_field_value = _fallback_is_contact_field_value
+    _make_para_elem = _fallback_make_para_elem
+    _xml_safe_text = _fallback_xml_safe_text
+    cleanEmployeeData = _fallback_clean_employee_data
+    NS_W = _FALLBACK_NS_W
+    NS_A = _FALLBACK_NS_A
+    NS_MC = _FALLBACK_NS_MC
+    NS_WPS = _FALLBACK_NS_WPS
+    _WPS_TXBX = _FALLBACK_WPS_TXBX
+except Exception:
+    pass
+
+
+def process_cv(
+    template_path: str,
+    employee_data: Dict[str, Any],
+    output_dir: str,
+    output_pdf: bool = False,
+    debug: bool = False,
+    language: str = "original",
+    out_warnings: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Compatibility wrapper around the shared direct-generation runtime."""
+    if '_fallback_process_cv' in globals():
+        try:
+            return _fallback_process_cv(
+                template_path=template_path,
+                employee_data=employee_data,
+                output_dir=output_dir,
+                output_pdf=output_pdf,
+                debug=debug,
+                language=language,
+                out_warnings=out_warnings,
+            )
+        except (FileNotFoundError, ValueError):
+            raise
+        except Exception as exc:
+            if os.getenv("CV_PRIMARY_RETRY_WITH_LEGACY_GENERATOR", "1") == "0":
+                raise
+            logger.warning(
+                "Shared direct-generation runtime failed; retrying with legacy primary generator: %s",
+                exc,
+                exc_info=True,
+            )
+            if out_warnings is not None:
+                out_warnings.append({
+                    "code": "legacy_primary_retry",
+                    "message": "Shared direct-generation runtime failed; used legacy primary generator.",
+                    "details": str(exc),
+                })
+
+    result = generate_cv_document(
+        profile=employee_data,
+        template_path=template_path,
+        output_dir=output_dir,
+        output_formats=["docx", "pdf"] if output_pdf else ["docx"],
+        target_language=None if language in {"", "original", "orig"} else language,
+        translate=language not in {"", "original", "orig"},
+    )
+    if output_pdf and result.get("pdf_path"):
+        return result["pdf_path"]
+    return result["docx_path"]
 
 
 def _build_pdf_autofill_map(

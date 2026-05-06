@@ -24,11 +24,66 @@ from docx import Document
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
+from app.services.cv_section_taxonomy import (
+    SECTION_KEYWORDS,
+    SECTION_KEYWORDS_NORMALIZED,
+    SECTION_DATA_KEY,
+    classify_heading,
+    normalize_text,
+)
+
 logger = logging.getLogger(__name__)
 
 def _tagger_enable_conditionals() -> bool:
     """Return True if auto-tagger should insert conditional wrappers."""
     return os.getenv("CV_TEMPLATE_TAGGER_CONDITIONALS", "1") != "0"
+
+
+def _tagger_remove_empty_sections() -> bool:
+    """Return True if empty sections (heading + content) must be hidden entirely.
+
+    When True (the default), the tagger wraps the section heading paragraph
+    AND its body together in ``{%p if data_key %}…{%p endif %}``.  No "N/A"
+    fallback, no orphan heading — sections without data simply disappear.
+
+    Set ``CV_TEMPLATE_REMOVE_EMPTY_SECTIONS=0`` to fall back to the legacy
+    behaviour (heading always visible, body shows "N/A").
+    """
+    return _tagger_enable_conditionals() and os.getenv(
+        "CV_TEMPLATE_REMOVE_EMPTY_SECTIONS", "1"
+    ) != "0"
+
+
+def _section_supports_strict_remove(para, section_type: str) -> bool:
+    """Return True when a section heading is strong enough for full removal."""
+    if para is None or not section_type or section_type == "other":
+        return False
+
+    text = (para.text or "").strip()
+    if not text:
+        return False
+
+    style_name = (getattr(getattr(para, "style", None), "name", "") or "").lower()
+    if style_name in ["heading 1", "heading1", "titre 1", "titre1"]:
+        return True
+
+    normalized = normalize_text(text)
+    if normalized in SECTION_KEYWORDS_NORMALIZED.get(section_type, set()):
+        return True
+
+    if classify_heading(text) != section_type:
+        return False
+
+    runs = getattr(para, "runs", []) or []
+    has_bold = any(bool(getattr(run.font, "bold", False)) for run in runs)
+    max_size = 0
+    for run in runs:
+        if run.font.size:
+            max_size = max(max_size, run.font.size)
+
+    is_all_caps = (text == text.upper() and len(text) > 3)
+    is_large = max_size >= 152400
+    return len(text.split()) <= 4 and (has_bold or (is_large and is_all_caps))
 
 
 # ============================================================================
@@ -203,74 +258,30 @@ def _apply_bullet_lines_loop(
 
 
 # ============================================================================
-# SECTION HEADING KEYWORDS (EN + FR)
+# SECTION HEADING KEYWORDS — sourced from cv_section_taxonomy
 # ============================================================================
-
+# Section synonym definitions live in app.services.cv_section_taxonomy and
+# are shared with cv_generator and cv_generator_fallback.  Adding a new
+# language or alias is a single edit there.
+#
+# These names are kept as aliases so legacy imports/external callers don't
+# break, but new code should call ``classify_heading()`` directly.
 _HEADING_KEYWORDS: Dict[str, set] = {
-    "experience": {
-        "experience", "experiences", "work experience", "professional experience",
-        "employment", "employment history", "work history", "career",
-        "expérience", "expériences", "expérience professionnelle",
-        "expériences professionnelles", "parcours professionnel",
-        "parcours", "emploi", "emplois",
-    },
-    "education": {
-        "education", "academic", "academics", "qualifications",
-        "formation", "formations", "études", "etudes",
-        "diplômes", "diplomes", "scolarité", "scolarite",
-    },
-    "skills": {
-        "skills", "technical skills", "competencies", "expertise",
-        "technologies", "tools", "tech stack",
-        "compétences", "competences", "compétences techniques",
-        "savoir-faire", "savoir faire", "technologies", "outils",
-    },
-    "certifications": {
-        "certifications", "certificates", "licenses", "credentials",
-        "certificats", "attestations", "habilitations",
-    },
-    "projects": {
-        "projects", "key projects", "notable projects",
-        "projets", "réalisations", "realisations",
-    },
-    "summary": {
-        "summary", "profile", "professional summary", "about", "about me",
-        "objective", "overview",
-        "résumé", "resume", "profil", "synthèse", "synthese",
-        "présentation", "presentation", "objectif",
-    },
-    "contact": {
-        "contact", "contact information", "contact info", "personal info",
-        "coordonnées", "coordonnees", "informations personnelles",
-    },
-    "languages": {
-        "languages", "langues", "idiomas", "idiomes", "sprachen",
-    },
-    "awards": {
-        "awards", "distinctions", "honors", "récompenses", "recompenses",
-        "prix"
-    },
+    section: set(keywords) for section, keywords in SECTION_KEYWORDS.items()
 }
 
 # Always use LLM classification for repeating entry sections.
 ALWAYS_USE_LLM_ENTRY_TAGGING = True
 LLM_ENTRY_SECTIONS = {"experience", "education", "projects", "certifications"}
 
-# Pre-normalized keyword sets for accent-insensitive matching.
+
 def _normalize_heading_text(text: str) -> str:
-    text = (text or "").lower().strip(":").strip()
-    # Strip accents/diacritics (e.g., "Expérience" -> "experience")
-    text = "".join(
-        ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch)
-    )
-    # Collapse whitespace
-    text = re.sub(r"\s+", " ", text)
-    return text
+    """Backward-compatible alias for ``cv_section_taxonomy.normalize_text``."""
+    return normalize_text(text)
 
 
 _NORMALIZED_HEADING_KEYWORDS: Dict[str, set] = {
-    section: {_normalize_heading_text(keyword) for keyword in keywords}
-    for section, keywords in _HEADING_KEYWORDS.items()
+    section: set(keywords) for section, keywords in SECTION_KEYWORDS_NORMALIZED.items()
 }
 
 # Loop variable names and field mappings for repeating sections
@@ -459,28 +470,66 @@ def auto_tag_template(docx_path: str) -> str:
                 # Replace inline string completely preserving all native MS Word template formatting
                 _replace_text_in_paragraph(heading_para, original_text, new_text)
 
-    # --- Step 6: Conditional Section Fallback (Show N/A when empty) ---
+    # --- Step 6: Conditional rendering of empty sections ---
+    # Strict mode (default, controlled by CV_TEMPLATE_REMOVE_EMPTY_SECTIONS):
+    #   Wrap heading + content together.  Empty sections vanish completely —
+    #   no orphan heading, no placeholder "N/A".
+    # Legacy mode (CV_TEMPLATE_REMOVE_EMPTY_SECTIONS=0):
+    #   Heading remains visible; body renders "N/A" when data is missing.
     _SECTION_CONDITIONS = {
-        "experience": "work_experiences",
-        "education": "educations",
-        "projects": "projects",
-        "certifications": "certifications",
-        "skills": "skills",
-        "languages": "languages",
-        "awards": "awards",
+        section: SECTION_DATA_KEY[section]
+        for section in (
+            "experience", "education", "projects", "certifications",
+            "skills", "languages", "awards", "interests", "volunteer",
+            "references",
+        )
+        if section in SECTION_DATA_KEY
     }
-    
+
+    strict_remove = _tagger_remove_empty_sections()
+
     for section in sections:
         cond_var = _SECTION_CONDITIONS.get(section.section_type)
-        if cond_var and section.heading_idx is not None and section.paragraph_indices:
-            logger.info(f"[DEBUG] Wrapping section '{section.section_type}' in {{% if {cond_var} %}}")
+        if not cond_var:
+            continue
+        if section.heading_idx is None and not section.paragraph_indices:
+            continue
+
+        logger.info(
+            "[DEBUG] Wrapping section '%s' in {%% if %s %%} (strict_remove=%s)",
+            section.section_type, cond_var, strict_remove,
+        )
+
+        section_strict_remove = strict_remove
+        if section_strict_remove and section.heading_idx is not None:
+            section_strict_remove = _section_supports_strict_remove(
+                all_paras[section.heading_idx],
+                section.section_type,
+            )
+
+        if section_strict_remove:
+            # Wrap from the heading paragraph to the last content paragraph
+            # so an empty section disappears entirely (heading included).
+            first_idx = section.heading_idx
+            if first_idx is None and section.paragraph_indices:
+                first_idx = section.paragraph_indices[0]
+            last_idx = (
+                section.paragraph_indices[-1]
+                if section.paragraph_indices else section.heading_idx
+            )
+            if first_idx is None or last_idx is None:
+                continue
+            _insert_paragraph_before(all_paras[first_idx], f"{{%p if {cond_var} %}}")
+            _insert_paragraph_after(all_paras[last_idx], "{%p endif %}")
+        else:
+            # Legacy: keep heading visible, only body is conditional, with
+            # "N/A" fallback when data is missing.
+            if not section.paragraph_indices:
+                continue
             first_para = all_paras[section.paragraph_indices[0]]
             last_para = all_paras[section.paragraph_indices[-1]]
-
-            # Keep the heading visible; only the content block is conditional.
             _insert_paragraph_before(first_para, f"{{%p if {cond_var} %}}")
-
-            # Insert in reverse order because addnext inserts directly after the same anchor.
+            # Insert in reverse — addnext inserts directly after the anchor.
             _insert_paragraph_after(last_para, "{%p endif %}")
             _insert_paragraph_after(last_para, "N/A")
             _insert_paragraph_after(last_para, "{%p else %}")
@@ -547,49 +596,46 @@ def _is_heading(para) -> bool:
     if style_name in ["heading 1", "heading1", "titre 1", "titre1"]:
         return True
 
-    text_norm = _normalize_heading_text(text)
-    
-    # 2. Direct Keyword Match: if exactly matches a known major section and is short
-    is_keyword = any(text_norm in keywords for keywords in _NORMALIZED_HEADING_KEYWORDS.values())
-    if is_keyword and len(text) < 40:
+    # 2. Synonym-aware keyword match: detect section even when title contains extra words
+    # (e.g. "Professional Experience", "Skills Summary", "Career History")
+    is_keyword = _classify_heading_text(text) != "other"
+    if is_keyword and len(text) < 50:
         return True
 
     runs = para.runs
     if not runs:
         return False
 
-    # 3. Visual Prominence (Bold, Size, or ALL CAPS)
-    all_bold = all(r.bold for r in runs if r.text.strip())
+    # 3. Visual Prominence — large font only
     is_all_caps = (text == text.upper() and len(text) > 3)
 
     max_size = 0
     for run in runs:
         if run.font.size:
             max_size = max(max_size, run.font.size)
-            
-    # EMU to pt: 140000 = ~11pt, let's treat >= 12pt as prominent
+
+    # EMU to pt: 1 pt = 12700 EMU; >= 152400 EMU ~ 12 pt
     is_large = max_size >= 152400
 
-    # Only fallback to formatting-based headings if the font is distinctly larger!
-    # Regular bold text or ALL CAPS text is too common inside actual job descriptions/titles
-    # and shouldn't act as a section boundary.
-    if is_large and len(text) < 40:
+    # When relying on visual style alone (no keyword match), only accept ALL CAPS text.
+    # This avoids misclassifying bold content lines (job titles, company names, short
+    # bullet points) that happen to share the same font size as the section heading.
+    if is_large and is_all_caps and len(text) < 50:
         return True
-            
+
     return False
 
 
 def _classify_heading_text(text: str) -> str:
-    """Classify a heading's text into a section type."""
-    text_norm = _normalize_heading_text(text)
-    for section_type, keywords in _NORMALIZED_HEADING_KEYWORDS.items():
-        if text_norm in keywords:
-            return section_type
-        # Partial match: check if any keyword is a substring
-        for kw in keywords:
-            if kw in text_norm or text_norm in kw:
-                return section_type
-    return "other"
+    """Classify a heading's text into a section type.
+
+    Uses the shared ``cv_section_taxonomy.classify_heading`` so the parser,
+    tagger and fallback engine all agree on what counts as a section
+    header.  Returns ``"other"`` (the legacy sentinel) when no section type
+    matches.
+    """
+    section = classify_heading(text)
+    return section if section is not None else "other"
 
 
 def _detect_sections(paragraphs) -> List[Section]:
@@ -597,11 +643,45 @@ def _detect_sections(paragraphs) -> List[Section]:
     sections: List[Section] = []
     heading_indices: List[Tuple[int, str]] = []
 
-    # Find all headings
+    # Find all heading candidates
     for i, para in enumerate(paragraphs):
         if _is_heading(para):
             section_type = _classify_heading_text(para.text)
             heading_indices.append((i, section_type))
+
+    # Post-processing: demote "other"-typed headings that were detected purely by
+    # visual style but are no more prominent than the content that follows them.
+    # This prevents bold job titles / company names from being misclassified as
+    # section boundaries when the CV uses the same font style for headings and content.
+    filtered_indices: List[Tuple[int, str]] = []
+    for pos, (h_idx, h_type) in enumerate(heading_indices):
+        if h_type != "other":
+            # Keyword-matched heading — always keep
+            filtered_indices.append((h_idx, h_type))
+            continue
+
+        next_h = (
+            heading_indices[pos + 1][0] if pos + 1 < len(heading_indices)
+            else len(paragraphs)
+        )
+        # Sample up to 5 non-empty content paragraphs after this candidate
+        content_paras = [
+            p for p in paragraphs[h_idx + 1 : min(h_idx + 6, next_h)]
+            if (p.text or "").strip()
+        ]
+        if not content_paras:
+            # Nothing follows — keep it (could be last heading)
+            filtered_indices.append((h_idx, h_type))
+            continue
+
+        heading_score = _get_paragraph_prominence(paragraphs[h_idx])
+        max_content_score = max(_get_paragraph_prominence(p) for p in content_paras)
+
+        if heading_score > max_content_score:
+            filtered_indices.append((h_idx, h_type))
+        # else: content has equal or higher prominence — discard this false-positive heading
+
+    heading_indices = filtered_indices
 
     # Everything before the first heading = "header"
     first_heading_idx = heading_indices[0][0] if heading_indices else len(paragraphs)

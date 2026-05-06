@@ -7,6 +7,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import settings
 from app.api import parsing, rag, generation
@@ -37,9 +38,23 @@ app.include_router(generation.router, prefix=f"{settings.API_V1_STR}/generation"
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting up AI Service...")
-    # Ensure RAG DB schema is available before serving requests.
-    init_rag_schema()
-    logger.info("RAG schema initialized.")
+    app.state.rag_schema_ready = False
+
+    if not settings.RAG_INIT_ON_STARTUP:
+        logger.info("Skipping RAG schema initialization on startup.")
+        return
+
+    try:
+        init_rag_schema()
+        app.state.rag_schema_ready = True
+        logger.info("RAG schema initialized.")
+    except (SQLAlchemyError, OSError) as exc:
+        if settings.RAG_STARTUP_REQUIRED:
+            raise
+        logger.warning(
+            "RAG schema initialization skipped because the database is unavailable: %s",
+            exc,
+        )
 
 @app.on_event("shutdown")
 async def shutdown_event():

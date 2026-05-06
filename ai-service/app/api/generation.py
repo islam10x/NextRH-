@@ -75,6 +75,11 @@ class AnalyzeTemplateRequest(BaseModel):
     template_path: str
 
 
+class _TranslateRequest(BaseModel):
+    target_language: str
+    cv_data: Dict[str, Any]
+
+
 def _validate_path(path_str: str, label: str) -> Path:
     resolved = Path(path_str).resolve()
     norm_resolved = os.path.normcase(str(resolved))
@@ -322,6 +327,7 @@ def _run_fallback_generation(
         except Exception as exc:
             logger.warning("CV data translation failed (non-fatal): %s", exc)
 
+    engine_warnings: List[Dict[str, Any]] = []
     docx_path = process_cv_fallback(
         template_path=template_path,
         employee_data=employee_data,
@@ -329,7 +335,9 @@ def _run_fallback_generation(
         output_pdf=False,
         debug=debug,
         language=lang,
+        out_warnings=engine_warnings,
     )
+    fallback_warnings.extend(engine_warnings)
 
     if should_translate_headings:
         try:

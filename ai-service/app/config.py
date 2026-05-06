@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     APP_NAME: str = "AI CV Parser Service"
     DEBUG: bool = False
     API_V1_STR: str = "/api/v1"
+    RAG_INIT_ON_STARTUP: bool = True
+    RAG_STARTUP_REQUIRED: bool = False
     
     # Paths
     UPLOAD_FOLDER: str = "uploads"

@@ -638,6 +638,40 @@ class TestBuildSectionContent:
         assert result is not None
         assert any('MyApp' in r['text'] for r in result)
 
+    def test_projects_null_entries_and_null_skill_lists_do_not_crash(self):
+        result = _build_section_content('projects', {
+            'projects': [
+                None,
+                {'name': 'MyApp', 'skills': None, 'description': 'A cool app'},
+            ]
+        })
+        assert result is not None
+        assert any('MyApp' in r['text'] for r in result)
+
+    def test_skills_null_and_dict_entries_are_filtered(self):
+        result = _build_section_content('skills', {
+            'skills': [None, 'Python', {'name': 'Java'}],
+            'certifications': [None, {'name': 'AWS'}],
+        })
+        assert result is not None
+        assert 'Python' in result[0]['text']
+        assert 'Java' in result[0]['text']
+
+    def test_languages_null_entries_are_filtered(self):
+        result = _build_section_content('languages', {
+            'languages': [None, {'name': 'French'}],
+        })
+        assert result is not None
+        assert result[0]['text'] == 'French'
+
+    def test_interests_null_entries_are_filtered(self):
+        result = _build_section_content('interests', {
+            'interests': [None, {'name': 'Reading'}],
+        })
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]['text'] == 'Reading'
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  10. Table Cell Counting (Direct Children)
@@ -876,6 +910,21 @@ class TestExperienceDateNormalization:
         })
         texts = [r['text'] for r in result]
         assert any('2020 - Present' in t for t in texts)
+
+    def test_experience_title_precedes_company_and_dates(self):
+        result = _build_section_content('experience', {
+            'experience': [{
+                'title': 'Project Manager',
+                'company': 'Next Step IT',
+                'dates': '2016 - Present',
+            }]
+        })
+        assert result is not None
+        non_bullets = [item for item in result if not item.get('bullet')]
+        assert non_bullets[0]['text'] == 'Project Manager'
+        assert non_bullets[0]['bold'] is True
+        assert non_bullets[1]['compact'] is True
+        assert non_bullets[1]['text'] == 'Next Step IT  —  2016 - Present'
 
     def test_start_date_fallback(self):
         """start_date used when dates is absent."""

@@ -18,6 +18,8 @@ from app.services.cv_generator import (
     _WPS_TXBX,
     NS_WPS,
 )
+from app.services.cv_generator_fallback import _distribute_entries_across_boxes
+from app.services.field_mapping_service import build_replacement_map
 
 
 # ── Jazil minimal test profile ────────────────────────────────────────────
@@ -199,6 +201,19 @@ def test_identify_section_lxml_finds_direct_heading():
     assert result == 'experience', f"Expected 'experience', got {result!r}"
 
 
+def test_identify_section_lxml_accepts_heading_with_trailing_colon():
+    """Standalone section titles like 'Skills:' must still classify as headings."""
+    W = NS_W
+    p_direct = etree.fromstring(f'''<w:p xmlns:w="{W}">
+        <w:r>
+            <w:rPr><w:b/></w:rPr>
+            <w:t>Skills:</w:t>
+        </w:r>
+    </w:p>''')
+    result = _identify_section_lxml(p_direct)
+    assert result == 'skills', f"Expected 'skills', got {result!r}"
+
+
 def test_skills_built_from_certs_when_skills_empty():
     """Fix 5: skills section content is non-empty when coming from certifications."""
     emp = dict(JAZIL, skills=[], certifications=[
@@ -238,6 +253,67 @@ def test_linkedin_orphan_fragment_cleared():
     assert li_pair[1] == 'linkedin.com/in/jazil-gafsi', (
         f"LinkedIn should be generated slug, got {li_pair[1]!r}"
     )
+
+
+def test_apilayer_mapping_blanks_detected_values_when_employee_missing():
+    """APILayer-detected template values should be cleared when employee lacks them."""
+    parsed_template = {
+        'name': 'Lucas Leblanc',
+        'phone': '555-555-5555',
+        'address': 'Montréal, Canada',
+        'skills': ['Sports'],
+        'education': [
+            {'name': 'Université', 'dates': '2001 - 2005'},
+        ],
+    }
+    employee = {
+        'name': 'Jazil Gafsi',
+        'phone': '',
+        'address': '',
+        'skills': [],
+        'education': [],
+    }
+
+    pairs = build_replacement_map(parsed_template, employee)
+    mapping = dict(pairs)
+
+    assert mapping['Lucas Leblanc'] == 'Jazil Gafsi'
+    assert mapping['555-555-5555'] == ''
+    assert mapping['Montréal, Canada'] == ''
+    assert mapping['Sports'] == ''
+    assert mapping['Université'] == ''
+    assert mapping['2001 - 2005'] == ''
+
+
+def test_distribute_entries_across_boxes_preserves_multiple_boxes():
+    """Textbox-heavy templates should not collapse all entries into the first box."""
+    entries = [
+        [{'text': 'Role 1', 'bold': True}],
+        [{'text': 'Role 2', 'bold': True}],
+        [{'text': 'Role 3', 'bold': True}],
+        [{'text': 'Role 4', 'bold': True}],
+    ]
+
+    distributed = _distribute_entries_across_boxes(entries, 3)
+
+    assert len(distributed) == 3
+    assert [item['text'] for item in distributed[0]] == ['Role 1', 'Role 2']
+    assert [item['text'] for item in distributed[1]] == ['Role 3']
+    assert [item['text'] for item in distributed[2]] == ['Role 4']
+
+
+def test_detect_personal_info_does_not_misclassify_skill_line_as_address():
+    """Address fallback must not grab section content like Data & AI skill lines."""
+    paragraphs = [
+        'Rania Ammar',
+        'ammarrania004@gmail.com',
+        '+216 27 920 721',
+        'Data & AI: Scikit-learn, Spark, Hadoop, HDFS, SQL, MongoDB.',
+    ]
+
+    detected = _detect_personal_info('\n'.join(paragraphs), paragraphs)
+
+    assert detected.get('address', '') != 'Data & AI: Scikit-learn, Spark, Hadoop, HDFS, SQL, MongoDB.'
 
 
 if __name__ == '__main__':

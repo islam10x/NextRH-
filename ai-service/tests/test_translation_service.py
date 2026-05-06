@@ -202,3 +202,37 @@ def test_translate_cv_data_translates_address_field():
     assert translated["address"] == "Tunis, Tunisie"
     assert translated["title"] == "Ingenieure logicielle"
     assert translated["summary"] == "Ingenieure experimentee."
+
+
+def test_translate_cv_best_effort_rejects_candidates_that_change_identity():
+    source = {
+        "name": "Aya BEN JEMAA",
+        "email": "aya.benjemaa@example.com",
+        "phone": "+216 98 772 817",
+        "title": "Ingenieure logicielle",
+        "summary": "Resume source",
+        "experience": [],
+        "education": [],
+        "skills": [],
+    }
+    unsafe = {
+        "name": "Aya Traduite",
+        "email": "aya.benjemaa@example.com",
+        "phone": "+216 98 772 817",
+        "title": "Software Engineer",
+        "summary": "Professional summary",
+        "experience": [],
+        "education": [],
+        "skills": [],
+    }
+
+    with patch(
+        "app.services.translation_service.translate_cv_structured",
+        return_value=copy.deepcopy(unsafe),
+    ), patch(
+        "app.services.translation_service.translate_cv_data",
+        return_value=copy.deepcopy(unsafe),
+    ):
+        translated = translate_cv_best_effort(copy.deepcopy(source), "en")
+
+    assert translated == source

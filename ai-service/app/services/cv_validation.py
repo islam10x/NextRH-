@@ -72,6 +72,79 @@ def _safe_list_of_str(value: Any, item_max: int, list_max: int) -> List[str]:
     return items[:list_max]
 
 
+def _dedupe_strings_case_insensitive(items: List[str]) -> List[str]:
+    """Drop duplicates ignoring case + accents while preserving original casing.
+
+    The first occurrence wins.  Used for skills and language lists where
+    "Python" + "python" or "Français" + "francais" must collapse to one
+    entry to keep the rendered CV clean.
+    """
+    seen: set = set()
+    deduped: List[str] = []
+    for item in items:
+        key = "".join(
+            ch for ch in __import__("unicodedata").normalize("NFKD", item)
+            if not __import__("unicodedata").combining(ch)
+        ).strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+# Recognises ranges like "2020 - 2023", "Jan 2020 — Present", "01/2020 to 12/2022".
+_DATE_RANGE_RE = re.compile(
+    r"(?P<start>\d{4}|\d{1,2}[/\-.]\d{4}|[A-Za-zéûô]+\s+\d{4})\s*"
+    r"(?:[-–—]|to|à|au|bis|hasta|fino al)\s*"
+    r"(?P<end>\d{4}|\d{1,2}[/\-.]\d{4}|[A-Za-zéûô]+\s+\d{4}|"
+    r"present|current|présent|aujourd['’]hui|en cours|actuel|"
+    r"heute|attuale|presente|hoy)",
+    re.IGNORECASE,
+)
+
+_YEAR_ONLY_RE = re.compile(r"^\d{4}$")
+
+
+def _validate_date_string(value: Any) -> tuple[str, Optional[str]]:
+    """Validate a date-or-range string.  Returns ``(cleaned, warning_or_None)``.
+
+    Empty/None input returns ``("", None)`` — missing dates are not an error.
+    Strings that match neither a known range nor a year are returned as-is
+    but with a warning so callers can flag them in the report.
+    """
+    s = _safe_str(value, MAX_FIELD_LEN)
+    if not s:
+        return "", None
+    if _YEAR_ONLY_RE.match(s):
+        return s, None
+    if _DATE_RANGE_RE.search(s):
+        return s, None
+    if any(ch.isdigit() for ch in s):
+        # Accept anything containing digits without a strong warning
+        # (templates use a wide variety of date formats).
+        return s, None
+    return s, f"Date string contains no digits: {s!r}"
+
+
+def _year_from_iso(value: str) -> str:
+    """'2018-02-01' → '2018', '2018-02' → '2018', '2018' → '2018', '' → ''."""
+    if not value:
+        return ""
+    return re.sub(r'^(\d{4})[-/]\d{2}.*$', r'\1', value.strip())
+
+
+def _dates_from_range(start: Any, end: Any, is_current: Any = None) -> str:
+    """Build a human-readable date range string from two ISO/year values."""
+    s = _year_from_iso(str(start or "").strip())
+    e = _year_from_iso(str(end or "").strip())
+    if is_current:
+        e = "Present"
+    if s and e:
+        return f"{s} - {e}"
+    return s or e
+
+
 class ExperienceEntry(BaseModel):
     """A single work experience entry."""
     title: str = ""
@@ -96,6 +169,14 @@ class ExperienceEntry(BaseModel):
             values['title'] = values['jobTitle']
         if not values.get('company') and values.get('companyName'):
             values['company'] = values['companyName']
+        # Derive dates string from startDate/endDate when not already set.
+        # This handles data arriving as camelCase from the frontend API.
+        if not (values.get('dates') or '').strip():
+            start = values.get('startDate') or values.get('start_date') or ''
+            end = values.get('endDate') or values.get('end_date') or ''
+            computed = _dates_from_range(start, end, values.get('isCurrent'))
+            if computed:
+                values['dates'] = computed
         return values
 
     @field_validator('title', 'company', mode='before')
@@ -119,8 +200,23 @@ class EducationEntry(BaseModel):
     institution: str = ""
     fieldOfStudy: Optional[str] = None
     dates: str = ""
+    startDate: Optional[str] = None
     endDate: Optional[str] = None
     description: str = ""
+
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_edu_fields(cls, values: Any) -> Any:
+        if not isinstance(values, dict):
+            return values
+        # Derive dates string from startDate/endDate when not already set.
+        if not (values.get('dates') or '').strip():
+            start = values.get('startDate') or values.get('start_date') or ''
+            end = values.get('endDate') or values.get('end_date') or values.get('graduationDate') or ''
+            computed = _dates_from_range(start, end)
+            if computed:
+                values['dates'] = computed
+        return values
 
     @field_validator('degree', 'institution', mode='before')
     @classmethod
@@ -281,10 +377,22 @@ class EmployeeDataValidator:
             d['address'] = ''
 
         # ── Skills ───────────────────────────────────────────────────
-        d['skills'] = _safe_list_of_str(raw.get('skills'), MAX_SKILL_LEN, MAX_SKILLS)
+        skills_raw = _safe_list_of_str(raw.get('skills'), MAX_SKILL_LEN, MAX_SKILLS)
+        skills_dedup = _dedupe_strings_case_insensitive(skills_raw)
+        if len(skills_dedup) < len(skills_raw):
+            self._warn(
+                f"Removed {len(skills_raw) - len(skills_dedup)} duplicate skill(s)"
+            )
+        d['skills'] = skills_dedup
 
         # ── Languages ────────────────────────────────────────────────
-        d['languages'] = _safe_list_of_str(raw.get('languages'), MAX_LANG_LEN, MAX_LANGUAGES)
+        langs_raw = _safe_list_of_str(raw.get('languages'), MAX_LANG_LEN, MAX_LANGUAGES)
+        langs_dedup = _dedupe_strings_case_insensitive(langs_raw)
+        if len(langs_dedup) < len(langs_raw):
+            self._warn(
+                f"Removed {len(langs_raw) - len(langs_dedup)} duplicate language(s)"
+            )
+        d['languages'] = langs_dedup
 
         # ── Experience ───────────────────────────────────────────────
         raw_exp = raw.get('experience')
@@ -296,7 +404,14 @@ class EmployeeDataValidator:
                 try:
                     parsed = ExperienceEntry.model_validate(entry)
                     if parsed.is_valid:
-                        valid_exp.append(entry)  # keep original dict for downstream compat
+                        # Validate the dates field (does not modify the entry —
+                        # we only surface warnings).
+                        dates_val = entry.get('dates') or entry.get('date_range')
+                        if dates_val:
+                            _, warn = _validate_date_string(dates_val)
+                            if warn:
+                                self._warn(f"Experience: {warn}")
+                        valid_exp.append(entry)
                     else:
                         self._report.dropped_experiences += 1
                 except Exception:
@@ -359,6 +474,7 @@ class EmployeeDataValidator:
             derived = (first_exp.get('title') or first_exp.get('jobTitle', '')).strip()
             if derived:
                 d['title'] = _safe_str(derived, MAX_FIELD_LEN)
+                d['_title_derived'] = True
                 self._warn(f"Derived title from first experience: {derived!r}")
 
         # ── Photo path (pass through, validated in process_cv) ───────

@@ -21,6 +21,7 @@ from typing import Dict, Any, List
 from unittest.mock import patch, MagicMock
 
 import pytest
+from docx import Document
 from lxml import etree
 
 # ── Path setup ────────────────────────────────────────────────────────────
@@ -45,6 +46,7 @@ from app.services.cv_generator import (
     NS_W,
     cleanEmployeeData,
 )
+from app.services.cv_generator_fallback import _apply_paragraph_replacements
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -283,6 +285,31 @@ class TestFontInheritance:
         assert rfonts.get(f"{{{NS_W}}}ascii") == "Aptos"
         assert rfonts.get(f"{{{NS_W}}}hAnsi") == "Aptos"
         assert rfonts.get(f"{{{NS_W}}}cs") == "Aptos"
+
+    def test_long_mixed_style_replacement_collapses_to_uniform_run_style(self, temp_dir):
+        path = os.path.join(temp_dir, 'mixed_style_replacement.docx')
+        doc = Document()
+        para = doc.add_paragraph()
+        run1 = para.add_run('Template response first sentence. ')
+        run1.font.name = 'Calibri'
+        run2 = para.add_run('Template response final sentence.')
+        run2.font.name = 'Courier New'
+        doc.save(path)
+
+        _apply_paragraph_replacements(
+            path,
+            [
+                ('Template response first sentence.', 'Generated response first sentence.'),
+                ('Template response final sentence.', 'Generated response final sentence that should keep one body font.'),
+            ],
+        )
+
+        result = Document(path)
+        paragraph = next(p for p in result.paragraphs if 'Generated response first sentence.' in p.text)
+        non_empty_runs = [run for run in paragraph.runs if run.text.strip()]
+
+        assert len(non_empty_runs) == 1
+        assert non_empty_runs[0].font.name == 'Calibri'
 
     def test_long_summary_truncated(self):
         long_summary = "Word " * 500

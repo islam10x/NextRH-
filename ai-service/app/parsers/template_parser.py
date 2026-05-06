@@ -5,6 +5,7 @@ from bisect import bisect_right
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import logger
+from app.services.cv_section_taxonomy import classify_heading as _classify_section_heading
 
 
 class TemplateCVParser:
@@ -127,16 +128,17 @@ class TemplateCVParser:
                 if not paragraph_text:
                     continue
 
-                norm = self._normalize_for_match(paragraph_text)
-                if "experience professionnelle" in norm:
+                _canon = _classify_section_heading(paragraph_text)
+                if _canon == "experience":
                     current_section = "experience"
-                elif re.search(r"\bcertification(s)?\b|\bcertificat(s)?\b", norm):
+                elif _canon == "certifications":
                     current_section = "certifications"
-                elif "formation academique" in norm or norm in {"education", "formation", "formations"}:
+                elif _canon == "education":
                     current_section = "education"
-                elif "experience academique" in norm or re.search(r"\bprojects?\b|\bprojets?\b", norm):
+                elif _canon == "projects":
                     current_section = "projects"
-                elif re.search(r"\bskills?\b|\bcompetence(s)?\b", norm):
+                elif _canon is not None:
+                    # skills / summary / contact / languages etc. — no table entries here
                     current_section = ""
                 continue
 
@@ -775,16 +777,16 @@ class TemplateCVParser:
             if re.search(pattern, line_norm):
                 return True
 
-        if section_type == "experience" and line_norm in {"experience", "experience professionnelle", "professional experience", "work experience"}:
-            return True
-        if section_type == "education" and line_norm in {"formation", "formation academique", "education"}:
-            return True
-        if section_type == "certification" and line_norm in {"certification", "certifications", "certificat", "certificats"}:
-            return True
-        if section_type == "skills" and line_norm in {"competence", "competences", "skills", "technical skills"}:
-            return True
-        if section_type == "project" and line_norm in {"projets", "projects"}:
-            return True
+        # Use the shared taxonomy to detect section heading lines so that
+        # compound titles like "Professional Experience & Projects" or
+        # "Certifications & Hackathons" are recognized and skipped as headers.
+        if section_type:
+            _detected = _classify_section_heading(line)
+            # Map parser's legacy singular names to taxonomy plural names.
+            _parser_to_taxonomy = {"certification": "certifications", "project": "projects"}
+            _expected = _parser_to_taxonomy.get(section_type, section_type)
+            if _detected == _expected:
+                return True
 
         return False
 
@@ -959,11 +961,23 @@ class TemplateCVParser:
         """Extract work experience entries."""
         start_keywords = [
             "Experience professionnelle",
-            "professionnelle",
+            "Experiences professionnelles",
             "Professional Experience",
             "Work Experience",
+            "Career History",
+            "Employment History",
+            "Work History",
+            "Professional Background",
+            "Professional History",
+            "Career Summary",
+            "Employment",
+            "Career",
             "Experience",
+            "professionnelle",
             "professionnelles",
+            "Parcours professionnel",
+            "Postes occupes",
+            "Historique professionnel",
         ]
         end_keywords = [
             "Certification",
@@ -976,6 +990,9 @@ class TemplateCVParser:
             "Projets",
             "Projects",
             "Skills",
+            "Competences",
+            "Languages",
+            "Langues",
         ]
 
         section_lines = self._find_section_lines(start_keywords, end_keywords, lines)
@@ -1702,8 +1719,15 @@ class TemplateCVParser:
         start_keywords = [
             "Formation academique",
             "Formations academiques",
-            "Education",
+            "Formation et diplomes",
             "Academic Background",
+            "Academic History",
+            "Academic Training",
+            "Qualifications",
+            "Schooling",
+            "Studies",
+            "Training",
+            "Education",
             "Formation",
             "Formations",
             "Etudes",
@@ -1718,10 +1742,15 @@ class TemplateCVParser:
             "Realisations",
             "Competences",
             "Skills",
+            "Core Competencies",
             "Certification",
             "Certifications",
             "Certificats",
             "Experience",
+            "Career",
+            "Employment",
+            "Langues",
+            "Languages",
         ]
 
         section_lines = []
@@ -2471,14 +2500,22 @@ class TemplateCVParser:
             "Projets",
             "Projects",
             "Key Projects",
+            "Notable Projects",
+            "Selected Projects",
+            "Professional Achievements",
+            "Accomplishments",
+            "Portfolio",
             "Realisations",
             "Realisations professionnelles",
+            "Realisations cles",
+            "Projets et realisations",
             "Projets realises",
             "Projets cles",
         ]
         end_keywords = [
             "Competences",
             "Skills",
+            "Core Competencies",
             "Formation",
             "Formations",
             "Education",
@@ -2487,6 +2524,8 @@ class TemplateCVParser:
             "Certifications",
             "Certificats",
             "Attestations",
+            "Experience",
+            "Career",
         ]
 
         section_lines = self._find_section_lines(start_keywords, end_keywords, lines)
@@ -2954,23 +2993,38 @@ class TemplateCVParser:
         """Extract skills section."""
         start_keywords = [
             "Competences",
-            "Skills",
-            "Technical Skills",
             "Competences techniques",
             "Competences professionnelles",
-            "Professional Skills",
-            "Expertise",
+            "Competences cles",
             "Competences supplementaires",
+            "Technical Skills",
+            "Professional Skills",
+            "Core Competencies",
+            "Key Competencies",
+            "Key Skills",
+            "Skill Set",
+            "Skills Summary",
+            "Skills & Expertise",
             "Additional Skills",
+            "Savoir faire",
+            "Savoir-faire",
+            "Outils",
+            "Technologies utilisees",
+            "Expertise",
+            "Skills",
         ]
         end_keywords = [
             "Langues",
             "Languages",
             "References",
             "Experience",
+            "Career",
+            "Employment",
             "Certification",
             "Formation",
             "Education",
+            "Projets",
+            "Projects",
         ]
 
         section_lines = self._find_section_lines(start_keywords, end_keywords, lines)
