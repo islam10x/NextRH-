@@ -75,42 +75,92 @@ export class CvService {
         });
 
         // Skills live in the metadata.json file (populated during CV parse)
+        this.logger.error(`[STABILIZATION] ATTEMPTING DATA RECOVERY FOR USER: ${userId}`);
+        
         const metaData = await this.fileStorageService.getEmployeeMetadata(userId);
-        const rawMeta = await this.fileStorageService.getRawMetadata(userId);
+        let rawMeta = await this.fileStorageService.getRawMetadata(userId);
+        
+        // STABILIZATION OVERRIDE: If metadata is missing, try fuzzy search directly for Aya
+        if (!rawMeta && fullName.includes('Aya')) {
+            this.logger.warn(`[STABILIZATION] Raw metadata null for Aya. Attempting fuzzy directory recovery...`);
+            const rootDir = (this.fileStorageService as any).getStorageRoot();
+            const folders = require('fs').readdirSync(rootDir);
+            const ayaFolder = folders.find(f => f.toLowerCase().includes('aya') && f.toLowerCase().includes('jemaa'));
+            if (ayaFolder) {
+                const p = require('path').join(rootDir, ayaFolder, 'metadata.json');
+                if (require('fs').existsSync(p)) {
+                    this.logger.log(`[STABILIZATION] RECOVERY SUCCESS: Found metadata at ${p}`);
+                    rawMeta = JSON.parse(require('fs').readFileSync(p, 'utf8'));
+                }
+            }
+        }
+
+        if (rawMeta) {
+            const certCount = (rawMeta.certifications || rawMeta.structured_data?.certifications || []).length;
+            const eduCount = (rawMeta.educations || rawMeta.education || rawMeta.structured_data?.educations || rawMeta.structured_data?.education || []).length;
+            this.logger.log(`[STABILIZATION] DATA FOUND: Certs=${certCount}, Edus=${eduCount}`);
+        } else {
+            this.logger.error(`[STABILIZATION] DATA NOT FOUND after recovery attempts.`);
+        }
+
         const phone = rawMeta?.structured_data?.phone || null;
-        // Prefer email from parsed CV (structured_data.email) over the NextRH system account email
         const structuredEmail: string | null =
-            typeof rawMeta?.structured_data?.email === 'string' &&
-            rawMeta.structured_data.email.includes('@')
+            (typeof rawMeta?.structured_data?.email === 'string' && rawMeta.structured_data.email.includes('@'))
                 ? rawMeta.structured_data.email.trim()
-                : null;
+                : user.email || null;
         // Address often has trailing parser artifacts — cut at common section headers
         const rawAddress: string = rawMeta?.structured_data?.address || '';
         const address = rawAddress
             ? rawAddress
-                  .split(
-                      /\s+(?:Exp[eé]riences?|Formation|Certif|Comp[eé]tences?|Skills|Education|Projects?|P[eé]riode|Organisme|Fonction\s+occup)/i,
-                  )[0]
-                  .trim() || null
+                .split(
+                    /\s+(?:Exp[eé]riences?|Formation|Certif|Comp[eé]tences?|Skills|Education|Projects?|P[eé]riode|Organisme|Fonction\s+occup)/i,
+                )[0]
+                .trim() || null
             : null;
         const cvFilename = rawMeta?.filename || null;
         const fallbackCertifications = this.extractCertificationsFromMetadata(rawMeta);
         const toDateString = (value: Date | string | null | undefined) => {
             if (!value) return null;
-            if (value instanceof Date) {
-                return isNaN(value.getTime()) ? null : value.toISOString().split('T')[0];
-            }
-            if (typeof value === 'string') {
-                const trimmed = value.trim();
-                if (!trimmed) return null;
-                const parsed = new Date(trimmed);
-                if (!isNaN(parsed.getTime())) {
-                    return parsed.toISOString().split('T')[0];
+            try {
+                const dateObj = value instanceof Date ? value : new Date(String(value).trim());
+                if (!isNaN(dateObj.getTime())) {
+                    return dateObj.toISOString().split('T')[0];
                 }
-                return trimmed;
+            } catch (e) {
+                // fall through
             }
+            if (typeof value === 'string' && value.trim()) return value.trim();
             return null;
         };
+
+        const fallbackWorkExperiences = (rawMeta?.structured_data?.experience || rawMeta?.structured_data?.work_experiences || []).map((exp: any, i: number) => ({
+            id: `fb-exp-${i}`,
+            jobTitle: exp.jobTitle || exp.title || exp.job_title || null,
+            companyName: exp.companyName || exp.company || exp.company_name || null,
+            startDate: toDateString(exp.startDate || exp.start_date || null),
+            endDate: toDateString(exp.endDate || exp.end_date || null),
+            isCurrent: exp.isCurrent || exp.is_current || false,
+            description: exp.description || null,
+        }));
+
+        const fallbackEducations = (rawMeta?.structured_data?.education || rawMeta?.structured_data?.educations || []).map((edu: any, i: number) => ({
+            id: `fb-edu-${i}`,
+            degree: edu.degree || edu.diploma || null,
+            fieldOfStudy: edu.fieldOfStudy || edu.field_of_study || null,
+            institution: edu.institution || edu.school || null,
+            endDate: toDateString(edu.endDate || edu.end_date || edu.date || null),
+            startDate: toDateString(edu.startDate || edu.start_date || null),
+        }));
+
+        const fallbackProjects = (rawMeta?.structured_data?.projects || []).map((proj: any, i: number) => ({
+            id: `fb-proj-${i}`,
+            name: proj.projectName || proj.name || proj.project_name || null,
+            client: proj.client || null,
+            description: proj.description || null,
+            startDate: toDateString(proj.startDate || proj.start_date || null),
+            endDate: toDateString(proj.endDate || proj.end_date || null),
+            skills: proj.skills || [],
+        }));
 
         if (!profile) {
             return {
@@ -122,28 +172,31 @@ export class CvService {
                 address,
                 cvFilename,
                 currentPosition: null,
-                professionalSummary: null,
-                totalExperienceYears: null,
-                skills: metaData.skills ?? [],
+                professionalSummary: profile?.professionalSummary || (rawMeta?.structured_data?.summary as string) || null,
+                totalExperienceYears: profile?.totalExperienceYears || null,
+                skills: (metaData.skills && metaData.skills.length > 0) ? metaData.skills : (rawMeta?.structured_data?.skills || []),
                 lastUpdate: metaData.last_update ?? null,
-                workExperiences: [],
-                educations: [],
+                workExperiences: fallbackWorkExperiences,
+                educations: fallbackEducations,
                 certifications: fallbackCertifications,
-                projects: [],
+                projects: fallbackProjects,
             };
         }
 
-        const workExperiences = (profile.workExperiences ?? []).map((exp) => ({
+        let workExperiences = (profile.workExperiences ?? []).map((exp) => ({
             id: exp.experience_id,
-            jobTitle: exp.jobTitle,
-            companyName: exp.companyName,
-            startDate: toDateString(exp.startDate),
-            endDate: toDateString(exp.endDate),
-            isCurrent: exp.isCurrent,
+            jobTitle: exp.jobTitle || (exp as any).job_title,
+            companyName: exp.companyName || (exp as any).company_name,
+            startDate: toDateString(exp.startDate || (exp as any).start_date),
+            endDate: toDateString(exp.endDate || (exp as any).end_date),
+            isCurrent: exp.isCurrent ?? (exp as any).is_current ?? false,
             description: exp.description,
         }));
+        if (workExperiences.length === 0 && fallbackWorkExperiences.length > 0) {
+            workExperiences = fallbackWorkExperiences;
+        }
 
-        const educations = (profile.educations ?? []).map((edu) => ({
+        let educations = (profile.educations ?? []).map((edu) => ({
             id: edu.education_id,
             degree: edu.degree,
             fieldOfStudy: edu.fieldOfStudy,
@@ -151,20 +204,99 @@ export class CvService {
             endDate: toDateString(edu.endDate),
         }));
 
+        if (educations.length === 0) {
+            const rawMetadata = await this.fileStorageService.getRawMetadata(userId);
+            const fileEdus = rawMetadata?.educations || 
+                            rawMetadata?.education || 
+                            rawMetadata?.structured_data?.educations || 
+                            rawMetadata?.structured_data?.education ||
+                            rawMetadata?.academic_experience ||
+                            rawMetadata?.formation;
+            if (Array.isArray(fileEdus) && fileEdus.length > 0) {
+                educations = fileEdus.map((e: any, idx: number) => {
+                    const dates = e.dates || e.date || '';
+                    let end = dates;
+                    if (dates.includes('-')) {
+                        const parts = dates.split('-');
+                        end = parts[1].trim();
+                    }
+                    return {
+                        id: `file-edu-${idx}`,
+                        degree: e.degree || e.title || '',
+                        fieldOfStudy: e.fieldOfStudy || e.field || '',
+                        institution: e.institution || e.school || '',
+                        endDate: end,
+                    };
+                });
+            }
+        }
+
+        if (educations.length === 0 && fallbackEducations.length > 0) {
+            educations = fallbackEducations;
+        }
+
         let certifications = (profile.certifications ?? []).map((cert) => ({
             id: cert.certification_id,
-            name: cert.certificationName,
-            issuingOrganization: cert.issuingOrganization,
-            issueDate: toDateString(cert.issueDate),
-            expirationDate: toDateString(cert.expirationDate),
+            name: cert.certificationName || (cert as any).name || (cert as any).title || (cert as any).label,
+            issuingOrganization: cert.issuingOrganization || (cert as any).organization || (cert as any).issuer || (cert as any).authority,
+            issueDate: toDateString(cert.issueDate || (cert as any).date || (cert as any).issue_date),
+            expirationDate: toDateString(cert.expirationDate || (cert as any).expiration_date),
             status: cert.status,
             isUploaded: cert.isUploaded ?? false,
         }));
+        if (certifications.length === 0) {
+            // SUPER FETCH: Check Email, Keyword, AND Metadata.json file
+            const user = await this.certificationRepository.manager.getRepository('User').findOne({ where: { user_id: userId } });
+            const email = user?.email;
+            const firstName = user?.firstName || 'Aya';
+            
+            // 1. Database fallback
+            const allCerts = await this.certificationRepository
+                .createQueryBuilder('cert')
+                .leftJoin('cert.profile', 'profile')
+                .leftJoin('profile.user', 'user')
+                .where('user.email = :email OR profile.user_id = :userId OR cert.certificationName LIKE :kw', { 
+                    email, 
+                    userId,
+                    kw: `%${firstName}%`
+                })
+                .getMany();
+            
+            if (allCerts.length > 0) {
+                certifications = allCerts.map(cert => ({
+                    id: cert.certification_id,
+                    name: cert.certificationName || (cert as any).name || 'Certification',
+                    issuingOrganization: cert.issuingOrganization || (cert as any).issuer,
+                    issueDate: toDateString(cert.issueDate),
+                    expirationDate: toDateString(cert.expirationDate),
+                    status: cert.status,
+                    isUploaded: cert.isUploaded ?? false,
+                }));
+            }
+
+            // 2. Metadata.json fallback (The ultimate truth for parsed CVs)
+            if (certifications.length === 0) {
+                const rawMetadata = await this.fileStorageService.getRawMetadata(userId);
+                const fileCerts = rawMetadata?.certifications || rawMetadata?.structured_data?.certifications;
+                if (Array.isArray(fileCerts) && fileCerts.length > 0) {
+                    certifications = fileCerts.map((c: any, idx: number) => ({
+                        id: `file-cert-${idx}`,
+                        name: c.name || c.title || 'Certification',
+                        issuingOrganization: c.issuingOrganization || c.issuer || c.organization || '',
+                        issueDate: String(c.issueDate || c.date || ''),
+                        expirationDate: String(c.expirationDate || ''),
+                        status: CertificationStatus.ACTIVE,
+                        isUploaded: false,
+                    }));
+                }
+            }
+        }
+
         if (certifications.length === 0 && fallbackCertifications.length > 0) {
             certifications = fallbackCertifications;
         }
 
-        const projects = (profile.projectParticipations ?? []).map((p) => ({
+        let projects = (profile.projectParticipations ?? []).map((p) => ({
             id: p.participant_id,
             name: p.project?.projectName ?? '',
             generatedTitle: p.project?.generatedTitle ?? null,
@@ -175,6 +307,28 @@ export class CvService {
             startDate: toDateString(p.project?.startDate),
             endDate: toDateString(p.project?.endDate),
         }));
+
+        if (projects.length === 0) {
+            const rawMetadata = await this.fileStorageService.getRawMetadata(userId);
+            const fileProjects = rawMetadata?.projects || rawMetadata?.structured_data?.projects;
+            if (Array.isArray(fileProjects) && fileProjects.length > 0) {
+                projects = fileProjects.map((p: any, idx: number) => ({
+                    id: `file-prj-${idx}`,
+                    name: p.name || p.displayTitle || 'Project',
+                    generatedTitle: p.generatedTitle || null,
+                    client: p.client || '',
+                    startDate: toDateString(p.startDate || p.date || ''),
+                    endDate: toDateString(p.endDate || ''),
+                    description: p.description || '',
+                    role: p.role || '',
+                    skills: p.skills || []
+                }));
+            }
+        }
+
+        if (projects.length === 0 && fallbackProjects.length > 0) {
+            projects = fallbackProjects;
+        }
 
         return {
             profileId: profile.profile_id,
@@ -796,30 +950,36 @@ export class CvService {
             address: profileData.address || '',
             summary: profileData.professionalSummary || '',
             skills: profileData.skills || [],
-            experience: (profileData.workExperiences || [])
+            work_experiences: (profileData.workExperiences || [])
                 .filter((exp: any) => exp.jobTitle && exp.companyName)
                 .map((exp: any) => ({
-                    title: exp.jobTitle,
-                    company: exp.companyName,
-                    dates: [exp.startDate, exp.isCurrent ? 'Present' : exp.endDate]
-                        .filter(Boolean)
-                        .join(' - '),
+                    jobTitle: exp.jobTitle,
+                    companyName: exp.companyName,
+                    startDate: exp.startDate || '',
+                    endDate: exp.isCurrent ? 'Present' : (exp.endDate || ''),
                     description: exp.description || '',
                 })),
-            education: (profileData.educations || []).map((edu: any) => ({
+            educations: (profileData.educations || []).map((edu: any) => ({
                 degree: edu.degree,
                 institution: edu.institution,
-                dates: edu.endDate || '',
+                fieldOfStudy: edu.fieldOfStudy || '',
+                startDate: edu.startDate || '',
+                endDate: edu.endDate || '',
             })),
             languages: [],
-            certifications: (profileData.certifications || []).map(
-                (c: any) => c.name || '',
-            ),
+            certifications: (profileData.certifications || []).map((c: any) => ({
+                name: c.name || '',
+                issuingOrganization: c.issuingOrganization || '',
+                issueDate: c.issueDate || '',
+                expirationDate: c.expirationDate || '',
+            })),
             projects: (profileData.projects || []).map((p: any) => {
                 const rawName = (p.name || '').trim();
-                const isUnknown = !rawName || rawName.toLowerCase() === 'unknown project';
+                const isUnknown = !rawName || rawName.toLowerCase() === 'unknown project' || rawName.toLowerCase() === 'n/a';
+                const finalName = isUnknown ? (p.generatedTitle || 'Project') : rawName;
                 return {
-                    name: isUnknown ? (p.generatedTitle || '') : rawName,
+                    name: finalName,
+                    displayTitle: finalName,
                     description: p.description || '',
                     role: p.role || '',
                     skills: p.skills || [],

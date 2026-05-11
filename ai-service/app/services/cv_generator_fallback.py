@@ -3299,8 +3299,15 @@ def build_structured_cv_sections_payload(employee: Dict[str, Any]) -> Dict[str, 
             return f"{start_year} - Present"
         return start_year or end_year
 
+    # Accept both normalized fallback payload and raw backend payload shapes.
+    raw_experience = employee.get("experience")
+    if not isinstance(raw_experience, list):
+        raw_experience = employee.get("workExperiences")
+    if not isinstance(raw_experience, list):
+        raw_experience = []
+
     experience: List[Dict[str, str]] = []
-    for exp in (employee.get("experience") or []):
+    for exp in raw_experience:
         if not isinstance(exp, dict):
             continue
         title = _strip(exp.get("title") or exp.get("jobTitle"))
@@ -3319,8 +3326,14 @@ def build_structured_cv_sections_payload(employee: Dict[str, Any]) -> Dict[str, 
             "dates": dates,
         })
 
+    raw_education = employee.get("education")
+    if not isinstance(raw_education, list):
+        raw_education = employee.get("educations")
+    if not isinstance(raw_education, list):
+        raw_education = []
+
     education: List[Dict[str, str]] = []
-    for edu in (employee.get("education") or []):
+    for edu in raw_education:
         if not isinstance(edu, dict):
             continue
         degree = _strip(
@@ -3381,9 +3394,15 @@ def build_structured_cv_sections_payload(employee: Dict[str, Any]) -> Dict[str, 
         if text:
             projects.append(text)
 
+    summary_text = _strip(
+        employee.get("summary")
+        or employee.get("professionalSummary")
+        or employee.get("professional_summary")
+    )
+
     return {
         "sections": {
-            "summary": _strip(employee.get("summary")),
+            "summary": summary_text,
             "education": education,
             "experience": experience,
             "skills": skills,
@@ -5456,6 +5475,7 @@ def _replace_language_textboxes_in_range(body_elements: list, employee_langs: li
     return modified
 
 
+
 def _replace_cv_sections(
     docx_path: str,
     employee: Dict[str, Any],
@@ -7273,12 +7293,14 @@ def _detect_template_mode(docx_path: str) -> str:
 def _supports_fast_placeholder_render(docx_path: str) -> bool:
     """Return True when the template is simple enough for docxtpl rendering.
 
-    Some uploaded templates contain advanced docxtpl row/paragraph control tags
-    like ``{% tr ... %}`` that can stall the fallback renderer.  We keep native
-    placeholder rendering for simple ``{{ field }}`` templates and fall back to
-    the direct replacement pipeline for the complex ones.
+    Placeholder mode is the only mode that can reliably execute Jinja loop
+    constructs (tables/sections authored with ``{% ... %}``).  We therefore
+    prefer placeholder mode by default and only disable it if explicitly
+    requested via env.
     """
-    structural_tag_re = re.compile(rb'\{%-?\s*(?:tr|tc|p|r)\b', re.I)
+    if os.getenv("CV_PLACEHOLDER_FAST_MODE", "1") == "0":
+        return False
+
     try:
         with zipfile.ZipFile(docx_path, 'r') as zf:
             xml_members = [
@@ -7287,14 +7309,8 @@ def _supports_fast_placeholder_render(docx_path: str) -> bool:
             ]
             if not xml_members:
                 return False
-            for name in xml_members:
-                raw = zf.read(name)
-                if structural_tag_re.search(raw):
-                    logger.info(
-                        "Placeholder capability scan: structural docxtpl tag found in %s; using direct pipeline",
-                        name,
-                    )
-                    return False
+            # If we reached here and the template is a valid DOCX, let docxtpl try.
+            # Structural tags such as {%tr ...%} are expected in many templates.
             return True
     except Exception as exc:
         logger.warning(f"Placeholder capability scan failed (defaulting to direct): {exc}")
@@ -7430,6 +7446,13 @@ def _build_placeholder_render_context(employee_data: Dict[str, Any]) -> Dict[str
     like ``edu.school`` or ``exp.period`` render reliably.
     """
     employee = dict(employee_data or {})
+    # Normalize common payload variants received from backend.
+    if "experience" not in employee and isinstance(employee.get("workExperiences"), list):
+        employee["experience"] = employee.get("workExperiences")
+    if "education" not in employee and isinstance(employee.get("educations"), list):
+        employee["education"] = employee.get("educations")
+    if "summary" not in employee and employee.get("professionalSummary"):
+        employee["summary"] = employee.get("professionalSummary")
 
     def _s(value: Any) -> str:
         return str(value).strip() if value is not None else ""
@@ -7511,6 +7534,12 @@ def _build_placeholder_render_context(employee_data: Dict[str, Any]) -> Dict[str
 
     skills = sections.get("skills") or []
 
+    summary_text = _s(
+        employee.get("summary")
+        or employee.get("professionalSummary")
+        or employee.get("professional_summary")
+    )
+
     context: Dict[str, Any] = {
         "full_name": full_name,
         "name": full_name,
@@ -7522,16 +7551,33 @@ def _build_placeholder_render_context(employee_data: Dict[str, Any]) -> Dict[str
         "telephone": _s(employee.get("phone")),
         "address": _s(employee.get("address")),
         "linkedin": _s(employee.get("linkedin")),
-        "summary": _s(employee.get("summary")),
-        "professional_summary": _s(employee.get("summary")),
+        "summary": summary_text,
+        "professional_summary": summary_text,
         "experience": experience,
         "experiences": experience,
+        "work_experiences": experience,
         "education": education,
         "educations": education,
+        "formation": education,
         "certifications": certifications,
         "projects": projects,
         "skills": skills,
     }
+
+    # Per-row aliases for common template variants.
+    for exp in context["experience"]:
+        exp.setdefault("jobTitle", exp.get("title", ""))
+        exp.setdefault("companyName", exp.get("company", ""))
+        exp.setdefault("startDate", "")
+        exp.setdefault("endDate", "")
+    for edu in context["education"]:
+        edu.setdefault("fieldOfStudy", "")
+        edu.setdefault("startDate", "")
+        edu.setdefault("endDate", edu.get("dates", ""))
+    for proj in context["projects"]:
+        proj.setdefault("projectName", proj.get("name", ""))
+        proj.setdefault("startDate", "")
+        proj.setdefault("endDate", "")
 
     return context
 
@@ -7925,6 +7971,16 @@ def _ai_get_replacements(
         if not old:
             continue
         if old == new:
+            continue
+        # Never allow replacing section headings (e.g. "Expérience", "Formation")
+        # with data values; that corrupts template structure.
+        if _classify_hd2(old) is not None:
+            logger.warning("Rejected heading replacement from AI: %r -> %r", old, new)
+            continue
+        # Reject ambiguous glyph-only placeholders (e.g. "……………..").
+        # Applying those globally often overwrites multiple unrelated fields.
+        if not re.search(r"[A-Za-zÀ-ÿ0-9@]", old):
+            logger.warning("Rejected ambiguous glyph-only replacement: %r -> %r", old, new)
             continue
         # Enforce the prompt rule: never accept empty replacements.
         # An empty "new" is either a hallucination or an attempt to blank a
@@ -8494,6 +8550,146 @@ def _fix_contact_separators(docx_path: str) -> int:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
     return fixed
+
+
+def _fill_labeled_contact_placeholders(docx_path: str, employee: Dict[str, Any]) -> int:
+    """Fill dotted contact placeholders in label-prefixed paragraphs."""
+    phone = str(employee.get("phone") or "").strip()
+    email = str(employee.get("email") or "").strip()
+    linkedin = str(employee.get("linkedin") or "").strip()
+    address = str(employee.get("address") or "").strip()
+    if not any((phone, email, linkedin, address)):
+        return 0
+
+    try:
+        doc = Document(docx_path)
+    except Exception:
+        return 0
+
+    fixed = 0
+    dot_re = re.compile(r"[.…•·_]{4,}")
+    fill_rules: List[Tuple[re.Pattern[str], str]] = []
+    if phone:
+        fill_rules.append((re.compile(r"^\s*(?:t[ée]l(?:[ée]phone)?|tel|phone|mobile)\s*[:\-]\s*", re.I), phone))
+    if email:
+        fill_rules.append((re.compile(r"^\s*(?:e-?mail|courriel|email)\s*[:\-]\s*", re.I), email))
+    if linkedin:
+        fill_rules.append((re.compile(r"^\s*(?:linkedin)\s*[:\-]?\s*", re.I), linkedin))
+    if address:
+        fill_rules.append((re.compile(r"^\s*(?:adresse|address|location)\s*[:\-]\s*", re.I), address))
+
+    for para in doc.paragraphs:
+        text = para.text or ""
+        if not text.strip():
+            continue
+        for pattern, value in fill_rules:
+            m = pattern.match(text)
+            if not m:
+                continue
+            if value in text:
+                break
+            rhs = text[m.end():]
+            # Replace both dotted placeholders and stale hardcoded template values.
+            if not rhs.strip():
+                para.text = f"{text[:m.end()]}{value}"
+                fixed += 1
+                break
+            if dot_re.search(rhs) or rhs.strip() != value:
+                para.text = f"{text[:m.end()]}{value}"
+                fixed += 1
+                break
+            break
+
+    if fixed:
+        doc.save(docx_path)
+    return fixed
+
+
+def _fill_top_dotted_identity_placeholders(docx_path: str, employee: Dict[str, Any]) -> int:
+    """Fill top-of-document unlabeled dotted placeholders with identity fields.
+
+    Heuristic:
+    - Only inspect the first 20 body paragraphs.
+    - Only paragraphs made mostly of dots/placeholder glyphs.
+    - Fill in order: name, title, linkedin (when available).
+    """
+    name = str(employee.get("name") or "").strip()
+    title = str(employee.get("title") or employee.get("currentPosition") or "").strip()
+    linkedin = str(employee.get("linkedin") or "").strip()
+    values = [v for v in (name, title, linkedin) if v]
+    if not values:
+        return 0
+
+    try:
+        doc = Document(docx_path)
+    except Exception:
+        return 0
+
+    dot_line_re = re.compile(r"^[\s.…•·_]{4,}$")
+    changed = 0
+    vi = 0
+    max_scan = min(20, len(doc.paragraphs))
+    for i in range(max_scan):
+        if vi >= len(values):
+            break
+        p = doc.paragraphs[i]
+        txt = (p.text or "").strip()
+        if not txt:
+            continue
+        if dot_line_re.match(txt):
+            p.text = values[vi]
+            vi += 1
+            changed += 1
+
+    if changed:
+        doc.save(docx_path)
+    return changed
+
+
+def _cleanup_placeholder_noise(docx_path: str) -> int:
+    """Remove residual dotted/N-A placeholder artifacts in paragraphs and tables."""
+    try:
+        doc = Document(docx_path)
+    except Exception:
+        return 0
+
+    changed = 0
+    dot_re = re.compile(r"[.…•·_]{4,}")
+    na_re = re.compile(r"^\s*(?:N/?A|NA|n/?a)\s*$", re.I)
+
+    for para in doc.paragraphs:
+        text = para.text or ""
+        stripped = text.strip()
+        if not stripped:
+            continue
+        if na_re.match(stripped):
+            para.text = ""
+            changed += 1
+            continue
+        cleaned = dot_re.sub("", text).strip()
+        if cleaned != stripped and (not cleaned or len(cleaned) < len(stripped)):
+            para.text = cleaned
+            changed += 1
+
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                ctext = cell.text or ""
+                stripped = ctext.strip()
+                if not stripped:
+                    continue
+                if na_re.match(stripped):
+                    cell.text = ""
+                    changed += 1
+                    continue
+                cleaned = dot_re.sub("", ctext).strip()
+                if cleaned != stripped and (not cleaned or len(cleaned) < len(stripped)):
+                    cell.text = cleaned
+                    changed += 1
+
+    if changed:
+        doc.save(docx_path)
+    return changed
 
 
 # Template-specific residual strings that indicate the output still contains
@@ -9278,6 +9474,18 @@ def _generate_with_replacement(
             logger.warning(f"Orphan cleanup failed (non-fatal): {exc}")
 
     # Phase 6h: Repair contact line separators when email/address got concatenated.
+    with gen_ctx.phase("contact_placeholder_fill") as p:
+        try:
+            filled = _fill_labeled_contact_placeholders(output_path, employee)
+            top_filled = _fill_top_dotted_identity_placeholders(output_path, employee)
+            p.details["filled"] = filled
+            p.details["top_identity_filled"] = top_filled
+            p.message = f"{filled + top_filled} contact/identity placeholder(s) filled"
+        except Exception as exc:
+            p.status = "failed"
+            p.error = str(exc)
+            logger.warning(f"Contact placeholder fill failed (non-fatal): {exc}")
+
     with gen_ctx.phase("contact_separator_fix") as p:
         try:
             fixed = _fix_contact_separators(output_path)
@@ -9287,6 +9495,16 @@ def _generate_with_replacement(
             p.status = "failed"
             p.error = str(exc)
             logger.warning(f"Contact separator fix failed (non-fatal): {exc}")
+
+    with gen_ctx.phase("placeholder_noise_cleanup") as p:
+        try:
+            cleaned = _cleanup_placeholder_noise(output_path)
+            p.details["cleaned"] = cleaned
+            p.message = f"{cleaned} placeholder artifact(s) cleaned"
+        except Exception as exc:
+            p.status = "failed"
+            p.error = str(exc)
+            logger.warning(f"Placeholder noise cleanup failed (non-fatal): {exc}")
 
     # Snapshot textbox positions BEFORE resize for the reflow phase.
     # This lets reflow distinguish resize-caused overlap from intentional overlap.
@@ -9696,6 +9914,62 @@ def cleanEmployeeData(employee: Dict[str, Any]) -> Dict[str, Any]:
     return cleaned
 
 
+def _normalize_employee_payload_aliases(employee: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize common backend/raw payload aliases for fallback generation.
+
+    Keeps this engine resilient whether caller sends the flattened fallback
+    payload or the richer raw profile object.
+    """
+    normalized = dict(employee or {})
+
+    if not normalized.get("name"):
+        first = str(normalized.get("firstName") or normalized.get("first_name") or "").strip()
+        last = str(normalized.get("lastName") or normalized.get("last_name") or "").strip()
+        if first or last:
+            normalized["name"] = f"{first} {last}".strip()
+
+    if not normalized.get("title"):
+        normalized["title"] = (
+            normalized.get("currentPosition")
+            or normalized.get("current_position")
+            or normalized.get("jobTitle")
+            or ""
+        )
+
+    if not normalized.get("summary"):
+        normalized["summary"] = (
+            normalized.get("professionalSummary")
+            or normalized.get("professional_summary")
+            or ""
+        )
+
+    if not normalized.get("linkedin"):
+        normalized["linkedin"] = (
+            normalized.get("linkedinUrl")
+            or normalized.get("linkedin_url")
+            or normalized.get("linkedIn")
+            or ""
+        )
+
+    if not isinstance(normalized.get("experience"), list):
+        for k in ("workExperiences", "work_experiences", "experiences", "parcours"):
+            if isinstance(normalized.get(k), list):
+                normalized["experience"] = normalized.get(k)
+                break
+    if not isinstance(normalized.get("education"), list):
+        for k in ("educations", "formations", "degrees", "etudes"):
+            if isinstance(normalized.get(k), list):
+                normalized["education"] = normalized.get(k)
+                break
+    if not isinstance(normalized.get("projects"), list):
+        for k in ("projectList", "project_list"):
+            if isinstance(normalized.get(k), list):
+                normalized["projects"] = normalized.get(k)
+                break
+
+    return normalized
+
+
 def process_cv(
     template_path: str,
     employee_data: Dict[str, Any],
@@ -9744,7 +10018,9 @@ def process_cv(
 
     # Step 0: Validate and sanitise all employee fields using the schema
     with ctx.phase("input_validation") as p:
+        employee_data = _normalize_employee_payload_aliases(employee_data)
         employee_data, validation_report = validate_employee_data(employee_data)
+        employee_data = _normalize_employee_payload_aliases(employee_data)
         validation_report.log_all()
         ctx.validation_warnings = validation_report.warnings
         p.details["fields_defaulted"] = validation_report.fields_defaulted
@@ -9760,6 +10036,9 @@ def process_cv(
         employee_data,
         preferred_language,
     )
+    # Translation/normalization helpers may reshape keys; re-apply aliases so
+    # downstream section builders always see canonical lists.
+    employee_data = _normalize_employee_payload_aliases(employee_data)
     
     os.makedirs(output_dir, exist_ok=True)
     

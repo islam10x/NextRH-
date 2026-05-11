@@ -67,7 +67,6 @@ const CVGenerationPage: React.FC = () => {
   const [language, setLanguage] = useState<Language>('original');
   const [engine, setEngine] = useState<Engine>('fallback');
   const [isGenerating, setIsGenerating] = useState(false);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const [docxBlob, setDocxBlob] = useState<Blob | null>(null);
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null);
@@ -95,27 +94,6 @@ const CVGenerationPage: React.FC = () => {
     (!!selectedHistoryItem && selectedHistoryItem.extension === 'pdf');
   const hasTemplateSelection = !!templateFile || !!selectedHistoryItem;
 
-  // Revoke the preview URL only when the URL itself changes or component unmounts.
-  useEffect(() => {
-    return () => {
-      if (pdfUrl) URL.revokeObjectURL(pdfUrl);
-    };
-  }, [pdfUrl]);
-
-  // Elapsed-time counter while generating. Generation can take 30-60s on
-  // the first run (LibreOffice cold start + Groq); a counter reassures
-  // the user that the request is still alive.
-  useEffect(() => {
-    if (!isGenerating) {
-      setElapsedSeconds(0);
-      return;
-    }
-    const start = Date.now();
-    const id = window.setInterval(() => {
-      setElapsedSeconds(Math.floor((Date.now() - start) / 1000));
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, [isGenerating]);
 
   // Cancel any in-flight request when the page unmounts.
   useEffect(() => {
@@ -202,6 +180,7 @@ const CVGenerationPage: React.FC = () => {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    console.log("File change triggered", file?.name);
     // Reset the input so re-uploading the same file fires onChange again.
     if (fileInputRef.current) fileInputRef.current.value = '';
     if (!file) return;
@@ -402,17 +381,16 @@ const CVGenerationPage: React.FC = () => {
     toast.success('PDF downloaded');
   };
 
-  const generationProgressLabel =
-    elapsedSeconds < 5
-      ? 'Preparing template…'
-      : elapsedSeconds < 20
-        ? 'Filling employee data…'
-        : elapsedSeconds < 40
-          ? 'Rendering document…'
-          : 'Finalizing — this may take up to a minute on first run…';
+  const generationProgressLabel = 'Processing CV generation...';
 
   return (
     <div className="space-y-6 max-w-3xl mx-auto">
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        onChange={handleFileChange}
+      />
       <div>
         <h1 className="text-2xl font-bold">Generate CV</h1>
         <p className="text-muted-foreground">
@@ -431,7 +409,7 @@ const CVGenerationPage: React.FC = () => {
             <Label htmlFor="employee-select">Employee</Label>
             {isLoadingEmployees ? (
               <div className="flex items-center gap-2 text-muted-foreground text-sm">
-                <Loader2 className="h-4 w-4 animate-spin" /> Loading employees…
+                <Loader2 className="h-4 w-4" /> Loading employees…
               </div>
             ) : employees.length === 0 ? (
               <div className="flex items-center gap-2 text-amber-600 text-sm">
@@ -534,7 +512,7 @@ const CVGenerationPage: React.FC = () => {
               </div>
               {historyLoading ? (
                 <div className="flex items-center gap-2 text-muted-foreground text-sm">
-                  <Loader2 className="h-4 w-4 animate-spin" /> Loading your templates…
+                  <Loader2 className="h-4 w-4" /> Loading your templates…
                 </div>
               ) : (
                 <div className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1">
@@ -543,11 +521,17 @@ const CVGenerationPage: React.FC = () => {
                     const ext = (t.extension || 'docx').toUpperCase();
                     const langBadge = (t.language || 'orig').toUpperCase();
                     return (
-                      <button
-                        type="button"
+                      <div
+                        role="button"
+                        tabIndex={0}
                         key={t.id}
                         onClick={() => handleSelectHistory(t.id)}
-                        disabled={isGenerating}
+                        onKeyDown={(e) => {
+                          if (!isGenerating && (e.key === 'Enter' || e.key === ' ')) {
+                            e.preventDefault();
+                            handleSelectHistory(t.id);
+                          }
+                        }}
                         aria-pressed={selected}
                         className={cn(
                           'group relative flex-shrink-0 w-56 text-left rounded-lg border p-3 transition-all',
@@ -555,7 +539,7 @@ const CVGenerationPage: React.FC = () => {
                           selected
                             ? 'border-primary bg-primary/5 ring-2 ring-primary/30'
                             : 'border-muted bg-background',
-                          isGenerating && 'opacity-60 cursor-not-allowed',
+                          isGenerating ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer',
                         )}
                       >
                         <div className="flex items-start gap-2">
@@ -616,13 +600,13 @@ const CVGenerationPage: React.FC = () => {
                             )}
                           >
                             {deletingHistoryId === t.id ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              <Loader2 className="h-3.5 w-3.5" />
                             ) : (
                               <Trash2 className="h-3.5 w-3.5" />
                             )}
                           </span>
                         )}
-                      </button>
+                      </div>
                     );
                   })}
                 </div>
@@ -633,34 +617,16 @@ const CVGenerationPage: React.FC = () => {
             </div>
           )}
 
-          {/* Template upload */}
           <div className="space-y-2">
-            <Label>{historyTemplates.length > 0 ? 'Or upload a new template' : 'CV Template'}</Label>
+            <p className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+              {historyTemplates.length > 0 ? 'Or upload a new template' : 'CV Template'}
+            </p>
             <div
-              role="button"
-              tabIndex={0}
-              aria-label="Upload CV template"
               className={cn(
                 'border-2 border-dashed rounded-lg p-6 text-center transition-colors',
-                isGenerating ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
-                templateFile ? 'border-primary bg-primary/5' : 'border-muted hover:border-primary/50',
+                templateFile ? 'border-primary bg-primary/5' : 'border-muted',
               )}
-              onClick={() => !isGenerating && fileInputRef.current?.click()}
-              onKeyDown={(e) => {
-                if (!isGenerating && (e.key === 'Enter' || e.key === ' ')) {
-                  e.preventDefault();
-                  fileInputRef.current?.click();
-                }
-              }}
             >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".docx,.pdf"
-                className="hidden"
-                onChange={handleFileChange}
-                disabled={isGenerating}
-              />
               {templateFile ? (
                 <div className="flex items-center justify-center gap-3">
                   <Check className="h-5 w-5 text-primary shrink-0" />
@@ -673,10 +639,7 @@ const CVGenerationPage: React.FC = () => {
                       variant="ghost"
                       size="icon"
                       className="h-6 w-6"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        clearTemplate();
-                      }}
+                      onClick={clearTemplate}
                       aria-label="Remove template"
                     >
                       <X className="h-4 w-4" />
@@ -684,12 +647,19 @@ const CVGenerationPage: React.FC = () => {
                   )}
                 </div>
               ) : (
-                <div className="space-y-1">
-                  <Upload className="h-8 w-8 mx-auto text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground">Click to upload a CV template</p>
-                  <p className="text-xs text-muted-foreground">
-                    Supports .docx and .pdf · Max 20 MB
-                  </p>
+                <div className="space-y-4">
+                  <div className="space-y-1">
+                    <Upload className="h-8 w-8 mx-auto text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground">Select a .docx or .pdf template</p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isGenerating}
+                  >
+                    Choose File
+                  </Button>
                 </div>
               )}
             </div>
@@ -699,8 +669,8 @@ const CVGenerationPage: React.FC = () => {
           {isGenerating ? (
             <div className="space-y-2">
               <Button disabled className="w-full">
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Generating… {elapsedSeconds}s
+                <Loader2 className="h-4 w-4 mr-2" />
+                Generating…
               </Button>
               <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <span>{generationProgressLabel}</span>

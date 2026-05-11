@@ -12,6 +12,12 @@ const api = axios.create({
 // Request Interceptor: Attach Token
 api.interceptors.request.use(
     (config: InternalAxiosRequestConfig) => {
+        // Blast Shield: If we are in the middle of a logout/session-expiry transition,
+        // block all new outgoing requests to prevent infinite 401 loops.
+        if ((window as any)._isLoggingOut) {
+            return Promise.reject(new Error('LOGGING_OUT'));
+        }
+        
         const token = sessionStorage.getItem('access_token');
         const sessionId = sessionStorage.getItem('session_id');
         if (token) {
@@ -80,6 +86,7 @@ api.interceptors.response.use(
                 const refreshToken = sessionStorage.getItem('refresh_token');
                 if (!sessionId || !refreshToken) {
                     processQueue(new Error('MISSING_SESSION'), null);
+                    (window as any)._isLoggingOut = true;
                     window.dispatchEvent(new Event('auth:logout'));
                     return Promise.reject(error);
                 }
@@ -108,6 +115,7 @@ api.interceptors.response.use(
                     sessionStorage.removeItem('refresh_token');
                     sessionStorage.removeItem('session_id');
                     processQueue(new Error('SESSION_MISMATCH'), null);
+                    (window as any)._isLoggingOut = true;
                     window.dispatchEvent(new Event('auth:logout'));
                     return Promise.reject(error);
                 }
@@ -144,6 +152,7 @@ api.interceptors.response.use(
                 return api(originalRequest);
             } catch (err) {
                 processQueue(err, null);
+                (window as any)._isLoggingOut = true;
                 window.dispatchEvent(new Event('auth:logout'));
                 return Promise.reject(err);
             } finally {

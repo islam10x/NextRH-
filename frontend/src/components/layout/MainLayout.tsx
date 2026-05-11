@@ -18,7 +18,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ title, showSearch, requi
   if (isLoading) {
     return (
       <div className="flex h-screen w-full items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+        <div className="h-8 w-8 rounded-full border-4 border-primary border-t-transparent"></div>
       </div>
     );
   }
@@ -48,7 +48,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ title, showSearch, requi
         <SidebarInset className="flex flex-col flex-1">
           <TopHeader title={title} showSearch={showSearch} />
           <main className="flex-1 p-6 overflow-auto">
-            <div className="mx-auto max-w-7xl animate-fade-in">
+            <div className="mx-auto max-w-7xl">
               <Outlet />
             </div>
           </main>

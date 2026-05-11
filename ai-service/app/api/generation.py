@@ -246,8 +246,8 @@ def _profile_to_fallback_payload(profile: Dict[str, Any]) -> Dict[str, Any]:
         last = (profile.get("lastName") or "").strip()
         name = f"{first} {last}".strip()
 
-    raw_experience = profile.get("experience") or profile.get("workExperiences") or []
-    raw_education = profile.get("education") or profile.get("educations") or []
+    raw_experience = profile.get("work_experiences") or profile.get("experience") or profile.get("workExperiences") or []
+    raw_education = profile.get("educations") or profile.get("education") or profile.get("educations") or []
     normalized_experience = _normalize_experience_entries(raw_experience)
     normalized_education = _normalize_education_entries(raw_education)
 
@@ -689,8 +689,9 @@ async def _handle_json_request(request: Request) -> Dict[str, Any]:
             detail=f"CV generation failed ({exc.category}): {exc.detail}",
         ) from exc
     except Exception as exc:
+        import traceback
         logger.error("CV generation unexpected error: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail="CV generation failed (internal error)") from exc
+        raise HTTPException(status_code=500, detail=traceback.format_exc()) from exc
     finally:
         # Always clean up the temporary PDF→DOCX conversion directory after
         # generation has completed, regardless of success or failure.
@@ -873,8 +874,9 @@ async def generate_cv(
             detail=f"CV generation failed ({exc.category}): {exc.detail}",
         ) from exc
     except Exception as exc:
+        import traceback
         logger.error("CV generation unexpected error: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail="CV generation failed (internal error)") from exc
+        raise HTTPException(status_code=500, detail=f"CV generation failed: {traceback.format_exc()}") from exc
     finally:
         if not success:
             shutil.rmtree(temp_dir, ignore_errors=True)

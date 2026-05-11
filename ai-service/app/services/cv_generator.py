@@ -103,6 +103,35 @@ def _normalize_lines(value: Any) -> List[str]:
 
 
 def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
+    # Normalize payload aliases so templates work regardless of backend shape.
+    # We support both camelCase (API) and snake_case / legacy variants.
+    profile = dict(profile or {})
+    if not profile.get("name"):
+        first = str(profile.get("firstName") or profile.get("first_name") or "").strip()
+        last = str(profile.get("lastName") or profile.get("last_name") or "").strip()
+        if first or last:
+            profile["name"] = f"{first} {last}".strip()
+    if not profile.get("currentPosition"):
+        profile["currentPosition"] = (
+            profile.get("title")
+            or profile.get("current_position")
+            or profile.get("jobTitle")
+            or ""
+        )
+    if not profile.get("professionalSummary"):
+        profile["professionalSummary"] = (
+            profile.get("summary")
+            or profile.get("professional_summary")
+            or ""
+        )
+    if not profile.get("workExperiences") and isinstance(profile.get("experience"), list):
+        profile["workExperiences"] = profile.get("experience")
+    if not profile.get("educations") and isinstance(profile.get("education"), list):
+        profile["educations"] = profile.get("education")
+
+    logger.warning(f"[DEBUG] RAW DATA DISCOVERY - Profile Root Keys: {list(profile.keys())}")
+    
+    # Extract projects from the profile
     raw_projects = list(profile.get("projects") or [])
     projects: List[Dict[str, Any]] = []
     for p in raw_projects:
@@ -110,23 +139,50 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
         name = str(p.get("name") or "").strip()
         generated = str(p.get("generatedTitle") or "").strip()
 
-        def _is_placeholder(value: str) -> bool:
-            norm = value.strip().lower()
-            return norm in {"unknown project", "unknown", "n/a", "na", "none", "null"}
-
-        if _is_placeholder(name):
-            name = ""
-        if _is_placeholder(generated):
-            generated = ""
-
-        if not name and not generated:
-            # Skip entries that only have a role or placeholder title.
-            continue
-
-        p["displayTitle"] = name or generated
+        # Relax placeholder detection to ensure data flows through
+        p["displayTitle"] = name or generated or "Project"
         projects.append(p)
 
-    work_experiences = list(profile.get("workExperiences") or [])
+    logger.warning(f"[DEBUG] Profile Data - Projects: {len(projects)} entries")
+    if projects:
+        logger.warning(f"[DEBUG]   prj[0]: name={projects[0].get('name')}, client={projects[0].get('client')}")
+
+    work_experiences = list(profile.get("workExperiences") or profile.get("work_experiences") or [])
+    if work_experiences and isinstance(work_experiences[0], dict):
+        logger.warning(f"[DEBUG] RAW DATA DISCOVERY - First Experience Keys: {list(work_experiences[0].keys())}")
+        logger.warning(f"[DEBUG] RAW DATA DISCOVERY - First Experience Sample: {work_experiences[0]}")
+
+    normalized_work_experiences: List[Dict[str, Any]] = []
+    for exp in work_experiences:
+        if not isinstance(exp, dict):
+            continue
+        merged = dict(exp)
+        title = _safe_text(exp.get("jobTitle") or exp.get("title") or exp.get("role"))
+        company = _safe_text(exp.get("companyName") or exp.get("company") or exp.get("client"))
+        start = _safe_text(exp.get("startDate") or exp.get("start_date"))
+        end = _safe_text(exp.get("endDate") or exp.get("end_date"))
+        dates_raw = _safe_text(exp.get("dates") or exp.get("date_range"))
+        
+        # Fallback: Parse dates from the 'dates' string if start/end are missing
+        if not start and dates_raw:
+            if " - " in dates_raw or " to " in dates_raw or " à " in dates_raw:
+                parts = [p.strip() for p in re.split(r" \- | to | à ", dates_raw)]
+                if len(parts) >= 1: start = parts[0]
+                if len(parts) >= 2: end = parts[1]
+            else:
+                start = dates_raw
+
+        dates = dates_raw or _format_date_range(start, end)
+        merged["jobTitle"] = title
+        merged["title"] = title or _safe_text(exp.get("title"))
+        merged["companyName"] = company
+        merged["company"] = company or _safe_text(exp.get("company"))
+        merged["startDate"] = start
+        merged["endDate"] = end
+        merged["dates"] = dates
+        merged["date_range"] = dates
+        normalized_work_experiences.append(merged)
+    work_experiences = normalized_work_experiences
 
     # Attach internal projects under the Next Step experience entry only.
     def _dedupe_preserve_order(items: List[str]) -> List[str]:
@@ -139,7 +195,6 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
             seen.add(key)
             deduped.append(item)
         return deduped
-
     if projects:
         def _normalize_company(value: str) -> str:
             return re.sub(r"[^a-z0-9]", "", (value or "").lower())
@@ -170,17 +225,10 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
         )
 
         if target_exp:
-            existing_desc = str(target_exp.get("description") or "").strip()
-            if existing_desc:
-                target_exp["description"] = f"{existing_desc}\n\n{projects_block}"
-            else:
-                target_exp["description"] = projects_block
-            existing_lines = []
-            if isinstance(target_exp.get("description_lines"), list):
-                existing_lines = [str(v) for v in target_exp.get("description_lines") if str(v).strip()]
-            target_exp["description_lines"] = _dedupe_preserve_order(existing_lines + project_lines)
+            # No merging into experience - projects now have their own table
+            pass
         elif not work_experiences:
-            # Create a synthetic Next Step experience entry to host projects.
+            # Create synthetic experience only if profile is empty
             start_dates = [p.get("startDate") for p in projects if p.get("startDate")]
             min_start = min(start_dates) if start_dates else None
             end_dates = [p.get("endDate") for p in projects if p.get("endDate")]
@@ -206,6 +254,44 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
             lines = [line.strip() for line in str(desc_value or "").splitlines() if line.strip()]
         exp["description_lines"] = _normalize_lines(lines)
 
+    raw_educations = list(profile.get("educations") or profile.get("education") or [])
+    if raw_educations and isinstance(raw_educations[0], dict):
+        logger.warning(f"[DEBUG] RAW DATA DISCOVERY - First Education Keys: {list(raw_educations[0].keys())}")
+
+    educations: List[Dict[str, Any]] = []
+    for edu in raw_educations:
+        if not isinstance(edu, dict):
+            continue
+        merged = dict(edu)
+        degree = _safe_text(edu.get("degree"))
+        institution = _safe_text(edu.get("institution") or edu.get("school"))
+        field = _safe_text(edu.get("fieldOfStudy") or edu.get("field") or edu.get("speciality"))
+        start = _safe_text(edu.get("startDate") or edu.get("start_date"))
+        end = _safe_text(edu.get("endDate") or edu.get("end_date") or edu.get("graduationDate"))
+        dates = _safe_text(edu.get("dates") or edu.get("date_range") or _format_date_range(start, end))
+        merged["degree"] = degree
+        merged["institution"] = institution
+        merged["school"] = institution or _safe_text(edu.get("school"))
+        merged["fieldOfStudy"] = field
+        merged["startDate"] = start
+        merged["endDate"] = end
+        merged["dates"] = dates
+        merged["date_range"] = dates
+        educations.append(merged)
+
+    raw_certs = list(profile.get("certifications") or profile.get("certs") or [])
+    if raw_certs and isinstance(raw_certs[0], dict):
+        logger.warning(f"[DEBUG] RAW DATA DISCOVERY - First Certification Keys: {list(raw_certs[0].keys())}")
+    
+    certifications: List[Dict[str, Any]] = []
+    for cert in raw_certs:
+        if not isinstance(cert, dict): continue
+        c = dict(cert)
+        # Normalize keys for template
+        c["name"] = _safe_text(cert.get("name") or cert.get("title") or cert.get("label"))
+        c["issuingOrganization"] = _safe_text(cert.get("issuingOrganization") or cert.get("organization") or cert.get("issuer") or cert.get("authority"))
+        certifications.append(c)
+
     context = {
         "full_name": profile.get("name") or "Employee",
         "email": _safe_text(profile.get("email")),
@@ -225,8 +311,8 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
         "total_experience_years": _safe_text(profile.get("totalExperienceYears")),
         "skills": profile.get("skills") or [],
         "work_experiences": work_experiences,
-        "educations": profile.get("educations") or [],
-        "certifications": profile.get("certifications") or [],
+        "educations": educations,
+        "certifications": certifications,
         "projects": projects,
         "languages": profile.get("languages") or [],
         "awards": profile.get("awards") or profile.get("distinctions") or [],
@@ -236,10 +322,23 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
         "open_end_label": "Present",
         "section_titles": {},
     }
-    # Remove empty string fields (except full_name)
-    for key in ["email", "phone", "address", "linkedin", "birth_date", "marital_status", "hire_date", "current_position", "professional_summary", "total_experience_years", "last_update"]:
-        if not context[key]:
-            context.pop(key)
+    # for key in ["email", "phone", "address", "linkedin", "birth_date", "marital_status", "hire_date", "current_position", "professional_summary", "total_experience_years", "last_update"]:
+    #     if not context[key]:
+    #         context.pop(key)
+
+    # --- HIGH VISIBILITY DEBUG LOGS ---
+    logger.warning(f"[DEBUG] Profile Data - Work Experiences: {len(work_experiences)} entries")
+    for i, exp in enumerate(work_experiences):
+        logger.warning(f"[DEBUG]   exp[{i}]: company={exp.get('companyName')}, start={exp.get('startDate')}, end={exp.get('endDate')}")
+    
+    logger.warning(f"[DEBUG] Profile Data - Educations: {len(educations)} entries")
+    for i, edu in enumerate(educations):
+        logger.warning(f"[DEBUG]   edu[{i}]: inst={edu.get('institution')}, start={edu.get('startDate')}, end={edu.get('endDate')}")
+
+    logger.warning(f"[DEBUG] Profile Data - Certifications: {len(certifications)} entries")
+    for i, cert in enumerate(certifications):
+        logger.warning(f"[DEBUG]   cert[{i}]: name={cert.get('name')}, org={cert.get('issuingOrganization')}")
+    # -----------------------------------
     return context
 
 
@@ -1212,6 +1311,11 @@ def _expand_context_with_aliases(context: Dict[str, Any]) -> Dict[str, Any]:
     first_name, last_name = _split_full_name(full_name)
     expanded.setdefault("first_name", first_name)
     expanded.setdefault("last_name", last_name)
+    # Section aliases commonly used in community CV templates.
+    expanded.setdefault("experience", expanded.get("work_experiences", []))
+    expanded.setdefault("experiences", expanded.get("work_experiences", []))
+    expanded.setdefault("education", expanded.get("educations", []))
+    expanded.setdefault("formation", expanded.get("educations", []))
 
     for alias, canonical in DOCX_ALIASES.items():
         if alias not in expanded and canonical in expanded:
@@ -1531,22 +1635,55 @@ def generate_cv_document(
     doc = DocxTemplate(template_path)
     # Expand context with aliases so flexible placeholder names work.
     render_context = _expand_context_with_aliases(context)
+
+    # --- Debug: List all variables in the template vs what we have ---
+    try:
+        template_vars = doc.get_undeclared_template_variables()
+        if template_vars:
+            logger.warning(f"[DEBUG] Template variables detected: {sorted(list(template_vars))}")
+            missing = [v for v in template_vars if v not in render_context]
+            if missing:
+                logger.warning(f"[WARN] Template contains variables NOT in context: {missing}")
+            else:
+                logger.warning("[DEBUG] All template variables are present in the rendering context.")
+    except Exception as exc:
+        logger.debug(f"[DEBUG] Could not analyze template variables: {exc}")
+
     
     # Log the exact dictionary being passed to DocxTemplate
-    logger.info(f"[DEBUG] Rendering DocxTemplate with context keys: {list(render_context.keys())}")
-    for k, v in render_context.items():
-        if isinstance(v, list):
-            logger.info(f"[DEBUG] Context List '{k}': {len(v)} items")
-        else:
-            logger.info(f"[DEBUG] Context Var '{k}': {str(v)[:50]}")
+    logger.warning(f"[DEBUG] --- JINJA2 RENDERING START ---")
+    logger.warning(f"[DEBUG] Template path: {template_path}")
+    logger.warning(f"[DEBUG] Context keys: {sorted(list(render_context.keys()))}")
 
-    logger.info("[DEBUG] Executing doc.render()...")
+    # Log individual fields
+    for key in ["full_name", "email", "phone", "address", "current_position", "professional_summary", "date_range", "total_experience_years"]:
+        if key in render_context:
+            logger.warning(f"[DEBUG]   Field '{key}': {render_context[key]}")
+
+    # Log list-backed sections with summaries
+    for list_key in ["work_experiences", "educations", "projects", "skills", "languages", "certifications", "experience", "experiences", "formation"]:
+        if list_key in render_context:
+            items = render_context[list_key]
+            if not isinstance(items, list):
+                logger.warning(f"[DEBUG]   List '{list_key}' is not a list: {type(items)}")
+                continue
+            logger.warning(f"[DEBUG]   List '{list_key}': {len(items)} items")
+            # Log the context for the list items if they are dicts
+            for i, item in enumerate(items):
+                if isinstance(item, dict):
+                    # Filter out empty fields and truncate long ones for cleaner logs
+                    clean_item = {k: (str(v)[:60] + "...") if len(str(v)) > 60 else v for k, v in item.items() if v is not None}
+                    logger.warning(f"[DEBUG]     {list_key}[{i}]: {clean_item}")
+                else:
+                    logger.warning(f"[DEBUG]     {list_key}[{i}]: {item}")
+
+    logger.warning("[DEBUG] Executing doc.render()...")
     try:
         doc.render(render_context)
-        logger.info("[DEBUG] doc.render() finished.")
+        logger.warning("[DEBUG] doc.render() finished.")
         # Apply global cleanup (handle orphaned dotted placeholders or label-based contact info)
         _fill_common_placeholders(doc, context)
-        logger.info("[DEBUG] Global placeholder cleanup finished.")
+        logger.warning("[DEBUG] Global placeholder cleanup finished.")
     except TemplateSyntaxError as exc:
         logger.error(f"[ERROR] Template syntax error during render: {exc}")
         # If auto-tagging produced a bad template, retry once with conditionals disabled.
@@ -1572,17 +1709,15 @@ def generate_cv_document(
             raise
     doc.save(docx_path)
 
-    if auto_template_used:
-        try:
-            _postprocess_annexe9_tables(docx_path, context)
-            logger.info("[DEBUG] Annexe 9 tables post-processed.")
-        except Exception as exc:
-            logger.warning(f"[WARN] Annexe 9 post-processing failed: {exc}")
+    # if auto_template_used:
+    #     try:
+    #         _postprocess_annexe9_tables(docx_path, context)
+    #         logger.warning("[DEBUG] Annexe 9 tables post-processed.")
+    #     except Exception as exc:
+    #         logger.warning(f"[WARN] Annexe 9 post-processing failed: {exc}")
 
     try:
-        from app.services.cv_generator_fallback import _relax_table_row_heights, _enable_shape_autofit
-        _relax_table_row_heights(docx_path)
-        _enable_shape_autofit(docx_path)
+        pass
     except Exception as exc:
         logger.warning("Post-processing overflow fixes failed (non-fatal): %s", exc)
 

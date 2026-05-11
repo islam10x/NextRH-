@@ -104,19 +104,30 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ title, showSearch = false 
       ]);
       setNotifications(data);
       setUnreadCount(count);
-    } catch {
+    } catch (error: any) {
       setNotifications([]);
       setUnreadCount(0);
+      // If unauthorized, stop polling to avoid infinite loops during logout
+      if (error.response?.status === 401) {
+        console.warn('Unauthorized notification fetch. Stopping poll.');
+        if (window._notificationInterval) {
+          clearInterval(window._notificationInterval);
+          delete window._notificationInterval;
+        }
+      }
     }
   }, [user]);
 
   useEffect(() => {
     loadNotifications();
     const interval = setInterval(loadNotifications, 30000);
+    window._notificationInterval = interval;
+    
     const handleUpdate = () => loadNotifications();
     window.addEventListener('notifications:updated', handleUpdate);
     return () => {
       clearInterval(interval);
+      delete window._notificationInterval;
       window.removeEventListener('notifications:updated', handleUpdate);
     };
   }, [loadNotifications]);

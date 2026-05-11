@@ -134,6 +134,10 @@ export class CvController {
         @CurrentUser() user: any,
         @Res() res: Response,
     ) {
+        console.error('====================================================');
+        console.error(`[HEARTBEAT] GENERATING CV FOR EMPLOYEE: ${employeeId}`);
+        console.error('====================================================');
+
         if (!template) {
             throw new BadRequestException('Template file is required');
         }
@@ -195,6 +199,9 @@ export class CvController {
         @CurrentUser() user: any,
         @Res() res: Response,
     ) {
+        console.error('====================================================');
+        console.error(`[HEARTBEAT] GENERATING FROM HISTORY FOR EMPLOYEE: ${body?.employeeId}`);
+        console.error('====================================================');
         if (!body?.templateId || !body?.employeeId) {
             throw new BadRequestException('templateId and employeeId are required');
         }

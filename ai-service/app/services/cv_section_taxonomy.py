@@ -96,6 +96,8 @@ SECTION_KEYWORDS: Dict[str, FrozenSet[str]] = {
         "parcours", "parcours professionnel",
         "emploi", "emplois", "postes", "postes occupés", "postes occupes",
         "historique professionnel", "fonctions",
+        "expérience professionnelle générale dans le domaine de l'informatique",
+        "experience professionnelle generale dans le domaine de l'informatique",
         # ES
         "experiencia", "experiencia laboral", "experiencia profesional",
         "experiencia de trabajo", "trayectoria profesional",
@@ -116,7 +118,9 @@ SECTION_KEYWORDS: Dict[str, FrozenSet[str]] = {
         # FR
         "formation", "formations", "études", "etudes",
         "diplômes", "diplomes", "scolarité", "scolarite",
-        "parcours scolaire", "parcours académique", "parcours academique",
+        "académique", "academique", "études", "etudes",
+        "parcours académique", "parcours academique",
+        "expérience académique", "experience academique",
         "formation académique", "formation academique",
         "formation et diplômes", "formation et diplomes", "éducation",
         # ES
@@ -129,6 +133,11 @@ SECTION_KEYWORDS: Dict[str, FrozenSet[str]] = {
         "istruzione", "formazione", "studi", "percorso formativo",
         # PT
         "educação", "formação acadêmica", "formação",
+    }),
+    SECTION_CERTIFICATIONS: frozenset({
+        "certification", "certifications", "certificat", "certificats",
+        "attestation", "attestations", "certificats et diplômes",
+        "professional certifications", "awards", "honors",
     }),
     SECTION_SKILLS: frozenset({
         # EN
@@ -185,6 +194,9 @@ SECTION_KEYWORDS: Dict[str, FrozenSet[str]] = {
         "projets sélectionnés", "projets selectionnes",
         "projets réalisés", "projets realises", "réalisations", "realisations",
         "missions", "réalisations professionnelles", "realisations professionnelles",
+        "expérience professionnelle générale dans les projets similaires à la mission objet de l'appel d'offres",
+        "experience professionnelle generale dans les projets similaires a la mission objet de l'appel d'offres",
+        "expérience professionnelle générale dans les projets similaires",
         # ES
         "proyectos", "proyectos clave", "proyectos destacados",
         "proyectos personales", "proyectos académicos",
