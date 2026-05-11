@@ -1,6 +1,19 @@
 // User Roles
 export type UserRole = 'employee' | 'team_manager' | 'bid_manager';
 
+export type UserStatus = 'active' | 'pending_invitation' | 'deactivated';
+
+export interface DBUser {
+  user_id: string;
+  email: string;
+  role: string;
+  status: UserStatus;
+  firstName?: string;
+  lastName?: string;
+  invitedAt?: string;
+  avatarUrl?: string | null;
+}
+
 export interface User {
   id: string;
   email: string;

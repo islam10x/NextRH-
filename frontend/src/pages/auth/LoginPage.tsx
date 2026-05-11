@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
-import { UserRole } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -21,7 +20,6 @@ const LoginPage: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-
     setErrorMessage(null);
     const { user, error } = await login(email, password);
     setIsLoading(false);
@@ -40,8 +38,6 @@ const LoginPage: React.FC = () => {
     }
   };
 
-
-
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/5 via-background to-accent/5 p-4">
       <div className="w-full max-w-lg">
@@ -51,15 +47,15 @@ const LoginPage: React.FC = () => {
             <FileText className="h-6 w-6" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-foreground">CV Manager</h1>
-            <p className="text-sm text-muted-foreground">AI-Driven Certification System</p>
+            <h1 className="text-2xl font-bold text-foreground">NextRH</h1>
+            <p className="text-sm text-muted-foreground">Système de gestion des certifications</p>
           </div>
         </div>
 
         <Card className="shadow-xl border-0">
           <CardHeader className="text-center pb-4">
-            <CardTitle className="text-xl">Welcome Back</CardTitle>
-            <CardDescription>Sign in to access your portal</CardDescription>
+            <CardTitle className="text-xl">Bienvenue</CardTitle>
+            <CardDescription>Connectez-vous pour accéder à votre portail</CardDescription>
           </CardHeader>
 
           <form onSubmit={handleSubmit}>
@@ -71,18 +67,18 @@ const LoginPage: React.FC = () => {
               )}
               <div className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="email">Email</Label>
+                  <Label htmlFor="email">E-mail</Label>
                   <Input
                     id="email"
                     type="email"
-                    placeholder="name@company.com"
+                    placeholder="prenom.nom@entreprise.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="h-11"
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="password">Password</Label>
+                  <Label htmlFor="password">Mot de passe</Label>
                   <div className="relative">
                     <Input
                       id="password"
@@ -96,7 +92,7 @@ const LoginPage: React.FC = () => {
                       type="button"
                       onClick={() => setShowPassword((prev) => !prev)}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
                       aria-pressed={showPassword}
                     >
                       {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -110,7 +106,7 @@ const LoginPage: React.FC = () => {
                     className="px-0 text-sm text-muted-foreground"
                     onClick={() => navigate('/auth/forgot-password')}
                   >
-                    Forgot password?
+                    Mot de passe oublié ?
                   </Button>
                 </div>
               </div>
@@ -121,10 +117,10 @@ const LoginPage: React.FC = () => {
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Signing in...
+                    Connexion...
                   </>
                 ) : (
-                  'Sign In'
+                  'Se connecter'
                 )}
               </Button>
             </CardFooter>

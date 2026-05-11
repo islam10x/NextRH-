@@ -61,6 +61,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
 
   const login = useCallback(async (email: string, password: string): Promise<{ user: User | null; error?: string }> => {
+    // Reset the blast shield so a fresh login attempt is never blocked by a stale logout flag.
+    (window as any)._isLoggingOut = false;
     try {
       const response = await authService.login(email, password);
 
@@ -77,10 +79,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       console.error('Login failed', error);
       const rawMessage = error?.response?.data?.message;
       const message = Array.isArray(rawMessage) ? rawMessage.join(', ') : rawMessage;
-      const friendlyMessage =
-        message === 'Invalid credentials'
-          ? 'Invalid email or password.'
-          : message || 'Login failed. Please try again.';
+      const isNetworkError = !error?.response;
+      const friendlyMessage = isNetworkError
+        ? 'Unable to connect to the server. Please check your connection.'
+        : message === 'Invalid credentials'
+          ? 'Incorrect email or password. Please try again.'
+          : message === 'Account is inactive or pending invitation'
+            ? 'Your account is not active yet. Please contact your administrator.'
+            : message || 'Login failed. Please try again.';
       return { user: null, error: friendlyMessage };
     }
   }, []);

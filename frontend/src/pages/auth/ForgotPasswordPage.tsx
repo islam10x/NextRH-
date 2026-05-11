@@ -21,7 +21,7 @@ const ForgotPasswordPage: React.FC = () => {
       await api.post('/auth/forgot-password', { email });
       setIsSent(true);
     } catch (err: any) {
-      const message = err?.response?.data?.message || 'Unable to process your request right now.';
+      const message = err?.response?.data?.message || 'Impossible de traiter votre demande pour l\'instant.';
       toast.error(message);
     } finally {
       setIsSubmitting(false);
@@ -38,17 +38,17 @@ const ForgotPasswordPage: React.FC = () => {
                 <MailCheck className="h-6 w-6 text-primary" />
               </div>
             </div>
-            <CardTitle className="text-xl">Check Your Email</CardTitle>
+            <CardTitle className="text-xl">Vérifiez votre e-mail</CardTitle>
             <CardDescription>
-              If an account exists for that email, we sent a secure link to reset your password.
+              Si un compte existe pour cet e-mail, nous avons envoyé un lien sécurisé pour réinitialiser votre mot de passe.
             </CardDescription>
           </CardHeader>
           <CardContent className="text-sm text-muted-foreground text-center">
-            The link expires in 1 hour. If you don't see it, check your spam folder.
+            Le lien expire dans 1 heure. Si vous ne le voyez pas, vérifiez vos spams.
           </CardContent>
           <CardFooter>
             <Button className="w-full h-11" onClick={() => navigate('/login')}>
-              Back to Login
+              Retour à la connexion
             </Button>
           </CardFooter>
         </Card>
@@ -64,25 +64,25 @@ const ForgotPasswordPage: React.FC = () => {
             <FileText className="h-6 w-6" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-foreground">CV Manager</h1>
-            <p className="text-sm text-muted-foreground">Reset your password</p>
+            <h1 className="text-2xl font-bold text-foreground">NextRH</h1>
+            <p className="text-sm text-muted-foreground">Réinitialiser votre mot de passe</p>
           </div>
         </div>
 
         <Card className="shadow-xl border-0">
           <CardHeader className="text-center pb-4">
-            <CardTitle className="text-xl">Forgot Password</CardTitle>
-            <CardDescription>Enter your email to receive a reset link</CardDescription>
+            <CardTitle className="text-xl">Mot de passe oublié ?</CardTitle>
+            <CardDescription>Saisissez votre e-mail pour recevoir un lien de réinitialisation</CardDescription>
           </CardHeader>
 
           <form onSubmit={handleSubmit}>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
+                <Label htmlFor="email">E-mail</Label>
                 <Input
                   id="email"
                   type="email"
-                  placeholder="name@company.com"
+                  placeholder="prenom.nom@entreprise.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="h-11"
@@ -96,14 +96,14 @@ const ForgotPasswordPage: React.FC = () => {
                 {isSubmitting ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Sending link...
+                    Envoi en cours...
                   </>
                 ) : (
-                  'Send Reset Link'
+                  'Envoyer le lien'
                 )}
               </Button>
               <Button variant="ghost" type="button" className="w-full" onClick={() => navigate('/login')}>
-                Back to Login
+                Retour à la connexion
               </Button>
             </CardFooter>
           </form>

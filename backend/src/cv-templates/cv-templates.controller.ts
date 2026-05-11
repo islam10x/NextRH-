@@ -2,6 +2,7 @@ import {
     Controller,
     Get,
     Post,
+    Delete,
     Patch,
     Param,
     Body,
@@ -9,6 +10,7 @@ import {
     UseInterceptors,
     UploadedFile,
     HttpStatus,
+    HttpCode,
     ParseFilePipeBuilder,
     Res,
     StreamableFile,
@@ -34,6 +36,32 @@ export class CvTemplatesController {
     @Roles(UserRole.BID_MANAGER)
     async list() {
         return this.cvTemplatesService.listTemplates();
+    }
+
+    /**
+     * Per-user template history for the bid manager — surfaces the templates
+     * they've already used so they can re-generate without re-uploading.
+     */
+    @Get('mine')
+    @Roles(UserRole.BID_MANAGER, UserRole.TEAM_MANAGER)
+    async listMine(@CurrentUser() user: any) {
+        const userId = user?.user_id || user?.id;
+        return this.cvTemplatesService.listMyTemplates(userId);
+    }
+
+    /**
+     * Remove an entry from the bid manager's own template history. Only the
+     * uploader can delete their own templates.
+     */
+    @Delete(':templateId')
+    @HttpCode(HttpStatus.NO_CONTENT)
+    @Roles(UserRole.BID_MANAGER, UserRole.TEAM_MANAGER)
+    async removeMine(
+        @Param('templateId') templateId: string,
+        @CurrentUser() user: any,
+    ) {
+        const userId = user?.user_id || user?.id;
+        await this.cvTemplatesService.removeFromHistory(templateId, userId);
     }
 
     @Post()

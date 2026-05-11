@@ -72,10 +72,10 @@ const CertificationsPage: React.FC = () => {
   const validateFile = useCallback(
     (file: File): string | null => {
       if (!ALLOWED_TYPES.includes(file.type)) {
-        return 'File type not supported. Please upload PDF, DOCX, PNG or JPG.';
+        return 'Type de fichier non supporté. Veuillez importer un PDF, DOCX, PNG ou JPG.';
       }
       if (file.size > MAX_UPLOAD_BYTES) {
-        return 'File is too large. Maximum allowed size is 10MB.';
+        return 'Fichier trop volumineux. La taille maximale autorisée est 10 Mo.';
       }
       return null;
     },
@@ -122,13 +122,13 @@ const CertificationsPage: React.FC = () => {
           const message = (err.response?.data as { message?: string } | undefined)?.message;
           const friendly =
             message?.includes('malware') || message?.includes('virus')
-              ? 'Upload blocked: malware detected in the file.'
+              ? 'Importation bloquée : logiciel malveillant détecté dans le fichier.'
               : message;
-          setUploadError(friendly || 'Upload failed. Please try again.');
-          toast.error(friendly || 'Upload failed. Please try again.');
+          setUploadError(friendly || 'Échec de l\'importation. Veuillez réessayer.');
+          toast.error(friendly || 'Échec de l\'importation. Veuillez réessayer.');
         } else {
-          setUploadError('Upload failed. Please try again.');
-          toast.error('Upload failed. Please try again.');
+          setUploadError('Échec de l\'importation. Veuillez réessayer.');
+          toast.error('Échec de l\'importation. Veuillez réessayer.');
         }
       }
     },
@@ -143,16 +143,37 @@ const CertificationsPage: React.FC = () => {
 
   const filteredCertifications = useMemo(() => {
     const q = normalizeText(searchQuery.trim());
-    if (!q) return certifications;
-    return certifications.filter((cert) => {
-      const nameMatch = normalizeText(cert.name).includes(q);
-      const issuerMatch = normalizeText(cert.issuingOrganization || '').includes(q);
-      return nameMatch || issuerMatch;
+    const filtered = q
+      ? certifications.filter((cert) => {
+          const nameMatch = normalizeText(cert.name).includes(q);
+          const issuerMatch = normalizeText(cert.issuingOrganization || '').includes(q);
+          return nameMatch || issuerMatch;
+        })
+      : certifications;
+
+    const statusPriority: Record<string, number> = { expiring_soon: 0, active: 1, expired: 2 };
+    return [...filtered].sort((a, b) => {
+      const sa = getDynamicStatus(a);
+      const sb = getDynamicStatus(b);
+      const pa = statusPriority[sa] ?? 1;
+      const pb = statusPriority[sb] ?? 1;
+      if (pa !== pb) return pa - pb;
+      const da = parseDateOnly(a.expirationDate)?.getTime() ?? Infinity;
+      const db = parseDateOnly(b.expirationDate)?.getTime() ?? Infinity;
+      return da - db;
     });
   }, [certifications, searchQuery, normalizeText]);
 
+  const daysUntilExpiry = (cert: CvCertification): number | null => {
+    const expDate = parseDateOnly(cert.expirationDate);
+    if (!expDate) return null;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  };
+
   const formatDate = (dateString?: string | null) => {
-    if (!dateString) return 'Not specified';
+    if (!dateString) return 'Non spécifié';
     return dateString;
   };
 
@@ -169,8 +190,10 @@ const CertificationsPage: React.FC = () => {
   };
 
   const formatStatus = (status?: CvCertification['status']) => {
-    if (!status) return 'unknown';
-    return status.replace('_', ' ');
+    if (status === 'active') return 'Active';
+    if (status === 'expiring_soon') return 'Expire bientôt';
+    if (status === 'expired') return 'Expirée';
+    return 'Inconnue';
   };
 
   const formatCertName = (name: string) => name.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
@@ -184,13 +207,13 @@ const CertificationsPage: React.FC = () => {
   const getStatusMessage = (): string => {
     switch (uploadStatus) {
       case 'uploading':
-        return 'Uploading certification...';
+        return 'Importation de la certification...';
       case 'parsing':
-        return 'Parsing document with AI...';
+        return 'Analyse du document par l\'IA...';
       case 'completed':
-        return 'Certification uploaded successfully!';
+        return 'Certification importée avec succès !';
       case 'error':
-        return 'Upload failed. Please try again.';
+        return 'Échec de l\'importation. Veuillez réessayer.';
       default:
         return '';
     }
@@ -226,7 +249,7 @@ const CertificationsPage: React.FC = () => {
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Certifications</h1>
-          <p className="text-muted-foreground">Upload and review extracted certifications</p>
+          <p className="text-muted-foreground">Importez et consultez vos certifications extraites</p>
         </div>
         <Dialog
           open={isAddDialogOpen}
@@ -244,14 +267,14 @@ const CertificationsPage: React.FC = () => {
           <DialogTrigger asChild>
             <Button disabled={!hasConfiguredName}>
               <Plus className="h-4 w-4 mr-2" />
-              Add Certification
+              Ajouter une certification
             </Button>
           </DialogTrigger>
           <DialogContent className="sm:max-w-lg">
             <DialogHeader>
-              <DialogTitle>Upload Certification</DialogTitle>
+              <DialogTitle>Importer une certification</DialogTitle>
               <DialogDescription>
-                Upload a PDF, DOCX or image file. Metadata is parsed automatically.
+                Importez un fichier PDF, DOCX ou image. Les métadonnées sont extraites automatiquement.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
@@ -274,8 +297,8 @@ const CertificationsPage: React.FC = () => {
                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                   />
                   <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-                  <p className="text-sm font-medium">Upload Certificate</p>
-                  <p className="text-xs text-muted-foreground">PDF, DOCX, PNG, JPG (max 10MB)</p>
+                  <p className="text-sm font-medium">Importer le certificat</p>
+                  <p className="text-xs text-muted-foreground">PDF, DOCX, PNG, JPG (max 10 Mo)</p>
                   {uploadError && (
                     <p className="text-xs text-destructive mt-2">{uploadError}</p>
                   )}
@@ -307,22 +330,22 @@ const CertificationsPage: React.FC = () => {
                   {uploadStatus === 'parsing' && (
                     <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
                       <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                      Parsing certification details...
+                      Analyse des détails de la certification...
                     </div>
                   )}
 
                   {/* Status Steps */}
                   {uploadStatus !== 'idle' && (
                     <div className="flex items-center justify-center gap-2 py-2">
-                      {['Uploading', 'Parsing', 'Completed'].map((step, index) => {
+                      {['Importation', 'Analyse', 'Terminé'].map((step, index) => {
                         const isActive =
-                          (step === 'Uploading' && uploadStatus === 'uploading') ||
-                          (step === 'Parsing' && uploadStatus === 'parsing') ||
-                          (step === 'Completed' && uploadStatus === 'completed');
+                          (index === 0 && uploadStatus === 'uploading') ||
+                          (index === 1 && uploadStatus === 'parsing') ||
+                          (index === 2 && uploadStatus === 'completed');
                         const isCompleted =
-                          (step === 'Uploading' && ['parsing', 'completed'].includes(uploadStatus)) ||
-                          (step === 'Parsing' && uploadStatus === 'completed') ||
-                          (step === 'Completed' && uploadStatus === 'completed');
+                          (index === 0 && ['parsing', 'completed'].includes(uploadStatus)) ||
+                          (index === 1 && uploadStatus === 'completed') ||
+                          (index === 2 && uploadStatus === 'completed');
 
                         return (
                           <React.Fragment key={step}>
@@ -363,7 +386,7 @@ const CertificationsPage: React.FC = () => {
                     <div className="p-3 rounded-lg bg-success/10 border border-success/20 text-sm">
                       <div className="flex items-center gap-2 text-success">
                         <CheckCircle className="h-4 w-4" />
-                        Certification uploaded successfully.
+                        Certification importée avec succès.
                       </div>
                     </div>
                   )}
@@ -377,17 +400,17 @@ const CertificationsPage: React.FC = () => {
                   <div className="flex justify-center gap-2 pt-2">
                     {uploadStatus === 'completed' && (
                       <Button variant="outline" onClick={resetUploadState}>
-                        Upload Another
+                        Importer une autre
                       </Button>
                     )}
                     {(uploadStatus === 'uploading' || uploadStatus === 'parsing') && (
                       <Button variant="outline" onClick={resetUploadState}>
-                        Cancel
+                        Annuler
                       </Button>
                     )}
                     {uploadStatus === 'error' && (
                       <Button variant="outline" onClick={resetUploadState}>
-                        Try Again
+                        Réessayer
                       </Button>
                     )}
                   </div>
@@ -396,7 +419,7 @@ const CertificationsPage: React.FC = () => {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsAddDialogOpen(false)}>
-                Close
+                Fermer
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -405,9 +428,9 @@ const CertificationsPage: React.FC = () => {
 
       {!hasConfiguredName && (
         <Alert variant="destructive">
-          <AlertTitle>Action Required</AlertTitle>
+          <AlertTitle>Action requise</AlertTitle>
           <AlertDescription>
-            Please upload your CV in the Profile section first. We need your name to verify that the uploaded certifications belong to you.
+            Veuillez d'abord importer votre CV dans la section Profil. Nous avons besoin de votre nom pour vérifier que les certifications importées vous appartiennent.
           </AlertDescription>
         </Alert>
       )}
@@ -417,7 +440,7 @@ const CertificationsPage: React.FC = () => {
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="Search certifications..."
+              placeholder="Rechercher des certifications..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-10"
@@ -431,7 +454,7 @@ const CertificationsPage: React.FC = () => {
           <CardContent className="py-12">
             <div className="flex items-center justify-center gap-2 text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
-              Loading certifications...
+              Chargement des certifications...
             </div>
           </CardContent>
         </Card>
@@ -450,8 +473,19 @@ const CertificationsPage: React.FC = () => {
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusClass(displayStatus)}`}>
                       {formatStatus(displayStatus)}
                     </span>
+                    {(() => {
+                      const days = daysUntilExpiry(cert);
+                      if (days !== null && days >= 0 && days <= 60) {
+                        return (
+                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-warning/10 text-warning border border-warning/20">
+                            {days === 0 ? 'Expire aujourd\'hui' : `Expire dans ${days}j`}
+                          </span>
+                        );
+                      }
+                      return null;
+                    })()}
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${uploadClass(cert.isUploaded)}`}>
-                      {cert.isUploaded ? 'Uploaded' : 'From CV'}
+                      {cert.isUploaded ? 'Importé' : 'Extrait du CV'}
                     </span>
                   </div>
                 </div>
@@ -467,11 +501,11 @@ const CertificationsPage: React.FC = () => {
                   )}
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Calendar className="h-3.5 w-3.5" />
-                    <span>Issued: {formatDate(cert.issueDate)}</span>
+                    <span>Émis : {formatDate(cert.issueDate)}</span>
                   </div>
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Calendar className="h-3.5 w-3.5" />
-                    <span>Expires: {formatDate(cert.expirationDate)}</span>
+                    <span>Expire : {formatDate(cert.expirationDate)}</span>
                   </div>
                 </div>
               </CardContent>
@@ -483,13 +517,13 @@ const CertificationsPage: React.FC = () => {
         <Card>
           <CardContent className="py-16 text-center">
             <Award className="h-12 w-12 mx-auto text-muted-foreground/50 mb-4" />
-            <h3 className="font-medium text-lg mb-1">No certifications found</h3>
+            <h3 className="font-medium text-lg mb-1">Aucune certification trouvée</h3>
             <p className="text-muted-foreground text-sm mb-4">
-              Upload a certificate to parse and populate your list.
+              Importez un certificat pour analyser et remplir votre liste.
             </p>
             <Button disabled={!hasConfiguredName} onClick={() => setIsAddDialogOpen(true)}>
               <Plus className="h-4 w-4 mr-2" />
-              Add Certification
+              Ajouter une certification
             </Button>
           </CardContent>
         </Card>

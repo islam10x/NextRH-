@@ -29,6 +29,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 export class ScoringService {
   private readonly logger = new Logger(ScoringService.name);
   private readonly aiServiceBaseUrl: string;
+  private readonly computeLocks = new Map<string, Promise<any>>();
 
   constructor(
     @InjectRepository(DocumentHash)
@@ -970,6 +971,17 @@ export class ScoringService {
   // ── Score Computation ─────────────────────────────────────────────────
 
   async computeScore(profileId: string, year: number) {
+    const key = `${profileId}-${year}`;
+    const inflight = this.computeLocks.get(key);
+    if (inflight) return inflight;
+    const promise = this._computeScoreImpl(profileId, year).finally(() => {
+      if (this.computeLocks.get(key) === promise) this.computeLocks.delete(key);
+    });
+    this.computeLocks.set(key, promise);
+    return promise;
+  }
+
+  private async _computeScoreImpl(profileId: string, year: number) {
     const participations = await this.participantRepo.find({
       where: { profile: { profile_id: profileId }, assignedBy: Not(IsNull()) },
       relations: ['project'],

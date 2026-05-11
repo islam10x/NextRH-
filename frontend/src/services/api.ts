@@ -56,7 +56,7 @@ api.interceptors.response.use(
         const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
         const url = String(originalRequest?.url || '');
 
-        if (url.includes('/auth/logout')) {
+        if (url.includes('/auth/logout') || url.includes('/auth/login')) {
             return Promise.reject(error);
         }
 

@@ -55,33 +55,33 @@ interface NavItem {
 }
 
 const employeeNavItems: NavItem[] = [
-  { title: 'Dashboard', url: '/employee/dashboard', icon: LayoutDashboard },
-  { title: 'Upload CV', url: '/employee/cv-upload', icon: FileText },
+  { title: 'Tableau de bord', url: '/employee/dashboard', icon: LayoutDashboard },
+  { title: 'Importer le CV', url: '/employee/cv-upload', icon: FileText },
   { title: 'Certifications', url: '/employee/certifications', icon: Award },
-  { title: 'Training & Projects', url: '/employee/training-projects', icon: GraduationCap },
-  { title: 'CV Preview', url: '/employee/cv-preview', icon: Eye },
+  { title: 'Formations & Projets', url: '/employee/training-projects', icon: GraduationCap },
+  { title: 'Aperçu du CV', url: '/employee/cv-preview', icon: Eye },
 ];
 
 const managerNavItems: NavItem[] = [
-  { title: 'Team Dashboard', url: '/manager/dashboard', icon: LayoutDashboard },
-  { title: 'Team Members', url: '/manager/team', icon: Users },
-  { title: 'Projects', url: '/manager/projects', icon: Briefcase },
-  { title: 'Certification Tracking', url: '/manager/certifications', icon: Award },
-  { title: 'Trainings', url: '/manager/trainings', icon: Clock3 },
+  { title: 'Tableau de bord', url: '/manager/dashboard', icon: LayoutDashboard },
+  { title: "Membres de l'équipe", url: '/manager/team', icon: Users },
+  { title: 'Projets', url: '/manager/projects', icon: Briefcase },
+  { title: 'Suivi des certifications', url: '/manager/certifications', icon: Award },
+  { title: 'Formations', url: '/manager/trainings', icon: Clock3 },
   { title: 'Scoring', url: '/manager/scoring', icon: Trophy },
-  { title: 'Upload CV', url: '/employee/cv-upload', icon: FileText },
-  { title: 'My Certifications', url: '/employee/certifications', icon: Award },
-  { title: 'My CV Preview', url: '/employee/cv-preview', icon: Eye },
+  { title: 'Importer le CV', url: '/employee/cv-upload', icon: FileText },
+  { title: 'Mes certifications', url: '/employee/certifications', icon: Award },
+  { title: 'Mon CV', url: '/employee/cv-preview', icon: Eye },
 ];
 
 const bidManagerNavItems: NavItem[] = [
-  { title: 'BID Dashboard', url: '/bid/dashboard', icon: LayoutDashboard },
-  { title: 'Employee Directory', url: '/bid/directory', icon: Search },
-  { title: 'AI Assistant', url: '/bid/ai-chat', icon: MessageSquare },
-  { title: 'Generate CV', url: '/bid/cv-generation', icon: FileOutput },
-  { title: 'Upload CV', url: '/employee/cv-upload', icon: FileText },
-  { title: 'My Certifications', url: '/employee/certifications', icon: Award },
-  { title: 'My CV Preview', url: '/employee/cv-preview', icon: Eye },
+  { title: 'Tableau de bord', url: '/bid/dashboard', icon: LayoutDashboard },
+  { title: 'Annuaire employés', url: '/bid/directory', icon: Search },
+  { title: 'Assistant IA', url: '/bid/ai-chat', icon: MessageSquare },
+  { title: 'Générer un CV', url: '/bid/cv-generation', icon: FileOutput },
+  { title: 'Importer le CV', url: '/employee/cv-upload', icon: FileText },
+  { title: 'Mes certifications', url: '/employee/certifications', icon: Award },
+  { title: 'Mon CV', url: '/employee/cv-preview', icon: Eye },
 ];
 
 export const AppSidebar: React.FC = () => {
@@ -105,13 +105,13 @@ export const AppSidebar: React.FC = () => {
   const getRoleLabel = (): string => {
     switch (user?.role) {
       case 'employee':
-        return 'Employee Portal';
+        return 'Portail employé';
       case 'team_manager':
-        return 'Team Manager';
+        return "Manager d'équipe";
       case 'bid_manager':
-        return 'BID Manager';
+        return 'Manager BID';
       default:
-        return 'Portal';
+        return 'Portail';
     }
   };
 
@@ -205,16 +205,16 @@ export const AppSidebar: React.FC = () => {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56 bg-popover">
-            <DropdownMenuLabel>My Account</DropdownMenuLabel>
+            <DropdownMenuLabel>Mon compte</DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => navigate(settingsPath)}>
               <Settings className="mr-2 h-4 w-4" />
-              Settings
+              Paramètres
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive">
               <LogOut className="mr-2 h-4 w-4" />
-              Log out
+              Se déconnecter
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

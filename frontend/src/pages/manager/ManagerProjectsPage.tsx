@@ -28,6 +28,7 @@ import { scoringService, AvailableProject } from '@/services/scoring.service';
 import { Project } from '@/types';
 import { Briefcase, BriefcaseBusiness, Building2, Calendar, CalendarClock, Inbox, Search, Send, Upload, UserRound, Users } from 'lucide-react';
 import { toast } from 'sonner';
+import { EmptyState } from '@/components/common/EmptyState';
 import { useSearchParams } from 'react-router-dom';
 
 const formatDate = (dateString?: string | null) => {
@@ -40,9 +41,9 @@ const formatDate = (dateString?: string | null) => {
 };
 
 const statusLabel: Record<string, string> = {
-  pending: 'Pending',
-  approved: 'Approved',
-  rejected: 'Rejected',
+  pending: 'En attente',
+  approved: 'Approuvé',
+  rejected: 'Rejeté',
 };
 
 const statusVariant = (status: string): 'secondary' | 'default' | 'destructive' => {
@@ -133,7 +134,7 @@ const ManagerProjectsPage: React.FC = () => {
       }));
       setMembers(mapped);
     } catch (error: unknown) {
-      toast.error(getApiErrorMessage(error, 'Failed to load team members'));
+      toast.error(getApiErrorMessage(error, 'Impossible de charger les membres de l\'équipe'));
     } finally {
       setLoadingMembers(false);
     }
@@ -155,7 +156,7 @@ const ManagerProjectsPage: React.FC = () => {
       setIncomingRequests(incoming);
       setOutgoingRequests(outgoing);
     } catch (error: unknown) {
-      toast.error(getApiErrorMessage(error, 'Failed to load projects'));
+      toast.error(getApiErrorMessage(error, 'Impossible de charger les projets'));
     } finally {
       setLoading(false);
     }
@@ -300,7 +301,7 @@ const ManagerProjectsPage: React.FC = () => {
       setAvailableProjects(projects);
     } catch (error: unknown) {
       setAvailableProjects([]);
-      toast.error(getApiErrorMessage(error, 'Failed to load projects for PV upload'));
+      toast.error(getApiErrorMessage(error, 'Impossible de charger les projets pour l\'import du PV'));
     }
   };
 
@@ -321,19 +322,19 @@ const ManagerProjectsPage: React.FC = () => {
 
   const handleUploadPv = async () => {
     if (!uploadFile) {
-      toast.error('Select a PV file');
+      toast.error('Sélectionnez un fichier PV');
       return;
     }
     if (!uploadProjectId) {
-      toast.error('Select a project');
+      toast.error('Sélectionnez un projet');
       return;
     }
     if (!uploadComplexity) {
-      toast.error('Select project complexity');
+      toast.error('Sélectionnez la complexité du projet');
       return;
     }
     if (uploadProfileIds.length === 0) {
-      toast.error('Select at least one participant.');
+      toast.error('Sélectionnez au moins un participant.');
       return;
     }
 
@@ -346,18 +347,18 @@ const ManagerProjectsPage: React.FC = () => {
       if (!participant) continue;
       const internalRawScore = uploadScores[profileId];
       if (participant.assignmentType === 'internal' && (internalRawScore === undefined || internalRawScore === '')) {
-        toast.error('An internal score is required for each internal participant.');
+        toast.error('Un score d\'exécution est requis pour chaque participant interne.');
         return;
       }
       if (participant.assignmentType === 'internal' && internalRawScore !== undefined && internalRawScore !== '') {
         const internalScore = Number(internalRawScore);
         if (!Number.isFinite(internalScore) || internalScore < 0 || internalScore > 20) {
-          toast.error('Individual score must be between 0 and 20.');
+          toast.error('Le score individuel doit être compris entre 0 et 20.');
           return;
         }
       }
       if (participant.assignmentType === 'external' && !uploadContributions[profileId]?.trim()) {
-        toast.error('Contribution description is required for external members.');
+        toast.error('La description de contribution est requise pour les membres externes.');
         return;
       }
     }
@@ -391,9 +392,9 @@ const ManagerProjectsPage: React.FC = () => {
       );
       const hasDuplicate = result.status === 'duplicate' || result.results?.some((item) => item.status === 'duplicate');
       if (hasDuplicate) {
-        toast.warning(result.message || 'This PV already exists. Upload skipped.');
+        toast.warning(result.message || 'Ce PV existe déjà. Import ignoré.');
       } else {
-        toast.success(result.message || 'PV uploaded successfully');
+        toast.success(result.message || 'PV importé avec succès');
       }
 
       if (result.status !== 'duplicate') {
@@ -402,7 +403,7 @@ const ManagerProjectsPage: React.FC = () => {
       await loadAll();
       window.dispatchEvent(new Event('scoring:updated'));
     } catch (error: unknown) {
-      toast.error(getApiErrorMessage(error, 'PV upload failed'));
+      toast.error(getApiErrorMessage(error, 'Échec de l\'import du PV'));
     } finally {
       setUploading(false);
     }
@@ -410,7 +411,7 @@ const ManagerProjectsPage: React.FC = () => {
 
   const toggleSelection = (profileId: string | null) => {
     if (!profileId) {
-      toast.error('This member has no profile yet');
+      toast.error('Ce membre n\'a pas encore de profil');
       return;
     }
     setSelectedProfiles((prev) =>
@@ -434,15 +435,15 @@ const ManagerProjectsPage: React.FC = () => {
   const handleAssign = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!projectName.trim()) {
-      toast.error('Project name is required.');
+      toast.error('Le nom du projet est requis.');
       return;
     }
     if (selectedProfiles.length === 0) {
-      toast.error('Select at least one team member.');
+      toast.error('Sélectionnez au moins un membre.');
       return;
     }
     if (projectType === 'internal' && !projectComplexity) {
-      toast.error('Complexity is required for internal projects.');
+      toast.error('La complexité est requise pour les projets internes.');
       return;
     }
 
@@ -466,12 +467,12 @@ const ManagerProjectsPage: React.FC = () => {
       });
 
       const count = selectedProfiles.length;
-      toast.success(`Project assigned to ${count} member${count === 1 ? '' : 's'}`);
+      toast.success(`Projet assigné à ${count} membre${count === 1 ? '' : 's'}`);
       setIsAssignOpen(false);
       resetAssignForm();
       loadAll();
     } catch (error: unknown) {
-      toast.error(getApiErrorMessage(error, 'Failed to assign project'));
+      toast.error(getApiErrorMessage(error, 'Échec de l\'assignation du projet'));
     } finally {
       setIsAssigning(false);
     }
@@ -479,15 +480,15 @@ const ManagerProjectsPage: React.FC = () => {
 
   const handleCreateCrossTeamRequest = async () => {
     if (!requestProjectId) {
-      toast.error('Select a project first.');
+      toast.error('Sélectionnez d\'abord un projet.');
       return;
     }
     if (!requestTargetTeamId) {
-      toast.error('Select a target team.');
+      toast.error('Sélectionnez une équipe cible.');
       return;
     }
     if (!requestNote.trim()) {
-      toast.error('Please describe the expected contribution before sending the request.');
+      toast.error('Veuillez décrire la contribution attendue avant d\'envoyer la demande.');
       return;
     }
     setCreatingRequest(true);
@@ -497,13 +498,13 @@ const ManagerProjectsPage: React.FC = () => {
         targetTeamId: requestTargetTeamId,
         requestNote: requestNote.trim() || undefined,
       });
-      toast.success('Cross-team request sent');
+      toast.success('Demande inter-équipe envoyée');
       setRequestProjectId('');
       setRequestTargetTeamId('');
       setRequestNote('');
       await loadAll();
     } catch (error: unknown) {
-      toast.error(getApiErrorMessage(error, 'Failed to send request'));
+      toast.error(getApiErrorMessage(error, 'Échec de l\'envoi de la demande'));
     } finally {
       setCreatingRequest(false);
     }
@@ -514,17 +515,17 @@ const ManagerProjectsPage: React.FC = () => {
     try {
       const selectedProfileId = selectedIncomingProfiles[request.requestId];
       if (approved && !selectedProfileId) {
-        toast.error('Select an employee from your team before approving.');
+        toast.error('Sélectionnez un employé de votre équipe avant d\'approuver.');
         return;
       }
       await projectService.respondCrossTeamRequest(request.requestId, {
         approved,
         selectedProfileId: approved ? selectedProfileId : undefined,
       });
-      toast.success(approved ? 'Request approved' : 'Request rejected');
+      toast.success(approved ? 'Demande approuvée' : 'Demande rejetée');
       await loadAll();
     } catch (error: unknown) {
-      toast.error(getApiErrorMessage(error, 'Failed to process request'));
+      toast.error(getApiErrorMessage(error, 'Impossible de traiter la demande'));
     } finally {
       setProcessingRequestId(null);
     }
@@ -534,12 +535,12 @@ const ManagerProjectsPage: React.FC = () => {
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Projects</h1>
-          <p className="text-muted-foreground">Manage internal/external projects and cross-team assignments.</p>
+          <h1 className="text-2xl font-bold text-foreground">Projets</h1>
+          <p className="text-muted-foreground">Gérez les projets internes/externes et les assignations inter-équipes.</p>
         </div>
         <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
           <Button variant="outline" className="w-full sm:w-auto" onClick={openUploadDialog}>
-            <Upload className="mr-2 h-4 w-4" /> Upload PV
+            <Upload className="mr-2 h-4 w-4" /> Importer PV
           </Button>
           <Dialog
             open={isAssignOpen}
@@ -549,34 +550,34 @@ const ManagerProjectsPage: React.FC = () => {
             }}
           >
             <DialogTrigger asChild>
-              <Button className="w-full sm:w-auto">Create Project</Button>
+              <Button className="w-full sm:w-auto">Créer un projet</Button>
             </DialogTrigger>
             <DialogContent className="sm:max-w-[560px] max-h-[90vh] overflow-y-auto">
               <DialogHeader>
-                <DialogTitle className="text-xl">Create and Assign Project</DialogTitle>
+                <DialogTitle className="text-xl">Créer et assigner un projet</DialogTitle>
                 <DialogDescription>
-                  Internal projects require manual complexity. External projects use PV complexity.
+                  Les projets internes nécessitent une complexité manuelle. Les projets externes utilisent la complexité du PV.
                 </DialogDescription>
               </DialogHeader>
               <form onSubmit={handleAssign} className="space-y-4">
                 <div className="space-y-4 py-2 max-h-[65vh] overflow-y-auto pr-1">
                   <div className="space-y-2">
-                    <Label>Project Type</Label>
+                    <Label>Type de projet</Label>
                     <Select value={projectType} onValueChange={(v: 'internal' | 'external') => setProjectType(v)}>
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="internal">Internal Project</SelectItem>
-                        <SelectItem value="external">External Project</SelectItem>
+                        <SelectItem value="internal">Projet interne</SelectItem>
+                        <SelectItem value="external">Projet externe</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="projectName">Project Name</Label>
+                    <Label htmlFor="projectName">Nom du projet</Label>
                     <Input
                       id="projectName"
-                      placeholder="e.g., Cloud Migration Initiative"
+                      placeholder="ex. : Migration Cloud"
                       value={projectName}
                       onChange={(e) => setProjectName(e.target.value)}
                       required
@@ -586,29 +587,29 @@ const ManagerProjectsPage: React.FC = () => {
                     <Label htmlFor="clientName">Client</Label>
                     <Input
                       id="clientName"
-                      placeholder="e.g., Company Name"
+                      placeholder="ex. : Nom de l'entreprise"
                       value={clientName}
                       onChange={(e) => setClientName(e.target.value)}
                     />
                   </div>
                   {projectType === 'internal' && (
                     <div className="space-y-2">
-                      <Label htmlFor="projectComplexity">Complexity</Label>
+                      <Label htmlFor="projectComplexity">Complexité</Label>
                       <Select value={projectComplexity} onValueChange={setProjectComplexity}>
                         <SelectTrigger>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="low">Low</SelectItem>
-                          <SelectItem value="medium">Medium</SelectItem>
-                          <SelectItem value="high">High</SelectItem>
+                          <SelectItem value="low">Faible</SelectItem>
+                          <SelectItem value="medium">Moyenne</SelectItem>
+                          <SelectItem value="high">Élevée</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
                   )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label htmlFor="startDate">Start Date</Label>
+                      <Label htmlFor="startDate">Date de début</Label>
                       <Input
                         id="startDate"
                         type="date"
@@ -617,7 +618,7 @@ const ManagerProjectsPage: React.FC = () => {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="endDate">End Date</Label>
+                      <Label htmlFor="endDate">Date de fin</Label>
                       <Input
                         id="endDate"
                         type="date"
@@ -636,20 +637,20 @@ const ManagerProjectsPage: React.FC = () => {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="projectDescription">Project Summary</Label>
+                    <Label htmlFor="projectDescription">Résumé du projet</Label>
                     <Textarea
                       id="projectDescription"
-                      placeholder="Short project context for the team"
+                      placeholder="Contexte court du projet pour l'équipe"
                       value={projectDescription}
                       onChange={(e) => setProjectDescription(e.target.value)}
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>Team members</Label>
+                    <Label>Membres de l'équipe</Label>
                     <div className="relative">
                       <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                       <Input
-                        placeholder="Search team members..."
+                        placeholder="Rechercher des membres..."
                         value={assignSearch}
                         onChange={(e) => setAssignSearch(e.target.value)}
                         className="pl-9"
@@ -657,9 +658,9 @@ const ManagerProjectsPage: React.FC = () => {
                     </div>
                     <div className="max-h-52 overflow-auto rounded-md border p-2 space-y-2">
                       {loadingMembers ? (
-                        <p className="text-sm text-muted-foreground">Loading members...</p>
+                        <p className="text-sm text-muted-foreground">Chargement des membres...</p>
                       ) : filteredMembers.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No matching team members</p>
+                        <p className="text-sm text-muted-foreground">Aucun membre correspondant</p>
                       ) : (
                         filteredMembers.map((m) => {
                           const disabled = !m.profileId;
@@ -673,7 +674,7 @@ const ManagerProjectsPage: React.FC = () => {
                                 onChange={() => toggleSelection(m.profileId)}
                               />
                               <span className={disabled ? 'text-muted-foreground' : ''}>
-                                {m.name} ({m.email}) {disabled && '(no profile yet)'}
+                                {m.name} ({m.email}) {disabled && '(pas encore de profil)'}
                               </span>
                             </label>
                           );
@@ -684,10 +685,10 @@ const ManagerProjectsPage: React.FC = () => {
                 </div>
                 <DialogFooter className="pt-4 gap-2">
                   <Button type="button" variant="ghost" onClick={() => setIsAssignOpen(false)}>
-                    Cancel
+                    Annuler
                   </Button>
                   <Button type="submit" disabled={isAssigning}>
-                    {isAssigning ? 'Saving...' : 'Create Project'}
+                    {isAssigning ? 'Enregistrement...' : 'Créer le projet'}
                   </Button>
                 </DialogFooter>
               </form>
@@ -695,7 +696,7 @@ const ManagerProjectsPage: React.FC = () => {
           </Dialog>
           <div className="w-full md:w-64">
             <Input
-              placeholder="Search projects..."
+              placeholder="Rechercher des projets..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -719,21 +720,26 @@ const ManagerProjectsPage: React.FC = () => {
         className="space-y-4"
       >
         <TabsList>
-          <TabsTrigger value="projects">Team Projects</TabsTrigger>
-          <TabsTrigger value="cross-team">Cross-Team Flow</TabsTrigger>
+          <TabsTrigger value="projects">Projets d'équipe</TabsTrigger>
+          <TabsTrigger value="cross-team">Flux inter-équipes</TabsTrigger>
         </TabsList>
 
         <TabsContent value="projects">
           <Card>
             <CardHeader>
-              <CardTitle>Assigned Projects</CardTitle>
-              <CardDescription>Track work and assignment type across your team</CardDescription>
+              <CardTitle>Projets assignés</CardTitle>
+              <CardDescription>Suivez le travail et le type d'assignation dans votre équipe</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               {loading ? (
-                <p className="text-sm text-muted-foreground">Loading...</p>
+                <p className="text-sm text-muted-foreground">Chargement...</p>
               ) : filteredProjects.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No projects assigned yet.</p>
+                <EmptyState
+                  icon={<Briefcase />}
+                  title="Aucun projet pour l'instant"
+                  description="Créez votre premier projet et assignez des membres pour commencer."
+                  action={{ label: 'Créer un projet', onClick: () => setIsAssignOpen(true) }}
+                />
               ) : (
                 <div className="space-y-3">
                   {filteredProjects.map((project) => (
@@ -756,7 +762,7 @@ const ManagerProjectsPage: React.FC = () => {
                         <div className="flex gap-2">
                           <Badge variant="secondary">{project.projectType || 'internal'}</Badge>
                           {project.assignees.some((assignee) => assignee.assignmentType === 'external') && (
-                            <Badge variant="outline">contains external member</Badge>
+                            <Badge variant="outline">contient un membre externe</Badge>
                           )}
                         </div>
                       </div>
@@ -764,17 +770,17 @@ const ManagerProjectsPage: React.FC = () => {
                       <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
                         <span className="flex items-center gap-1">
                           <Users className="h-3 w-3" />
-                          {project.assignees.length} assigned member{project.assignees.length === 1 ? '' : 's'}
+                          {project.assignees.length} membre{project.assignees.length === 1 ? '' : 's'} assigné{project.assignees.length === 1 ? '' : 's'}
                         </span>
                         <span className="flex items-center gap-1">
                           <Calendar className="h-3 w-3" />
-                          {formatDate(project.startDate)} - {project.endDate ? formatDate(project.endDate) : 'Present'}
+                          {formatDate(project.startDate)} - {project.endDate ? formatDate(project.endDate) : 'En cours'}
                         </span>
                       </div>
 
                       {project.assignees.length > 0 && (
                         <div className="rounded-md bg-muted/50 p-2">
-                          <p className="text-xs text-muted-foreground mb-2">Assigned members</p>
+                          <p className="text-xs text-muted-foreground mb-2">Membres assignés</p>
                           <div className="flex flex-wrap gap-2">
                             {project.assignees.map((assignee) => (
                               <Badge
@@ -795,7 +801,7 @@ const ManagerProjectsPage: React.FC = () => {
 
                       {project.assignees.some((assignee) => assignee.assignmentType === 'external') && (
                         <p className="text-xs text-muted-foreground">
-                          You requested this external member via cross-team flow. At PV upload you must describe contribution; final score is submitted by the member&apos;s home team manager.
+                          Vous avez demandé ce membre externe via le flux inter-équipes. Lors de l'import du PV, vous devez décrire la contribution ; le score final est soumis par le manager de l'équipe d'origine.
                         </p>
                       )}
                     </div>
@@ -810,39 +816,39 @@ const ManagerProjectsPage: React.FC = () => {
           <div className="grid gap-4 md:grid-cols-3">
             <Card className="border-slate-200 bg-white shadow-sm">
               <CardContent className="p-5">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Incoming pending</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Demandes reçues en attente</p>
                 <p className="mt-2 text-3xl font-semibold text-slate-900">{pendingIncomingCount}</p>
-                <p className="mt-1 text-sm text-slate-600">Requests waiting for a decision from your team.</p>
+                <p className="mt-1 text-sm text-slate-600">Demandes en attente d'une décision de votre équipe.</p>
               </CardContent>
             </Card>
             <Card className="border-slate-200 bg-white shadow-sm">
               <CardContent className="p-5">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Outgoing pending</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Demandes envoyées en attente</p>
                 <p className="mt-2 text-3xl font-semibold text-slate-900">{pendingOutgoingCount}</p>
-                <p className="mt-1 text-sm text-slate-600">Requests you sent that are still awaiting confirmation.</p>
+                <p className="mt-1 text-sm text-slate-600">Demandes envoyées encore en attente de confirmation.</p>
               </CardContent>
             </Card>
             <Card className="border-slate-200 bg-white shadow-sm">
               <CardContent className="p-5">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Approved outgoing</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Demandes envoyées approuvées</p>
                 <p className="mt-2 text-3xl font-semibold text-slate-900">{approvedOutgoingCount}</p>
-                <p className="mt-1 text-sm text-slate-600">Requests already matched with an external member.</p>
+                <p className="mt-1 text-sm text-slate-600">Demandes déjà associées à un membre externe.</p>
               </CardContent>
             </Card>
           </div>
 
           <Card className="border-slate-200 bg-white shadow-sm">
             <CardHeader>
-              <CardTitle>Request External Member</CardTitle>
-              <CardDescription>Select the project, choose the target team, and write a short operational brief that makes the request immediately understandable.</CardDescription>
+              <CardTitle>Demander un membre externe</CardTitle>
+              <CardDescription>Sélectionnez le projet, choisissez l'équipe cible, et rédigez un bref opérationnel qui rende la demande immédiatement compréhensible.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-4 lg:grid-cols-[1fr_1fr_1.2fr]">
                 <div className="space-y-2">
-                  <Label>Project</Label>
+                  <Label>Projet</Label>
                   <Select value={requestProjectId} onValueChange={setRequestProjectId}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select project" />
+                      <SelectValue placeholder="Sélectionner un projet" />
                     </SelectTrigger>
                     <SelectContent>
                       {requestableProjects.map((project) => (
@@ -854,10 +860,10 @@ const ManagerProjectsPage: React.FC = () => {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label>Target Team</Label>
+                  <Label>Équipe cible</Label>
                   <Select value={requestTargetTeamId} onValueChange={setRequestTargetTeamId}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select team" />
+                      <SelectValue placeholder="Sélectionner une équipe" />
                     </SelectTrigger>
                     <SelectContent>
                       {otherTeams.map((team) => (
@@ -869,11 +875,11 @@ const ManagerProjectsPage: React.FC = () => {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label>Expected Contribution</Label>
+                  <Label>Contribution attendue</Label>
                   <Textarea
                     value={requestNote}
                     onChange={(e) => setRequestNote(e.target.value)}
-                    placeholder="Summarize the deliverables, ownership, and context expected from the requested member"
+                    placeholder="Résumez les livrables, la responsabilité et le contexte attendus du membre demandé"
                     rows={4}
                   />
                 </div>
@@ -887,19 +893,19 @@ const ManagerProjectsPage: React.FC = () => {
                       .map((project) => (
                         <div key={project.projectId} className="grid gap-3 md:grid-cols-3 md:items-center">
                           <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Project</p>
+                            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Projet</p>
                             <p className="font-medium">{project.projectName}</p>
                             <p className="text-muted-foreground text-sm">
-                              {project.clientName || 'No client'} • {project.projectType}
+                              {project.clientName || 'Aucun client'} • {project.projectType}
                             </p>
                           </div>
                           <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Assignment</p>
-                            <p className="text-sm text-slate-700">{project.startDate ? `Assigned on ${formatDate(project.startDate)}` : 'No assignment date'}</p>
+                            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Assignation</p>
+                            <p className="text-sm text-slate-700">{project.startDate ? `Assigné le ${formatDate(project.startDate)}` : 'Aucune date d\'assignation'}</p>
                           </div>
                           <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Request goal</p>
-                            <p className="text-sm text-slate-700">{requestNote.trim() || 'Add a short brief so the receiving manager can act quickly.'}</p>
+                            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Objectif de la demande</p>
+                            <p className="text-sm text-slate-700">{requestNote.trim() || 'Ajoutez un bref résumé pour que le manager destinataire puisse agir rapidement.'}</p>
                           </div>
                         </div>
                       ))}
@@ -907,13 +913,13 @@ const ManagerProjectsPage: React.FC = () => {
                 )}
                 {!requestProjectId && (
                   <div className="rounded-xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
-                    Select a project to preview the request summary before sending it.
+                    Sélectionnez un projet pour prévisualiser le résumé avant de l'envoyer.
                   </div>
                 )}
               </div>
 
               <Button onClick={handleCreateCrossTeamRequest} disabled={creatingRequest}>
-                  {creatingRequest ? 'Sending...' : 'Send Request'}
+                  {creatingRequest ? 'Envoi en cours...' : 'Envoyer la demande'}
               </Button>
             </CardContent>
           </Card>
@@ -922,15 +928,17 @@ const ManagerProjectsPage: React.FC = () => {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Inbox className="h-5 w-5 text-slate-700" />
-                Incoming Requests
+                Demandes reçues
               </CardTitle>
-              <CardDescription>Requests addressed to your team. Each card separates who asked, for which project, what they need, and what action you need to take.</CardDescription>
+              <CardDescription>Demandes adressées à votre équipe. Chaque carte indique qui a demandé, pour quel projet, ce dont il a besoin, et l'action à effectuer.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               {incomingRequests.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-500">
-                  No incoming requests.
-                </div>
+                <EmptyState
+                  icon={<Inbox />}
+                  title="Aucune demande reçue"
+                  description="Les autres équipes apparaîtront ici quand elles demanderont un membre de votre équipe."
+                />
               ) : (
                 incomingRequests.map((request) => {
                   const pending = request.status === 'pending';
@@ -950,13 +958,13 @@ const ManagerProjectsPage: React.FC = () => {
                       {pending && (
                         <div className="flex items-center gap-2 rounded-xl bg-sky-600 px-3 py-2 text-xs font-semibold text-white">
                           <span className="inline-flex h-2 w-2 rounded-full bg-white animate-pulse" />
-                          Awaiting your response — choose an employee and approve or reject
+                          En attente de votre réponse — choisissez un employé et approuvez ou rejetez
                         </div>
                       )}
                       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                         <div className="space-y-1">
                           <p className="text-lg font-semibold text-slate-950">{request.projectName}</p>
-                          <p className="text-sm text-slate-600">Cross-team request from {request.requestingTeamName}</p>
+                          <p className="text-sm text-slate-600">Demande inter-équipes de {request.requestingTeamName}</p>
                         </div>
                         <Badge className={statusBadgeClass[request.status] || ''} variant={statusVariant(request.status)}>
                           {statusLabel[request.status] || request.status}
@@ -966,42 +974,42 @@ const ManagerProjectsPage: React.FC = () => {
                       <div className="grid gap-3 lg:grid-cols-3">
                         <div className="rounded-xl border border-slate-200 bg-white p-3">
                           <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            <UserRound className="h-3.5 w-3.5" /> Requesting manager
+                            <UserRound className="h-3.5 w-3.5" /> Manager demandeur
                           </p>
                           <p className="font-medium text-slate-900">{request.requestingManagerName || 'Manager'}</p>
-                          <p className="text-sm text-slate-600">{request.requestingTeamName || 'Team'}</p>
+                          <p className="text-sm text-slate-600">{request.requestingTeamName || 'Équipe'}</p>
                         </div>
                         <div className="rounded-xl border border-slate-200 bg-white p-3">
                           <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            <BriefcaseBusiness className="h-3.5 w-3.5" /> Project context
+                            <BriefcaseBusiness className="h-3.5 w-3.5" /> Contexte du projet
                           </p>
                           <p className="font-medium text-slate-900">{request.projectName}</p>
-                          <p className="text-sm text-slate-600">{request.clientName || 'No client specified'}</p>
+                          <p className="text-sm text-slate-600">{request.clientName || 'Aucun client spécifié'}</p>
                         </div>
                         <div className="rounded-xl border border-slate-200 bg-white p-3">
                           <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            <CalendarClock className="h-3.5 w-3.5" /> Timeline
+                            <CalendarClock className="h-3.5 w-3.5" /> Chronologie
                           </p>
-                          <p className="text-sm text-slate-700">Requested on {formatDate(request.createdAt)}</p>
-                          <p className="text-sm text-slate-600">{request.respondedAt ? `Responded on ${formatDate(request.respondedAt)}` : 'Awaiting your decision'}</p>
+                          <p className="text-sm text-slate-700">Demandé le {formatDate(request.createdAt)}</p>
+                          <p className="text-sm text-slate-600">{request.respondedAt ? `Répondu le ${formatDate(request.respondedAt)}` : 'En attente de votre décision'}</p>
                         </div>
                       </div>
 
                       {request.projectDescription && (
                         <div className="rounded-xl border border-slate-200 bg-white p-4">
-                          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Project Description</p>
+                          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Description du projet</p>
                           <p className="text-sm text-slate-700">{request.projectDescription}</p>
                         </div>
                       )}
                       {request.requestNote && (
                         <div className="rounded-xl border border-slate-200 bg-white p-4">
-                          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Expected Contribution</p>
+                          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Contribution attendue</p>
                           <p className="text-sm text-slate-700">{request.requestNote}</p>
                         </div>
                       )}
                       {pending && (
                         <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4">
-                          <p className="mb-3 text-sm font-medium text-sky-900">Choose one employee from your team and respond to the request.</p>
+                          <p className="mb-3 text-sm font-medium text-sky-900">Choisissez un employé de votre équipe et répondez à la demande.</p>
                           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                             <Select
                               value={selectedIncomingProfiles[request.requestId] || ''}
@@ -1010,7 +1018,7 @@ const ManagerProjectsPage: React.FC = () => {
                               }
                             >
                               <SelectTrigger className="xl:w-[340px] bg-white">
-                                <SelectValue placeholder="Select employee from your team" />
+                                <SelectValue placeholder="Sélectionner un employé de votre équipe" />
                               </SelectTrigger>
                               <SelectContent>
                                 {members
@@ -1027,14 +1035,14 @@ const ManagerProjectsPage: React.FC = () => {
                               onClick={() => handleRespondRequest(request, true)}
                               disabled={processingRequestId === request.requestId}
                             >
-                              Approve
+                              Approuver
                             </Button>
                             <Button
                               variant="outline"
                               onClick={() => handleRespondRequest(request, false)}
                               disabled={processingRequestId === request.requestId}
                             >
-                              Reject
+                              Rejeter
                             </Button>
                           </div>
                         </div>
@@ -1042,7 +1050,7 @@ const ManagerProjectsPage: React.FC = () => {
                       )}
                       {!pending && request.selectedEmployeeName && (
                         <div className="rounded-xl border border-slate-200 bg-white p-4">
-                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Selected employee</p>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Employé sélectionné</p>
                           <p className="mt-1 text-sm text-slate-700">{request.selectedEmployeeName}</p>
                         </div>
                       )}
@@ -1057,15 +1065,17 @@ const ManagerProjectsPage: React.FC = () => {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Send className="h-5 w-5 text-slate-700" />
-                Outgoing Requests
+                Demandes envoyées
               </CardTitle>
-              <CardDescription>Requests your team has already sent. The cards below make the current status, selected employee, and next step easier to scan.</CardDescription>
+              <CardDescription>Demandes déjà envoyées par votre équipe. Les cartes ci-dessous facilitent la lecture du statut, de l'employé sélectionné et de la prochaine étape.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               {outgoingRequests.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-500">
-                  No outgoing requests.
-                </div>
+                <EmptyState
+                  icon={<Send />}
+                  title="Aucune demande envoyée"
+                  description="Dès que vous envoyez une demande inter-équipes, elle apparaîtra ici."
+                />
               ) : (
                 outgoingRequests.map((request) => {
                   const highlighted = requestIdQuery === request.requestId;
@@ -1084,7 +1094,7 @@ const ManagerProjectsPage: React.FC = () => {
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                       <div>
                         <p className="text-lg font-semibold text-slate-950">{request.projectName}</p>
-                        <p className="text-sm text-slate-600">Request sent to {request.targetTeamName}</p>
+                        <p className="text-sm text-slate-600">Demande envoyée à {request.targetTeamName}</p>
                       </div>
                       <Badge className={statusBadgeClass[request.status] || ''} variant={statusVariant(request.status)}>
                         {statusLabel[request.status] || request.status}
@@ -1094,14 +1104,14 @@ const ManagerProjectsPage: React.FC = () => {
                     <div className="grid gap-3 lg:grid-cols-3">
                       <div className="rounded-xl border border-slate-200 bg-white p-3">
                         <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                          <BriefcaseBusiness className="h-3.5 w-3.5" /> Project
+                          <BriefcaseBusiness className="h-3.5 w-3.5" /> Projet
                         </p>
                         <p className="font-medium text-slate-900">{request.projectName}</p>
                         <p className="text-sm text-slate-600">{request.clientName || 'No client specified'}</p>
                       </div>
                       <div className="rounded-xl border border-slate-200 bg-white p-3">
                         <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                          <Users className="h-3.5 w-3.5" /> Target team
+                          <Users className="h-3.5 w-3.5" /> Équipe cible
                         </p>
                         <p className="font-medium text-slate-900">{request.targetTeamName}</p>
                         <p className="text-sm text-slate-600">{request.targetManagerName || 'Manager'}</p>
@@ -1110,31 +1120,31 @@ const ManagerProjectsPage: React.FC = () => {
                         <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
                           <CalendarClock className="h-3.5 w-3.5" /> Timeline
                         </p>
-                        <p className="text-sm text-slate-700">Sent on {formatDate(request.createdAt)}</p>
-                        <p className="text-sm text-slate-600">{request.respondedAt ? `Processed on ${formatDate(request.respondedAt)}` : 'Awaiting response'}</p>
+                        <p className="text-sm text-slate-700">Envoyé le {formatDate(request.createdAt)}</p>
+                        <p className="text-sm text-slate-600">{request.respondedAt ? `Traité le ${formatDate(request.respondedAt)}` : 'En attente de réponse'}</p>
                       </div>
                     </div>
 
                     {request.selectedEmployeeName && (
                       <div className="rounded-xl border border-slate-200 bg-white p-4">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Confirmed external member</p>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Membre externe confirmé</p>
                         <p className="mt-1 text-sm text-slate-700">{request.selectedEmployeeName}</p>
                       </div>
                     )}
                     {request.requestNote && (
                       <div className="rounded-xl border border-slate-200 bg-white p-4">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Your request context</p>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Contexte de votre demande</p>
                         <p className="mt-1 text-sm text-slate-700">{request.requestNote}</p>
                       </div>
                     )}
                     {request.status === 'approved' && (
                       <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
-                        Next step: upload the PV for this project, then provide the external member contribution details.
+                        Prochaine étape : importez le PV de ce projet, puis renseignez les détails de contribution du membre externe.
                       </div>
                     )}
                     {request.status === 'pending' && (
                       <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-800">
-                        This request is still being reviewed by the receiving team.
+                        Cette demande est encore en cours d'examen par l'équipe destinataire.
                       </div>
                     )}
                   </div>
@@ -1149,24 +1159,24 @@ const ManagerProjectsPage: React.FC = () => {
       <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Upload PV</DialogTitle>
+            <DialogTitle>Importer le PV</DialogTitle>
             <DialogDescription>
-              Submit the PV here and complete all manager inputs in one flow: give scores to internal members and describe external-member contributions for the home-manager review.
+              Soumettez le PV ici et complétez toutes les saisies en une seule fois : attribuez des scores aux membres internes et décrivez les contributions des membres externes pour la révision du manager d'origine.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>PV File (PDF)</Label>
+              <Label>Fichier PV (PDF)</Label>
               <Input type="file" accept=".pdf" onChange={(e) => setUploadFile(e.target.files?.[0] || null)} />
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="space-y-2">
-                <Label>Project</Label>
+                <Label>Projet</Label>
                 <Select value={uploadProjectId} onValueChange={handleUploadProjectChange}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Select project" />
+                    <SelectValue placeholder="Sélectionner un projet" />
                   </SelectTrigger>
                   <SelectContent>
                     {availableProjects.map((project) => (
@@ -1178,7 +1188,7 @@ const ManagerProjectsPage: React.FC = () => {
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label>Project Complexity</Label>
+                <Label>Complexité du projet</Label>
                 <Select
                   value={uploadComplexity}
                   onValueChange={(value: 'low' | 'medium' | 'high') => setUploadComplexity(value)}
@@ -1187,9 +1197,9 @@ const ManagerProjectsPage: React.FC = () => {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="low">Low</SelectItem>
-                    <SelectItem value="medium">Medium</SelectItem>
-                    <SelectItem value="high">High</SelectItem>
+                    <SelectItem value="low">Faible</SelectItem>
+                    <SelectItem value="medium">Moyenne</SelectItem>
+                    <SelectItem value="high">Élevée</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -1200,7 +1210,7 @@ const ManagerProjectsPage: React.FC = () => {
                 <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                   <div>
                     <p className="font-medium">{selectedUploadProject.projectName}</p>
-                    <p className="text-sm text-muted-foreground">{selectedUploadProject.clientName || 'No client'}</p>
+                    <p className="text-sm text-muted-foreground">{selectedUploadProject.clientName || 'Aucun client'}</p>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Badge variant="secondary">{selectedUploadProject.projectType}</Badge>
@@ -1208,7 +1218,7 @@ const ManagerProjectsPage: React.FC = () => {
                       {selectedUploadProject.participants.length} participant{selectedUploadProject.participants.length === 1 ? '' : 's'}
                     </Badge>
                     {selectedUploadProject.startDate && (
-                      <Badge variant="outline">Assigned {formatDate(selectedUploadProject.startDate)}</Badge>
+                      <Badge variant="outline">Assigné le {formatDate(selectedUploadProject.startDate)}</Badge>
                     )}
                   </div>
                 </div>
@@ -1218,7 +1228,7 @@ const ManagerProjectsPage: React.FC = () => {
             <div className="space-y-2">
               <Label>Participants</Label>
               {selectedUploadParticipants.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Select a project to load participants.</p>
+                <p className="text-sm text-muted-foreground">Sélectionnez un projet pour charger les participants.</p>
               ) : (
                 <div className="space-y-2">
                   {selectedUploadParticipants.map((participant) => {
@@ -1227,22 +1237,22 @@ const ManagerProjectsPage: React.FC = () => {
                     return (
                       <div key={participant.profileId} className="rounded-md border p-3 space-y-2">
                         <label className="flex items-center gap-2 text-sm">
-                          <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">included</span>
+                          <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">inclus</span>
                           <span className="font-medium">{displayName}</span>
                           <Badge variant="outline">{participant.assignmentType}</Badge>
                           {participant.assignmentType === 'internal' ? (
-                            <span className="text-xs text-sky-700 font-normal">score required</span>
+                            <span className="text-xs text-sky-700 font-normal">score requis</span>
                           ) : (
-                            <span className="text-xs text-amber-600 font-normal">describe contribution for home-manager review</span>
+                            <span className="text-xs text-amber-600 font-normal">décrire la contribution pour la révision du manager d'origine</span>
                           )}
                         </label>
 
                         {participant.assignmentType === 'internal' && (
                           <div className="space-y-2 rounded-md border border-sky-200 bg-sky-50/70 p-3">
                             <div className="space-y-1">
-                              <Label className="text-xs font-semibold text-sky-950">Execution score (0–20)</Label>
+                              <Label className="text-xs font-semibold text-sky-950">Score d'exécution (0–20)</Label>
                               <p className="text-xs text-sky-900">
-                                Score × project complexity ceiling = final contribution. e.g. 16/20 on a High project → (16/20) × 85 = 68/100.
+                                Score × plafond de complexité du projet = contribution finale. Ex. : 16/20 sur un projet Élevé → (16/20) × 85 = 68/100.
                               </p>
                             </div>
                             <Input
@@ -1259,7 +1269,7 @@ const ManagerProjectsPage: React.FC = () => {
 
                         {participant.assignmentType === 'external' && (
                           <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50/70 p-3">
-                            <Label className="text-xs font-semibold text-amber-950">What did this external member actually do?</Label>
+                            <Label className="text-xs font-semibold text-amber-950">Qu'a réellement fait ce membre externe ?</Label>
                             <Textarea
                               value={uploadContributions[participant.profileId] || ''}
                               onChange={(e) =>
@@ -1268,7 +1278,7 @@ const ManagerProjectsPage: React.FC = () => {
                                   [participant.profileId]: e.target.value,
                                 }))
                               }
-                              placeholder="Example: owned the API integration, coordinated testing with the client, resolved deployment blockers, and delivered the production-ready script used for release."
+                              placeholder="Exemple : a géré l'intégration API, coordonné les tests avec le client, résolu les blocages de déploiement, et livré le script prêt pour la production."
                             />
                           </div>
                         )}
@@ -1286,15 +1296,15 @@ const ManagerProjectsPage: React.FC = () => {
                 <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-xs font-bold text-white ${allScoresEntered ? 'bg-emerald-500' : 'bg-sky-500'}`}>
                   {scoredCount}
                 </span>
-                <span>/ {internalParticipants.length} execution score{internalParticipants.length > 1 ? 's' : ''} entered</span>
-                {!allScoresEntered && <span className="text-xs text-sky-600">— fill in the remaining score{internalParticipants.length - scoredCount > 1 ? 's' : ''} to unlock upload</span>}
+                <span>/ {internalParticipants.length} score{internalParticipants.length > 1 ? 's' : ''} d'exécution saisi{internalParticipants.length > 1 ? 's' : ''}</span>
+                {!allScoresEntered && <span className="text-xs text-sky-600">— saisissez le{internalParticipants.length - scoredCount > 1 ? 's' : ''} score{internalParticipants.length - scoredCount > 1 ? 's' : ''} restant{internalParticipants.length - scoredCount > 1 ? 's' : ''} pour débloquer l'import</span>}
               </div>
             )}
             <Button variant="outline" onClick={() => setUploadOpen(false)}>
-              Cancel
+              Annuler
             </Button>
             <Button onClick={handleUploadPv} disabled={!canUpload}>
-              {uploading ? 'Uploading...' : 'Upload PV'}
+              {uploading ? 'Import en cours...' : 'Importer le PV'}
             </Button>
           </DialogFooter>
         </DialogContent>

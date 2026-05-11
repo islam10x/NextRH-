@@ -21,7 +21,11 @@ import {
   Phone,
   MapPin,
   FileUp,
+  Copy,
+  Check,
+  ChevronLeft,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { format, parseISO } from 'date-fns';
 import { useNavigate, useParams } from 'react-router-dom';
 import jsPDF from 'jspdf';
@@ -52,6 +56,7 @@ const CVPreviewPage: React.FC = () => {
   const [profile, setProfile] = useState<CvProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [copiedEmail, setCopiedEmail] = useState(false);
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -64,7 +69,7 @@ const CVPreviewPage: React.FC = () => {
         const response = await api.get<CvProfile>(url);
         setProfile(response.data);
       } catch (err) {
-        setError('Failed to load CV profile. Please try again.');
+        setError('Impossible de charger le profil CV. Veuillez réessayer.');
       } finally {
         setLoading(false);
       }
@@ -81,7 +86,7 @@ const CVPreviewPage: React.FC = () => {
       const button = document.querySelector('button:has(.lucide-download)') as HTMLButtonElement;
       if (button) {
         button.disabled = true;
-        button.textContent = 'Generating PDF...';
+        button.textContent = 'Génération du PDF...';
       }
 
       // Create PDF document
@@ -131,7 +136,7 @@ const CVPreviewPage: React.FC = () => {
       const contactParts: string[] = [profile.email];
       if (profile.phone) contactParts.push(profile.phone);
       if (profile.totalExperienceYears != null) {
-        contactParts.push(`${profile.totalExperienceYears} years of experience`);
+        contactParts.push(`${profile.totalExperienceYears} ans d'expérience`);
       }
       pdf.text(contactParts.join(' • '), margin, yPosition);
       yPosition += 7;
@@ -159,7 +164,7 @@ const CVPreviewPage: React.FC = () => {
         pdf.setFont('helvetica', 'bold');
         pdf.setFontSize(14);
         pdf.setTextColor(31, 41, 55);
-        pdf.text('PROFESSIONAL SUMMARY', margin, yPosition);
+        pdf.text('RÉSUMÉ PROFESSIONNEL', margin, yPosition);
         yPosition += 8;
 
         pdf.setFont('helvetica', 'normal');
@@ -175,7 +180,7 @@ const CVPreviewPage: React.FC = () => {
         pdf.setFont('helvetica', 'bold');
         pdf.setFontSize(14);
         pdf.setTextColor(31, 41, 55);
-        pdf.text('TECHNICAL SKILLS', margin, yPosition);
+        pdf.text('COMPÉTENCES TECHNIQUES', margin, yPosition);
         yPosition += 8;
 
         pdf.setFont('helvetica', 'normal');
@@ -192,7 +197,7 @@ const CVPreviewPage: React.FC = () => {
         pdf.setFont('helvetica', 'bold');
         pdf.setFontSize(14);
         pdf.setTextColor(31, 41, 55);
-        pdf.text('WORK EXPERIENCE', margin, yPosition);
+        pdf.text('EXPÉRIENCE PROFESSIONNELLE', margin, yPosition);
         yPosition += 8;
 
         profile.workExperiences.forEach((exp, index) => {
@@ -241,7 +246,7 @@ const CVPreviewPage: React.FC = () => {
         pdf.setFont('helvetica', 'bold');
         pdf.setFontSize(14);
         pdf.setTextColor(31, 41, 55);
-        pdf.text('PROJECT EXPERIENCE', margin, yPosition);
+        pdf.text('EXPÉRIENCE PROJETS', margin, yPosition);
         yPosition += 8;
 
         profile.projects.forEach((project, index) => {
@@ -256,7 +261,7 @@ const CVPreviewPage: React.FC = () => {
             displayTitle = project.generatedTitle;
           } else {
             const words = (project.description ?? '').trim().split(/\s+/);
-            displayTitle = words.slice(0, 8).join(' ') + (words.length > 8 ? '...' : '') || 'Untitled Project';
+            displayTitle = words.slice(0, 8).join(' ') + (words.length > 8 ? '...' : '') || 'Projet sans titre';
           }
 
           pdf.setFont('helvetica', 'bold');
@@ -300,7 +305,7 @@ const CVPreviewPage: React.FC = () => {
             pdf.setFont('helvetica', 'italic');
             pdf.setFontSize(9);
             pdf.setTextColor(107, 114, 128);
-            const skillsText = 'Technologies: ' + project.skills.join(', ');
+            const skillsText = 'Technologies : ' + project.skills.join(', ');
             const skillsHeight = addText(skillsText, margin, yPosition);
             yPosition += skillsHeight + 8;
           } else {
@@ -331,8 +336,8 @@ const CVPreviewPage: React.FC = () => {
           // Organization and dates
           const certDetails = [];
           if (cert.issuingOrganization) certDetails.push(cert.issuingOrganization);
-          if (cert.issueDate) certDetails.push(`Issued: ${fmtDate(cert.issueDate)}`);
-          if (cert.expirationDate) certDetails.push(`Expires: ${fmtDate(cert.expirationDate)}`);
+          if (cert.issueDate) certDetails.push(`Émis : ${fmtDate(cert.issueDate)}`);
+          if (cert.expirationDate) certDetails.push(`Expire : ${fmtDate(cert.expirationDate)}`);
 
           if (certDetails.length > 0) {
             pdf.setFont('helvetica', 'normal');
@@ -347,7 +352,7 @@ const CVPreviewPage: React.FC = () => {
           pdf.setFontSize(9);
           const statusColor = cert.status === 'active' ? [34, 197, 94] : cert.status === 'expiring_soon' ? [251, 191, 36] : [239, 68, 68];
           pdf.setTextColor(statusColor[0], statusColor[1], statusColor[2]);
-          pdf.text(`Status: ${cert.status.replace('_', ' ').toUpperCase()}`, margin, yPosition);
+          pdf.text(`Statut : ${cert.status.replace('_', ' ').toUpperCase()}`, margin, yPosition);
           yPosition += 10;
         });
       }
@@ -358,7 +363,7 @@ const CVPreviewPage: React.FC = () => {
         pdf.setFont('helvetica', 'bold');
         pdf.setFontSize(14);
         pdf.setTextColor(31, 41, 55);
-        pdf.text('EDUCATION', margin, yPosition);
+        pdf.text('FORMATION', margin, yPosition);
         yPosition += 8;
 
         profile.educations.forEach((edu, index) => {
@@ -368,14 +373,14 @@ const CVPreviewPage: React.FC = () => {
           pdf.setFont('helvetica', 'bold');
           pdf.setFontSize(11);
           pdf.setTextColor(31, 41, 55);
-          const degreeText = edu.degree + (edu.fieldOfStudy ? ` in ${edu.fieldOfStudy}` : '');
+          const degreeText = edu.degree + (edu.fieldOfStudy ? ` - ${edu.fieldOfStudy}` : '');
           const degreeHeight = addText(degreeText, margin, yPosition);
           yPosition += degreeHeight + 1;
 
           // Institution and graduation date
           const eduDetails = [];
           if (edu.institution) eduDetails.push(edu.institution);
-          if (edu.endDate) eduDetails.push(`Graduated: ${fmtDate(edu.endDate)}`);
+          if (edu.endDate) eduDetails.push(`Diplômé : ${fmtDate(edu.endDate)}`);
 
           if (eduDetails.length > 0) {
             pdf.setFont('helvetica', 'normal');
@@ -394,7 +399,7 @@ const CVPreviewPage: React.FC = () => {
       // Reset button state
       if (button) {
         button.disabled = false;
-        button.innerHTML = '<svg class="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v10a2 2 0 01-2-2z"></path></svg>Download PDF';
+        button.innerHTML = '<svg class="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v10a2 2 0 01-2-2z"></path></svg>Télécharger le PDF';
       }
 
     } catch (error) {
@@ -404,10 +409,10 @@ const CVPreviewPage: React.FC = () => {
       const button = document.querySelector('button:has(.lucide-download)') as HTMLButtonElement;
       if (button) {
         button.disabled = false;
-        button.innerHTML = '<svg class="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v10a2 2 0 01-2-2z"></path></svg>Download PDF';
+        button.innerHTML = '<svg class="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v10a2 2 0 01-2-2z"></path></svg>Télécharger le PDF';
       }
 
-      alert('Failed to generate PDF. Please try again.');
+      alert('Échec de la génération du PDF. Veuillez réessayer.');
     }
   };
 
@@ -429,14 +434,14 @@ const CVPreviewPage: React.FC = () => {
       !profile.professionalSummary);
 
   const isManagerView = Boolean(targetUserId);
-  const managerErrorTitle = 'Unable to load this CV profile.';
-  const managerErrorBody = 'Please refresh the page and try again.';
-  const managerEmptyTitle = 'This employee has not uploaded a CV yet.';
-  const managerEmptyBody = 'Ask them to upload their CV to view the profile.';
-  const employeeErrorTitle = 'Failed to load CV profile. Please try again.';
-  const employeeErrorBody = 'Please refresh the page or try uploading your CV again.';
-  const employeeEmptyTitle = 'You have not uploaded a CV yet.';
-  const employeeEmptyBody = 'Upload your CV to generate your profile here.';
+  const managerErrorTitle = 'Impossible de charger ce profil CV.';
+  const managerErrorBody = 'Veuillez actualiser la page et réessayer.';
+  const managerEmptyTitle = 'Cet employé n\'a pas encore importé de CV.';
+  const managerEmptyBody = 'Demandez-lui d\'importer son CV pour afficher le profil.';
+  const employeeErrorTitle = 'Impossible de charger le profil CV. Veuillez réessayer.';
+  const employeeErrorBody = 'Veuillez actualiser la page ou réimporter votre CV.';
+  const employeeEmptyTitle = 'Vous n\'avez pas encore importé de CV.';
+  const employeeEmptyBody = 'Importez votre CV pour générer votre profil ici.';
 
   if (error || isEmpty) {
     const title = error
@@ -458,7 +463,7 @@ const CVPreviewPage: React.FC = () => {
           </p>
           {!error && !targetUserId && (
             <Button size="sm" onClick={() => navigate('/employee/cv-upload')}>
-              Upload CV
+              Importer le CV
             </Button>
           )}
         </CardContent>
@@ -466,15 +471,23 @@ const CVPreviewPage: React.FC = () => {
     );
   }
 
+  const backPath = user?.role === 'bid_manager' ? '/bid/directory' : '/manager/team';
+
   return (
     <div className="space-y-6">
+      {targetUserId && (
+        <Button variant="ghost" size="sm" className="gap-1 -ml-2 text-muted-foreground" onClick={() => navigate(backPath)}>
+          <ChevronLeft className="h-4 w-4" />
+          Retour
+        </Button>
+      )}
       {/* Page header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">CV Preview</h1>
+          <h1 className="text-2xl font-bold text-foreground">Aperçu du CV</h1>
           <div className="flex flex-wrap items-center gap-4 text-muted-foreground text-sm mt-2">
             {profile.lastUpdate && (
-              <span>Last updated {fmtDate(profile.lastUpdate)}</span>
+              <span>Dernière mise à jour : {fmtDate(profile.lastUpdate)}</span>
             )}
             {profile.cvFilename && (
               <span className="flex items-center gap-2">
@@ -487,11 +500,11 @@ const CVPreviewPage: React.FC = () => {
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => window.print()}>
             <Printer className="h-4 w-4 mr-2" />
-            Print
+            Imprimer
           </Button>
           <Button size="sm" onClick={handleDownloadPDF}>
             <Download className="h-4 w-4 mr-2" />
-            Download PDF
+            Télécharger le PDF
           </Button>
         </div>
       </div>
@@ -501,7 +514,6 @@ const CVPreviewPage: React.FC = () => {
         <CardContent className="cv-document p-8 space-y-8" style={{
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
           lineHeight: '1.6',
-          color: '#1a1a1a'
         }}>
 
           {/* Header */}
@@ -514,6 +526,20 @@ const CVPreviewPage: React.FC = () => {
               <span className="flex items-center gap-2">
                 <Mail className="h-5 w-5" />
                 {profile.email}
+                <button
+                  type="button"
+                  className="no-print ml-1 text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => {
+                    navigator.clipboard.writeText(profile.email).then(() => {
+                      setCopiedEmail(true);
+                      toast.success('Email copié');
+                      setTimeout(() => setCopiedEmail(false), 2000);
+                    });
+                  }}
+                  aria-label="Copier l'email"
+                >
+                  {copiedEmail ? <Check className="h-4 w-4 text-success" /> : <Copy className="h-4 w-4" />}
+                </button>
               </span>
               {profile.phone && (
                 <span className="flex items-center gap-2">
@@ -524,7 +550,7 @@ const CVPreviewPage: React.FC = () => {
               {profile.totalExperienceYears != null && (
                 <span className="flex items-center gap-2">
                   <Briefcase className="h-5 w-5" />
-                  {profile.totalExperienceYears} year{profile.totalExperienceYears !== 1 ? 's' : ''} of experience
+                  {profile.totalExperienceYears} an{profile.totalExperienceYears !== 1 ? 's' : ''} d'expérience
                 </span>
               )}
             </div>
@@ -539,9 +565,9 @@ const CVPreviewPage: React.FC = () => {
           {/* â€”â€” Summary â€”â€” */}
           {profile.professionalSummary && (
             <section className="section">
-              <h2 className="section-title text-lg font-semibold flex items-center gap-2 mb-3">
+              <h2 className="section-title text-lg font-semibold text-primary flex items-center gap-2 mb-3">
                 <FileText className="h-5 w-5 text-primary" />
-                Professional Summary
+                Résumé professionnel
               </h2>
               <p className="text-muted-foreground leading-relaxed">{profile.professionalSummary}</p>
             </section>
@@ -550,9 +576,9 @@ const CVPreviewPage: React.FC = () => {
           {/* â€”â€” Skills â€”â€” */}
           {profile.skills.length > 0 && (
             <section className="section">
-              <h2 className="section-title text-lg font-semibold flex items-center gap-2 mb-3">
+              <h2 className="section-title text-lg font-semibold text-primary flex items-center gap-2 mb-3">
                 <Code className="h-5 w-5 text-primary" />
-                Technical Skills
+                Compétences techniques
               </h2>
               <div className="skills-container flex flex-wrap gap-2">
                 {profile.skills.map((s) => (
@@ -565,9 +591,9 @@ const CVPreviewPage: React.FC = () => {
           {/* â€”â€” Work Experience â€”â€” */}
           {profile.workExperiences.length > 0 && (
             <section className="section">
-              <h2 className="section-title text-lg font-semibold flex items-center gap-2 mb-4">
+              <h2 className="section-title text-lg font-semibold text-primary flex items-center gap-2 mb-4">
                 <Building2 className="h-5 w-5 text-primary" />
-                Work Experience
+                Expérience professionnelle
               </h2>
               <div className="space-y-6">
                 {profile.workExperiences.map((exp) => (
@@ -596,9 +622,9 @@ const CVPreviewPage: React.FC = () => {
           {/* â€”â€” Projects â€”â€” */}
           {profile.projects.length > 0 && (
             <section className="section">
-              <h2 className="section-title text-lg font-semibold flex items-center gap-2 mb-4">
+              <h2 className="section-title text-lg font-semibold text-primary flex items-center gap-2 mb-4">
                 <Briefcase className="h-5 w-5 text-primary" />
-                Project Experience
+                Expérience projets
               </h2>
               <div className="space-y-6">
                 {profile.projects.map((p) => (
@@ -611,7 +637,7 @@ const CVPreviewPage: React.FC = () => {
           {/* â€”â€” Certifications â€”â€” */}
           {profile.certifications.length > 0 && (
             <section className="section">
-              <h2 className="section-title text-lg font-semibold flex items-center gap-2 mb-4">
+              <h2 className="section-title text-lg font-semibold text-primary flex items-center gap-2 mb-4">
                 <Award className="h-5 w-5 text-primary" />
                 Certifications
               </h2>
@@ -625,8 +651,8 @@ const CVPreviewPage: React.FC = () => {
                           <p className="cert-org text-sm text-primary font-medium mb-2">{cert.issuingOrganization}</p>
                         )}
                         <div className="cert-dates flex flex-wrap gap-4 text-base text-muted-foreground">
-                          {cert.issueDate && <span>Issued: {fmtDate(cert.issueDate)}</span>}
-                          {cert.expirationDate && <span>Expires: {fmtDate(cert.expirationDate)}</span>}
+                          {cert.issueDate && <span>Émis : {fmtDate(cert.issueDate)}</span>}
+                          {cert.expirationDate && <span>Expire : {fmtDate(cert.expirationDate)}</span>}
                         </div>
                       </div>
                     </div>
@@ -639,22 +665,22 @@ const CVPreviewPage: React.FC = () => {
           {/* â€”â€” Education â€”â€” */}
           {profile.educations.length > 0 && (
             <section className="section">
-              <h2 className="section-title text-lg font-semibold flex items-center gap-2 mb-4">
+              <h2 className="section-title text-lg font-semibold text-primary flex items-center gap-2 mb-4">
                 <GraduationCap className="h-5 w-5 text-primary" />
-                Education
+                Formation
               </h2>
               <div className="space-y-4">
                 {profile.educations.map((edu) => (
                   <div key={edu.id} className="education-item border-l-4 border-primary/40 pl-4 py-2">
                     <div>
                       <h3 className="font-semibold text-base text-foreground mb-1">
-                        {edu.degree}{edu.fieldOfStudy ? ` in ${edu.fieldOfStudy}` : ''}
+                        {edu.degree}{edu.fieldOfStudy ? ` - ${edu.fieldOfStudy}` : ''}
                       </h3>
                       {edu.institution && (
                         <p className="text-sm text-primary font-medium mb-1">{edu.institution}</p>
                       )}
                       {edu.endDate && (
-                        <p className="text-base text-muted-foreground mt-1">Graduated: {fmtDate(edu.endDate)}</p>
+                        <p className="text-base text-muted-foreground mt-1">Diplômé : {fmtDate(edu.endDate)}</p>
                       )}
                     </div>
                   </div>
@@ -682,7 +708,7 @@ const ProjectItem: React.FC<{ project: CvProfile['projects'][0] }> = ({
     displayTitle = project.generatedTitle;
   } else {
     const words = (project.description ?? '').trim().split(/\s+/);
-    displayTitle = words.slice(0, 8).join(' ') + (words.length > 8 ? '...' : '') || 'Untitled Project';
+    displayTitle = words.slice(0, 8).join(' ') + (words.length > 8 ? '...' : '') || 'Projet sans titre';
   }
 
   return (

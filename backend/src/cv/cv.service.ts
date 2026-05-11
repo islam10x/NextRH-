@@ -15,6 +15,7 @@ import { RagService } from '../rag/rag.service';
 import { FileValidationService } from '../file-validation/file-validation.service';
 import { normalizeFlexibleDate, parseFlexibleDateRange } from '../utils/date-normalizer';
 import { AIGenerationService } from '../ai-generation/ai-generation.service';
+import { CvTemplatesService } from '../cv-templates/cv-templates.service';
 import * as fs from 'fs';
 import * as fsPromises from 'fs/promises';
 import * as path from 'path';
@@ -91,8 +92,6 @@ export class CvService {
             : null;
         const cvFilename = rawMeta?.filename || null;
         const fallbackCertifications = this.extractCertificationsFromMetadata(rawMeta);
-        const fallbackWorkExperiences = this.extractWorkExperiencesFromMetadata(rawMeta);
-        const fallbackEducations = this.extractEducationsFromMetadata(rawMeta);
         const toDateString = (value: Date | string | null | undefined) => {
             if (!value) return null;
             try {
@@ -246,7 +245,7 @@ export class CvService {
             certifications = fallbackCertifications;
         }
 
-        const projects = (profile.projectParticipations ?? [])
+        let projects = (profile.projectParticipations ?? [])
             .map((p) => {
             const projectName = this.cleanText(p.project?.projectName);
             const rawClientName = this.cleanText(p.project?.clientName);
@@ -1717,36 +1716,85 @@ export class CvService {
         return { updated, skipped };
     }
     /**
-     * Generate a CV from an uploaded template and employee profile data.
-     * `engine` selects the default primary engine or the fallback engine.
+     * Generate a CV from a template file and employee profile data.
+     * Sends the template + employee data to the AI service which replaces
+     * personal fields while preserving the original template formatting.
      */
     async generateCv(
         employeeId: string,
         templateFile: Express.Multer.File,
         outputFormat: 'docx' | 'pdf' = 'docx',
+        language: 'en' | 'fr' | 'original' | string = 'original',
         engine: 'primary' | 'fallback' = 'primary',
-    ): Promise<{ buffer: Buffer; filename: string; mimeType: string; engine: string }> {
+        options: { requestingUserId?: string | null; recordHistory?: boolean } = {},
+    ): Promise<{ buffer: Buffer; filename: string; mimeType: string; warnings?: string }> {
+        // 1. Load employee profile data
         const profileData = await this.getMyProfile(employeeId);
 
         if (!profileData.name || profileData.name.trim().length < 2) {
             throw new NotFoundException(
                 `Employee ${employeeId} has no usable name in their profile. ` +
-                    'Please ensure the employee has a first and last name set.',
+                'Please ensure the employee has a first and last name set.',
             );
         }
 
+        // 2. Build structured employee payload expected by the AI service (both engines)
+        const employeePayload = {
+            name: profileData.name,
+            title: profileData.currentPosition || '',
+            email: profileData.email || '',
+            phone: profileData.phone || '',
+            address: profileData.address || '',
+            summary: profileData.professionalSummary || '',
+            skills: profileData.skills || [],
+            experience: (profileData.workExperiences || [])
+                .filter((exp: any) => exp.jobTitle && exp.companyName)
+                .map((exp: any) => ({
+                    title: exp.jobTitle,
+                    company: exp.companyName,
+                    dates: [exp.startDate, exp.isCurrent ? 'Present' : exp.endDate]
+                        .filter(Boolean)
+                        .join(' - '),
+                    description: exp.description || '',
+                })),
+            education: (profileData.educations || []).map((edu: any) => ({
+                degree: edu.degree,
+                institution: edu.institution,
+                dates: edu.endDate || '',
+            })),
+            languages: [],
+            certifications: (profileData.certifications || []).map(
+                (c: any) => c.name || '',
+            ),
+            projects: (profileData.projects || []).map((p: any) => {
+                const rawName = (p.name || '').trim();
+                const isUnknown = !rawName || rawName.toLowerCase() === 'unknown project';
+                return {
+                    name: isUnknown ? (p.generatedTitle || '') : rawName,
+                    description: p.description || '',
+                    role: p.role || '',
+                    skills: p.skills || [],
+                    client: p.client || '',
+                    startDate: p.startDate || '',
+                    endDate: p.endDate || '',
+                };
+            }),
+        };
+
+        // 3. Call AI service /generation/cv
         const formData = new FormData();
         const blob = new Blob([templateFile.buffer as any], { type: templateFile.mimetype });
         formData.append('template', blob, templateFile.originalname);
-        formData.append('employee_data', JSON.stringify(profileData));
+        formData.append('employee_data', JSON.stringify(employeePayload));
         formData.append('output_format', outputFormat);
+        formData.append('language', language);
         formData.append('engine', engine);
 
         const aiUrl = `${this.aiServiceBaseUrl}/api/v1/generation/cv`;
-        this.logger.log(
-            `Calling AI generation service: ${aiUrl} (format: ${outputFormat}, engine: ${engine})`,
-        );
+        this.logger.log(`Calling AI generation service: ${aiUrl} (format: ${outputFormat})`);
 
+        // 180s timeout: complex templates with Groq calls can take up to ~30s,
+        // but LibreOffice PDF conversion can take longer on cold start.
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 180_000);
 
@@ -1778,6 +1826,15 @@ export class CvService {
         const arrayBuffer = await aiResponse.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
 
+        // Detect actual output format from AI service response headers.
+        // The AI service sets X-CV-Format to the actual format returned (which
+        // may differ from the requested format when PDF conversion fails and it
+        // falls back to DOCX).
+        const actualFormat = (aiResponse.headers.get('x-cv-format') || outputFormat).toLowerCase();
+        const isPdfFailed = aiResponse.headers.get('x-pdf-failed') === 'true';
+        const effectiveFormat = isPdfFailed ? 'docx' : actualFormat;
+
+        // Derive filename from Content-Disposition or build one
         const contentDisposition = aiResponse.headers.get('content-disposition') || '';
         const ext = effectiveFormat === 'pdf' ? '.pdf' : '.docx';
         let filename = `${profileData.name.replace(/\s+/g, '_')}_CV${ext}`;
@@ -1790,25 +1847,104 @@ export class CvService {
             effectiveFormat === 'pdf'
                 ? 'application/pdf'
                 : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-        const usedEngine = aiResponse.headers.get('x-cv-engine') || engine;
 
-        return { buffer, filename, mimeType, engine: usedEngine };
+        if (isPdfFailed) {
+            this.logger.warn(`PDF conversion failed in AI service — returning DOCX instead (format requested: ${outputFormat})`);
+        }
+
+        // Forward the AI service's warning header (best-effort, opaque JSON) so
+        // the controller can surface it back to the client untouched.
+        const warnings = aiResponse.headers.get('x-cv-warnings') || undefined;
+
+        // Auto-save the template to the user's history once generation has
+        // succeeded (re-uploads of the same bytes bump usage stats instead of
+        // duplicating). Best-effort — a save failure must not block the
+        // response.
+        const shouldRecord = options.recordHistory !== false;
+        if (shouldRecord && options.requestingUserId) {
+            try {
+                await this.cvTemplatesService.recordGenerationUsage({
+                    userId: options.requestingUserId,
+                    file: templateFile,
+                    language,
+                });
+            } catch (exc) {
+                this.logger.warn(
+                    `Auto-saving template to history failed (non-fatal): ${(exc as Error)?.message || exc}`,
+                );
+            }
+        }
+
+        return { buffer, filename, mimeType, warnings };
     }
 
     /**
-     * Generate a CV using another employee's stored CV as template.
+     * Re-generate a CV using a template the bid manager has already used
+     * before (i.e. a row from cv-templates owned by them). Avoids the need
+     * to re-upload the same file.
      */
-    async generateCvFromStoredTemplate(
-        templateEmployeeId: string,
-        targetEmployeeId: string,
+    async generateCvFromHistory(
+        userId: string,
+        templateId: string,
+        employeeId: string,
         outputFormat: 'docx' | 'pdf' = 'docx',
+        language: 'en' | 'fr' | 'original' | string = 'original',
         engine: 'primary' | 'fallback' = 'primary',
-    ): Promise<{ buffer: Buffer; filename: string; mimeType: string; engine: string }> {
-        const baseDir = await this.fileStorageService.findBaseDirByOwner(templateEmployeeId);
-        if (!baseDir) {
-            throw new NotFoundException(`No stored CV found for employee ${templateEmployeeId}`);
+    ): Promise<{ buffer: Buffer; filename: string; mimeType: string; warnings?: string }> {
+        const template = await this.cvTemplatesService.getOwnedTemplate(templateId, userId);
+        const { buffer: fileBuffer, mimetype, filename } =
+            await this.cvTemplatesService.loadTemplateBuffer(template);
+
+        const mockFile: Express.Multer.File = {
+            fieldname: 'template',
+            originalname: filename,
+            encoding: '7bit',
+            mimetype,
+            buffer: fileBuffer,
+            size: fileBuffer.length,
+            stream: null as any,
+            destination: '',
+            filename: '',
+            path: '',
+        };
+
+        const result = await this.generateCv(
+            employeeId,
+            mockFile,
+            outputFormat,
+            language,
+            engine,
+            // The template is already in history — just bump its usage row.
+            { requestingUserId: userId, recordHistory: false },
+        );
+
+        try {
+            await this.cvTemplatesService.bumpUsage(template.template_id);
+        } catch (exc) {
+            this.logger.warn(
+                `Bumping template usage failed (non-fatal): ${(exc as Error)?.message || exc}`,
+            );
         }
 
+        return result;
+    }
+
+    /**
+     * Generate a CV using the employee's own uploaded CV as the template.
+     * Finds the stored CV file and uses it as the template.
+     */
+    async generateCvFromStoredTemplate(
+        employeeId: string,
+        targetEmployeeId: string,
+        outputFormat: 'docx' | 'pdf' = 'docx',
+        language: string = 'en',
+    ): Promise<{ buffer: Buffer; filename: string; mimeType: string }> {
+        const baseDir = await this.fileStorageService.findBaseDirByOwner(employeeId);
+        if (!baseDir) {
+            throw new NotFoundException(`No stored CV found for employee ${employeeId}`);
+        }
+
+        // Look for CV file - only .docx is supported for reliable processing
         const possibleFiles = ['CV.docx'];
         let cvFilePath: string | null = null;
         for (const fname of possibleFiles) {
@@ -1820,10 +1956,11 @@ export class CvService {
         }
 
         if (!cvFilePath) {
-            throw new NotFoundException(`No DOCX CV file found for employee ${templateEmployeeId}`);
+            throw new NotFoundException(`No DOCX CV file found for employee ${employeeId}`);
         }
 
         const fileBuffer = await fsPromises.readFile(cvFilePath);
+
         const mockFile: Express.Multer.File = {
             fieldname: 'template',
             originalname: path.basename(cvFilePath),
@@ -1837,7 +1974,7 @@ export class CvService {
             path: '',
         };
 
-        return this.generateCv(targetEmployeeId, mockFile, outputFormat, engine);
+        return this.generateCv(targetEmployeeId, mockFile, outputFormat, language);
     }
 
     private calculateTotalExperienceYears(experiences: WorkExperience[]): number | null {

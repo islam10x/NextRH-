@@ -26,6 +26,9 @@ export class ProjectParticipant {
     @Column({ type: 'text', nullable: true })
     role: string;
 
+  @Column({ name: 'assignment_type', type: 'text', default: 'internal' })
+  assignmentType: ParticipantAssignmentType;
+
   @Column({ name: 'home_manager_id', type: 'uuid', nullable: true })
   homeManagerId: string | null;
 

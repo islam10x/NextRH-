@@ -36,7 +36,7 @@ const ResetPasswordPage: React.FC = () => {
   useEffect(() => {
     const validateToken = async () => {
       if (!token) {
-        setError('No reset token provided.');
+        setError('Aucun jeton de réinitialisation fourni.');
         setIsValidating(false);
         return;
       }
@@ -47,10 +47,10 @@ const ResetPasswordPage: React.FC = () => {
           setIsValid(true);
           setEmail(response.data.email);
         } else {
-          setError('This reset link is invalid or has expired.');
+          setError('Ce lien de réinitialisation est invalide ou a expiré.');
         }
       } catch (err: any) {
-        setError(err.response?.data?.message || 'This reset link is invalid or has expired.');
+        setError(err.response?.data?.message || 'Ce lien de réinitialisation est invalide ou a expiré.');
       } finally {
         setIsValidating(false);
       }
@@ -71,25 +71,22 @@ const ResetPasswordPage: React.FC = () => {
     e.preventDefault();
 
     if (password !== confirmPassword) {
-      toast.error('Passwords do not match');
+      toast.error('Les mots de passe ne correspondent pas');
       return;
     }
 
     if (!isStrongPassword(password)) {
-      toast.error('Password must be at least 8 characters and include uppercase, lowercase, and a number.');
+      toast.error('Le mot de passe doit contenir au moins 8 caractères avec une majuscule, une minuscule et un chiffre.');
       return;
     }
 
     setIsSubmitting(true);
     try {
-      await api.post('/auth/reset-password', {
-        token,
-        password,
-      });
+      await api.post('/auth/reset-password', { token, password });
       setIsSuccess(true);
-      toast.success('Password reset successfully!');
+      toast.success('Mot de passe réinitialisé !');
     } catch (err: any) {
-      toast.error(err.response?.data?.message || 'Failed to reset password');
+      toast.error(err.response?.data?.message || 'Impossible de réinitialiser le mot de passe');
     } finally {
       setIsSubmitting(false);
     }
@@ -100,7 +97,7 @@ const ResetPasswordPage: React.FC = () => {
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/5 via-background to-accent/5 p-4">
         <div className="flex flex-col items-center gap-4">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          <p className="text-muted-foreground">Validating your reset link...</p>
+          <p className="text-muted-foreground">Validation de votre lien...</p>
         </div>
       </div>
     );
@@ -114,12 +111,12 @@ const ResetPasswordPage: React.FC = () => {
             <div className="flex justify-center mb-4">
               <CheckCircle2 className="h-12 w-12 text-success" />
             </div>
-            <CardTitle className="text-xl">Password Updated</CardTitle>
-            <CardDescription>Redirecting to login in {countdown} seconds...</CardDescription>
+            <CardTitle className="text-xl">Mot de passe mis à jour</CardTitle>
+            <CardDescription>Redirection dans {countdown} secondes...</CardDescription>
           </CardHeader>
           <CardFooter>
             <Button className="w-full h-11" onClick={() => navigate('/login')}>
-              Back to Login
+              Retour à la connexion
             </Button>
           </CardFooter>
         </Card>
@@ -135,15 +132,15 @@ const ResetPasswordPage: React.FC = () => {
             <div className="flex justify-center mb-4">
               <XCircle className="h-12 w-12 text-destructive" />
             </div>
-            <CardTitle className="text-xl">Invalid Request</CardTitle>
+            <CardTitle className="text-xl">Demande invalide</CardTitle>
             <CardDescription>{error}</CardDescription>
           </CardHeader>
           <CardFooter className="flex-col gap-2">
             <Button className="w-full h-11" onClick={() => navigate('/auth/forgot-password')}>
-              Request New Link
+              Demander un nouveau lien
             </Button>
             <Button variant="ghost" className="w-full" onClick={() => navigate('/login')}>
-              Back to Login
+              Retour à la connexion
             </Button>
           </CardFooter>
         </Card>
@@ -159,23 +156,23 @@ const ResetPasswordPage: React.FC = () => {
             <FileText className="h-6 w-6" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-foreground">CV Manager</h1>
-            <p className="text-sm text-muted-foreground">Reset your password</p>
+            <h1 className="text-2xl font-bold text-foreground">NextRH</h1>
+            <p className="text-sm text-muted-foreground">Réinitialiser votre mot de passe</p>
           </div>
         </div>
 
         <Card className="shadow-xl border-0">
           <CardHeader className="text-center pb-4">
-            <CardTitle className="text-xl">Create New Password</CardTitle>
+            <CardTitle className="text-xl">Créer un nouveau mot de passe</CardTitle>
             <CardDescription>
-              Resetting password for <span className="font-medium text-foreground">{email}</span>
+              Réinitialisation pour <span className="font-medium text-foreground">{email}</span>
             </CardDescription>
           </CardHeader>
 
           <form onSubmit={handleSubmit}>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="password">New Password</Label>
+                <Label htmlFor="password">Nouveau mot de passe</Label>
                 <Input
                   id="password"
                   type="password"
@@ -186,11 +183,11 @@ const ResetPasswordPage: React.FC = () => {
                   required
                 />
                 <p className="text-[10px] text-muted-foreground">
-                  At least 8 characters with uppercase, lowercase, and a number.
+                  Minimum 8 caractères avec majuscule, minuscule et chiffre.
                 </p>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="confirmPassword">Confirm Password</Label>
+                <Label htmlFor="confirmPassword">Confirmer le mot de passe</Label>
                 <Input
                   id="confirmPassword"
                   type="password"
@@ -208,10 +205,10 @@ const ResetPasswordPage: React.FC = () => {
                 {isSubmitting ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Updating...
+                    Mise à jour...
                   </>
                 ) : (
-                  'Reset Password'
+                  'Réinitialiser le mot de passe'
                 )}
               </Button>
             </CardFooter>

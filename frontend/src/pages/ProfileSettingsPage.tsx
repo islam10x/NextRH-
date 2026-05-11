@@ -7,9 +7,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { toast } from 'sonner';
-import { Camera, Loader2, Lock, Save, ShieldCheck, UserCircle2 } from 'lucide-react';
+import { Camera, Loader2, Lock, Save, ShieldCheck, UserCircle2, Users } from 'lucide-react';
+import { teamService } from '@/services/team.service';
 
-const passwordPolicyText = 'Minimum 8 characters, including at least 1 number and 1 special character.';
+const passwordPolicyText = 'Minimum 8 caractères, dont au moins 1 chiffre et 1 caractère spécial.';
 const passwordPolicyRegex = /^(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
 
 const ProfileSettingsPage: React.FC = () => {
@@ -26,6 +27,8 @@ const ProfileSettingsPage: React.FC = () => {
   const [savingProfile, setSavingProfile] = useState(false);
   const [savingAvatar, setSavingAvatar] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
+  const [teamName, setTeamName] = useState('');
+  const [savingTeam, setSavingTeam] = useState(false);
 
   const initials = useMemo(() => {
     const displayName = [firstName, lastName].filter(Boolean).join(' ').trim() || user?.name || email;
@@ -40,13 +43,18 @@ const ProfileSettingsPage: React.FC = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        const me = await profileService.getMe();
+        const [me] = await Promise.all([
+          profileService.getMe(),
+          user?.role === 'team_manager'
+            ? teamService.getMyTeam().then((info) => setTeamName(info?.teamName || '')).catch(() => {})
+            : Promise.resolve(),
+        ]);
         setFirstName(me.firstName || '');
         setLastName(me.lastName || '');
         setEmail(me.email || '');
         setAvatarUrl(me.avatarUrl || '');
       } catch (error: any) {
-        toast.error(error?.response?.data?.message || 'Failed to load your profile settings');
+        toast.error(error?.response?.data?.message || 'Impossible de charger vos paramètres de profil');
       } finally {
         setLoading(false);
       }
@@ -62,9 +70,9 @@ const ProfileSettingsPage: React.FC = () => {
       const updated = await profileService.updateProfile({ firstName, lastName });
       setAvatarUrl(updated.avatarUrl || '');
       updateUser(updated);
-      toast.success('Profile details updated');
+      toast.success('Profil mis à jour');
     } catch (error: any) {
-      toast.error(error?.response?.data?.message || 'Failed to update profile details');
+      toast.error(error?.response?.data?.message || 'Impossible de mettre à jour le profil');
     } finally {
       setSavingProfile(false);
     }
@@ -72,7 +80,7 @@ const ProfileSettingsPage: React.FC = () => {
 
   const handleAvatarUpload = async () => {
     if (!selectedFile) {
-      toast.error('Choose an image before uploading');
+      toast.error('Sélectionnez une image avant d\'importer');
       return;
     }
 
@@ -82,9 +90,9 @@ const ProfileSettingsPage: React.FC = () => {
       setAvatarUrl(updated.avatarUrl || '');
       updateUser(updated);
       setSelectedFile(null);
-      toast.success('Profile picture updated');
+      toast.success('Photo de profil mise à jour');
     } catch (error: any) {
-      toast.error(error?.response?.data?.message || 'Failed to upload profile picture');
+      toast.error(error?.response?.data?.message || 'Impossible d\'importer la photo');
     } finally {
       setSavingAvatar(false);
     }
@@ -94,7 +102,7 @@ const ProfileSettingsPage: React.FC = () => {
     e.preventDefault();
 
     if (newPassword !== confirmPassword) {
-      toast.error('New password and confirmation do not match');
+      toast.error('Les mots de passe ne correspondent pas');
       return;
     }
 
@@ -109,11 +117,28 @@ const ProfileSettingsPage: React.FC = () => {
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
-      toast.success('Password updated successfully');
+      toast.success('Mot de passe mis à jour');
     } catch (error: any) {
-      toast.error(error?.response?.data?.message || 'Failed to update password');
+      toast.error(error?.response?.data?.message || 'Impossible de mettre à jour le mot de passe');
     } finally {
       setSavingPassword(false);
+    }
+  };
+
+  const handleSaveTeam = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!teamName.trim() || teamName.trim().length < 2) {
+      toast.error('Le nom d\'équipe doit comporter au moins 2 caractères.');
+      return;
+    }
+    setSavingTeam(true);
+    try {
+      await teamService.updateMyTeam(teamName.trim(), null);
+      toast.success('Nom d\'équipe mis à jour');
+    } catch (error: any) {
+      toast.error(error?.response?.data?.message || 'Impossible de mettre à jour le nom d\'équipe');
+    } finally {
+      setSavingTeam(false);
     }
   };
 
@@ -128,8 +153,8 @@ const ProfileSettingsPage: React.FC = () => {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Profile Settings</h1>
-        <p className="text-sm text-muted-foreground">Manage your personal details, profile picture, and password.</p>
+        <h1 className="text-2xl font-bold text-foreground">Paramètres du profil</h1>
+        <p className="text-sm text-muted-foreground">Gérez vos informations personnelles, votre photo de profil et votre mot de passe.</p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
@@ -137,29 +162,29 @@ const ProfileSettingsPage: React.FC = () => {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <UserCircle2 className="h-5 w-5 text-primary" />
-              Personal Details
+              Informations personnelles
             </CardTitle>
-            <CardDescription>Only your authenticated account can update these values.</CardDescription>
+            <CardDescription>Seul votre compte authentifié peut modifier ces valeurs.</CardDescription>
           </CardHeader>
           <CardContent>
             <form className="space-y-4" onSubmit={handleSaveProfile}>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="firstName">First name</Label>
+                  <Label htmlFor="firstName">Prénom</Label>
                   <Input id="firstName" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="lastName">Last name</Label>
+                  <Label htmlFor="lastName">Nom</Label>
                   <Input id="lastName" value={lastName} onChange={(e) => setLastName(e.target.value)} />
                 </div>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
+                <Label htmlFor="email">E-mail</Label>
                 <Input id="email" value={email} disabled />
               </div>
               <Button type="submit" disabled={savingProfile}>
                 {savingProfile ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                Save Changes
+                Enregistrer
               </Button>
             </form>
           </CardContent>
@@ -169,9 +194,9 @@ const ProfileSettingsPage: React.FC = () => {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Camera className="h-5 w-5 text-primary" />
-              Profile Picture
+              Photo de profil
             </CardTitle>
-            <CardDescription>Visible in shared lists and account menus across the app.</CardDescription>
+            <CardDescription>Visible dans les listes partagées et les menus de compte de l'application.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center gap-4">
@@ -182,8 +207,8 @@ const ProfileSettingsPage: React.FC = () => {
                 </AvatarFallback>
               </Avatar>
               <div className="text-sm text-muted-foreground">
-                <p>Accepted formats: PNG, JPG, WEBP</p>
-                <p>Maximum file size: 5 MB</p>
+                <p>Formats acceptés : PNG, JPG, WEBP</p>
+                <p>Taille maximale : 5 Mo</p>
               </div>
             </div>
             <Input
@@ -193,24 +218,54 @@ const ProfileSettingsPage: React.FC = () => {
             />
             <Button type="button" variant="outline" onClick={handleAvatarUpload} disabled={!selectedFile || savingAvatar}>
               {savingAvatar ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Camera className="mr-2 h-4 w-4" />}
-              Upload Picture
+              Importer la photo
             </Button>
           </CardContent>
         </Card>
       </div>
 
+      {user?.role === 'team_manager' && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5 text-primary" />
+              Identité de l'équipe
+            </CardTitle>
+            <CardDescription>Définissez le nom qui apparaît sur votre tableau de bord et celui de vos membres.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form className="space-y-4 max-w-xl" onSubmit={handleSaveTeam}>
+              <div className="space-y-2">
+                <Label htmlFor="teamName">Nom de l'équipe</Label>
+                <Input
+                  id="teamName"
+                  value={teamName}
+                  onChange={(e) => setTeamName(e.target.value)}
+                  maxLength={80}
+                  placeholder="ex. Alpha Squad"
+                />
+              </div>
+              <Button type="submit" disabled={savingTeam}>
+                {savingTeam ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                Enregistrer
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Lock className="h-5 w-5 text-primary" />
-            Change Password
+            Changer le mot de passe
           </CardTitle>
-          <CardDescription>Enter your current password before saving a new one.</CardDescription>
+          <CardDescription>Saisissez votre mot de passe actuel avant d'en définir un nouveau.</CardDescription>
         </CardHeader>
         <CardContent>
           <form className="space-y-4 max-w-xl" onSubmit={handlePasswordChange}>
             <div className="space-y-2">
-              <Label htmlFor="currentPassword">Current password</Label>
+              <Label htmlFor="currentPassword">Mot de passe actuel</Label>
               <Input
                 id="currentPassword"
                 type="password"
@@ -220,7 +275,7 @@ const ProfileSettingsPage: React.FC = () => {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="newPassword">New password</Label>
+              <Label htmlFor="newPassword">Nouveau mot de passe</Label>
               <Input
                 id="newPassword"
                 type="password"
@@ -234,7 +289,7 @@ const ProfileSettingsPage: React.FC = () => {
               </p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="confirmPassword">Confirm new password</Label>
+              <Label htmlFor="confirmPassword">Confirmer le nouveau mot de passe</Label>
               <Input
                 id="confirmPassword"
                 type="password"
@@ -245,7 +300,7 @@ const ProfileSettingsPage: React.FC = () => {
             </div>
             <Button type="submit" disabled={savingPassword}>
               {savingPassword ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Lock className="mr-2 h-4 w-4" />}
-              Update Password
+              Mettre à jour
             </Button>
           </form>
         </CardContent>

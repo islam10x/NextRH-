@@ -51,10 +51,10 @@ const CVUploadPage: React.FC = () => {
 
   const validateFile = useCallback((uploadedFile: File): string | null => {
     if (!ALLOWED_TYPES.includes(uploadedFile.type)) {
-      return 'File type not supported. Please upload PDF, DOCX, PNG or JPG.';
+      return 'Type de fichier non supporté. Veuillez importer un PDF, DOCX, PNG ou JPG.';
     }
     if (uploadedFile.size > MAX_UPLOAD_BYTES) {
-      return 'File is too large. Maximum allowed size is 10MB.';
+      return 'Fichier trop volumineux. La taille maximale autorisée est 10 Mo.';
     }
     return null;
   }, []);
@@ -100,13 +100,13 @@ const CVUploadPage: React.FC = () => {
         const message = (err.response?.data as { message?: string } | undefined)?.message;
         const friendly =
           message?.includes('malware') || message?.includes('virus')
-            ? 'Upload blocked: malware detected in the file.'
+            ? 'Importation bloquée : logiciel malveillant détecté dans le fichier.'
             : message;
-        setError(friendly || 'Upload failed. Please try again.');
-        toast.error(friendly || 'Upload failed. Please try again.');
+        setError(friendly || 'Échec de l\'importation. Veuillez réessayer.');
+        toast.error(friendly || 'Échec de l\'importation. Veuillez réessayer.');
       } else {
-        setError('Upload failed. Please try again.');
-        toast.error('Upload failed. Please try again.');
+        setError('Échec de l\'importation. Veuillez réessayer.');
+        toast.error('Échec de l\'importation. Veuillez réessayer.');
       }
     }
   }, [loadMetadata]);
@@ -174,13 +174,13 @@ const CVUploadPage: React.FC = () => {
   const getStatusMessage = (): string => {
     switch (uploadStatus) {
       case 'uploading':
-        return 'Uploading your CV...';
+        return 'Importation du CV en cours...';
       case 'parsing':
-        return 'Parsing document with AI...';
+        return 'Analyse du document par l\'IA...';
       case 'completed':
-        return 'CV uploaded successfully!';
+        return 'CV importé avec succès !';
       case 'error':
-        return 'Upload failed. Please try again.';
+        return 'Échec de l\'importation. Veuillez réessayer.';
       default:
         return '';
     }
@@ -189,15 +189,15 @@ const CVUploadPage: React.FC = () => {
   return (
     <div className="space-y-6 max-w-3xl mx-auto">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Upload CV</h1>
-        <p className="text-muted-foreground">Upload your CV to keep your profile up to date</p>
+        <h1 className="text-2xl font-bold text-foreground">Importer le CV</h1>
+        <p className="text-muted-foreground">Importez votre CV pour maintenir votre profil à jour</p>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>CV Document</CardTitle>
+          <CardTitle>Document CV</CardTitle>
           <CardDescription>
-            Upload your CV in PDF, DOCX, PNG or JPG format. The system will automatically parse and extract information.
+            Importez votre CV au format PDF, DOCX, PNG ou JPG. Le système analysera et extraira automatiquement les informations.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -237,15 +237,15 @@ const CVUploadPage: React.FC = () => {
                 </div>
                 <div className="text-center">
                   <p className="text-lg font-medium">
-                    {dragActive ? 'Drop your file here' : 'Drag and drop your CV'}
+                    {dragActive ? 'Déposez votre fichier ici' : 'Glissez-déposez votre CV'}
                   </p>
                   <p className="text-sm text-muted-foreground mt-1">
-                    or click to browse (PDF, DOCX, PNG, JPG up to 10MB)
+                    ou cliquez pour parcourir (PDF, DOCX, PNG, JPG jusqu'à 10 Mo)
                   </p>
                 </div>
                 <Button variant="outline" className="mt-2">
                   <FileText className="h-4 w-4 mr-2" />
-                  Select File
+                  Sélectionner un fichier
                 </Button>
               </div>
               {error && (
@@ -282,7 +282,7 @@ const CVUploadPage: React.FC = () => {
                 {uploadStatus === 'parsing' && (
                   <div className="flex items-center justify-center gap-2 py-4">
                     <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                    <span className="text-sm text-muted-foreground">Analyzing document structure...</span>
+                    <span className="text-sm text-muted-foreground">Analyse de la structure du document...</span>
                   </div>
                 )}
 
@@ -291,9 +291,9 @@ const CVUploadPage: React.FC = () => {
                     <div className="flex items-center gap-3">
                       <CheckCircle className="h-5 w-5 text-success" />
                       <div>
-                        <p className="font-medium text-success">Upload Complete</p>
+                        <p className="font-medium text-success">Importation terminée</p>
                         <p className="text-sm text-muted-foreground">
-                          Your CV has been successfully uploaded and parsed.
+                          Votre CV a été importé et analysé avec succès.
                         </p>
                       </div>
                     </div>
@@ -302,15 +302,16 @@ const CVUploadPage: React.FC = () => {
 
                 {/* Status Steps */}
                 <div className="flex items-center justify-center gap-2 py-4">
-                  {['Uploading', 'Parsing', 'Completed'].map((step, index) => {
+                  {['Importation', 'Analyse', 'Terminé'].map((step, index) => {
+                    const statusKey = ['uploading', 'parsing', 'completed'][index];
                     const isActive =
-                      (step === 'Uploading' && uploadStatus === 'uploading') ||
-                      (step === 'Parsing' && uploadStatus === 'parsing') ||
-                      (step === 'Completed' && uploadStatus === 'completed');
+                      (index === 0 && uploadStatus === 'uploading') ||
+                      (index === 1 && uploadStatus === 'parsing') ||
+                      (index === 2 && uploadStatus === 'completed');
                     const isCompleted =
-                      (step === 'Uploading' && ['parsing', 'completed'].includes(uploadStatus)) ||
-                      (step === 'Parsing' && uploadStatus === 'completed') ||
-                      (step === 'Completed' && uploadStatus === 'completed');
+                      (index === 0 && ['parsing', 'completed'].includes(uploadStatus)) ||
+                      (index === 1 && uploadStatus === 'completed') ||
+                      (index === 2 && uploadStatus === 'completed');
 
                     return (
                       <React.Fragment key={step}>
@@ -352,17 +353,17 @@ const CVUploadPage: React.FC = () => {
                 {uploadStatus === 'completed' && (
                   <>
                     <Button variant="outline" onClick={handleReset}>
-                      Upload Another
+                      Importer un autre
                     </Button>
                     <Button>
                       <FileText className="h-4 w-4 mr-2" />
-                      View CV
+                      Voir le CV
                     </Button>
                   </>
                 )}
                 {(uploadStatus === 'uploading' || uploadStatus === 'parsing') && (
                   <Button variant="outline" onClick={handleReset}>
-                    Cancel
+                    Annuler
                   </Button>
                 )}
               </div>
@@ -374,14 +375,14 @@ const CVUploadPage: React.FC = () => {
       {metadata && (
         <Card>
           <CardHeader>
-            <CardTitle>Parsed Profile Snapshot</CardTitle>
-            <CardDescription>Data extracted from your uploaded documents</CardDescription>
+            <CardTitle>Aperçu du profil extrait</CardTitle>
+            <CardDescription>Données extraites de vos documents importés</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
-            <p><span className="font-medium">Name:</span> {metadata.name}</p>
-            <p><span className="font-medium">Experience:</span> {metadata.experience_years} years</p>
-            <p><span className="font-medium">Last Update:</span> {metadata.last_update}</p>
-            <p><span className="font-medium">Skills:</span> {metadata.skills.length ? metadata.skills.join(', ') : 'None detected yet'}</p>
+            <p><span className="font-medium">Nom :</span> {metadata.name}</p>
+            <p><span className="font-medium">Expérience :</span> {metadata.experience_years} ans</p>
+            <p><span className="font-medium">Dernière mise à jour :</span> {metadata.last_update}</p>
+            <p><span className="font-medium">Compétences :</span> {metadata.skills.length ? metadata.skills.join(', ') : 'Aucune détectée'}</p>
           </CardContent>
         </Card>
       )}
@@ -389,25 +390,25 @@ const CVUploadPage: React.FC = () => {
       {/* Tips Card */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Tips for Best Results</CardTitle>
+          <CardTitle className="text-lg">Conseils pour de meilleurs résultats</CardTitle>
         </CardHeader>
         <CardContent>
           <ul className="space-y-2 text-sm text-muted-foreground">
             <li className="flex items-start gap-2">
               <CheckCircle className="h-4 w-4 text-success mt-0.5 shrink-0" />
-              Use a clean, well-formatted CV with clear section headings
+              Utilisez un CV propre et bien formaté avec des titres de section clairs
             </li>
             <li className="flex items-start gap-2">
               <CheckCircle className="h-4 w-4 text-success mt-0.5 shrink-0" />
-              Include your certifications with dates and credential IDs
+              Incluez vos certifications avec les dates et identifiants d'accréditation
             </li>
             <li className="flex items-start gap-2">
               <CheckCircle className="h-4 w-4 text-success mt-0.5 shrink-0" />
-              List technologies and skills used in each project
+              Listez les technologies et compétences utilisées dans chaque projet
             </li>
             <li className="flex items-start gap-2">
               <CheckCircle className="h-4 w-4 text-success mt-0.5 shrink-0" />
-              PDF format is recommended for best parsing accuracy
+              Le format PDF est recommandé pour une meilleure précision d'analyse
             </li>
           </ul>
         </CardContent>

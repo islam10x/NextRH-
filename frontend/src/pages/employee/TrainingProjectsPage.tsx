@@ -34,6 +34,9 @@ import {
   Code,
   ChevronRight,
   Upload,
+  Check,
+  X,
+  Info,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
@@ -55,7 +58,6 @@ const TrainingProjectsPage: React.FC = () => {
   const [completionComment, setCompletionComment] = useState<string>('');
   const [completionFile, setCompletionFile] = useState<File | null>(null);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [projectRole, setProjectRole] = useState('');
   const [projectDescription, setProjectDescription] = useState('');
   const [formationFile, setFormationFile] = useState<File | null>(null);
   const [uploadingFormation, setUploadingFormation] = useState(false);
@@ -93,11 +95,11 @@ const TrainingProjectsPage: React.FC = () => {
           description: completionComment || undefined,
             });
           }
-      toast.success('Training marked as completed — your score has been updated');
+      toast.success('Formation marquée comme terminée — votre score a été mis à jour');
       setCompletionDialogOpen(false);
       loadTrainings();
     } catch (error: any) {
-      toast.error(error?.response?.data?.message || 'Unable to complete training');
+      toast.error(error?.response?.data?.message || 'Impossible de terminer la formation');
     } finally {
       setIsSubmitting(false);
     }
@@ -111,7 +113,7 @@ const TrainingProjectsPage: React.FC = () => {
       setTrainings(data);
     } catch (error: any) {
       console.error('Failed to fetch trainings', error);
-      toast.error(error?.response?.data?.message || 'Failed to load trainings');
+      toast.error(error?.response?.data?.message || 'Échec du chargement des formations');
     } finally {
       setIsLoading(false);
     }
@@ -129,7 +131,7 @@ const TrainingProjectsPage: React.FC = () => {
       setProjects(data);
     } catch (error: any) {
       console.error('Failed to fetch projects', error);
-      toast.error(error?.response?.data?.message || 'Failed to load projects');
+      toast.error(error?.response?.data?.message || 'Échec du chargement des projets');
     } finally {
       setIsProjectLoading(false);
     }
@@ -161,24 +163,10 @@ const TrainingProjectsPage: React.FC = () => {
   const handleStart = async (trainingId: string) => {
     try {
       await trainingService.start(trainingId);
-      toast.success('Training marked as started');
+      toast.success('Formation marquée comme démarrée');
       loadTrainings();
     } catch (error: any) {
-      toast.error(error?.response?.data?.message || 'Unable to start training');
-    }
-  };
-
-  const handleUploadProof = async (trainingId: string, file?: File | null) => {
-    if (!file) {
-      toast.error('Please select a file');
-      return;
-    }
-    try {
-      await trainingService.uploadProof(trainingId, file);
-      toast.success('Proof uploaded, training completed');
-      loadTrainings();
-    } catch (error: any) {
-      toast.error(error?.response?.data?.message || 'Upload failed');
+      toast.error(error?.response?.data?.message || 'Impossible de démarrer la formation');
     }
   };
 
@@ -201,9 +189,9 @@ const TrainingProjectsPage: React.FC = () => {
   };
 
   const statusBadge = (status?: string) => {
-    if (status === 'completed') return <Badge className="bg-success/15 text-success">Completed</Badge>;
-    if (status === 'in_progress') return <Badge className="bg-primary/15 text-primary">In progress</Badge>;
-    return <Badge variant="secondary">Assigned</Badge>;
+    if (status === 'completed') return <Badge className="bg-success/15 text-success">Terminée</Badge>;
+    if (status === 'in_progress') return <Badge className="bg-primary/15 text-primary">En cours</Badge>;
+    return <Badge variant="secondary">Assignée</Badge>;
   };
 
   const TrainingCard: React.FC<{ training: Training }> = ({ training }) => (
@@ -222,12 +210,12 @@ const TrainingProjectsPage: React.FC = () => {
               <p className="text-sm text-muted-foreground">{training.provider}</p>
             )}
             {training.assignedByName && (
-              <p className="text-xs text-muted-foreground">Assigned by {training.assignedByName}</p>
+              <p className="text-xs text-muted-foreground">Assigné par {training.assignedByName}</p>
             )}
             <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
               <span className="flex items-center gap-1">
                 <Calendar className="h-3 w-3" />
-                {training.dueDate ? formatDate(training.dueDate) : 'No due date'}
+                {training.dueDate ? formatDate(training.dueDate) : 'Pas d\'échéance'}
               </span>
               {training.trainingUrl && (
                 <a
@@ -237,7 +225,7 @@ const TrainingProjectsPage: React.FC = () => {
                   className="inline-flex items-center gap-1 text-primary hover:underline"
                 >
                   <ChevronRight className="h-3 w-3" />
-                  Training link
+                  Lien de la formation
                 </a>
               )}
             </div>
@@ -245,12 +233,12 @@ const TrainingProjectsPage: React.FC = () => {
             <div className="flex items-center gap-2 mt-3">
               {training.status !== 'in_progress' && training.status !== 'completed' && (
                 <Button size="sm" variant="outline" onClick={() => handleStart(training.id)}>
-                  Start
+                  Commencer
                 </Button>
               )}
               {training.status === 'in_progress' && (
                 <Button size="sm" onClick={() => openCompletionDialog(training)}>
-                  Mark as completed
+                  Marquer comme terminée
                 </Button>
               )}
               {training.proofFilePath && (
@@ -288,15 +276,15 @@ const TrainingProjectsPage: React.FC = () => {
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Calendar className="h-3 w-3" />
             <span>
-              {formatDate(project.startDate)} - {project.endDate ? formatDate(project.endDate) : 'Present'}
+              {formatDate(project.startDate)} - {project.endDate ? formatDate(project.endDate) : 'En cours'}
             </span>
           </div>
           {project.assignedByName && (
-            <p className="text-xs text-muted-foreground">Assigned by {project.assignedByName}</p>
+            <p className="text-xs text-muted-foreground">Assigné par {project.assignedByName}</p>
           )}
 
           <p className="text-sm text-muted-foreground line-clamp-2">
-            {project.description || 'Add your contribution details to help build your CV.'}
+            {project.description || 'Ajoutez vos détails de contribution pour enrichir votre CV.'}
           </p>
 
           <div className="flex flex-wrap gap-1.5">
@@ -319,7 +307,7 @@ const TrainingProjectsPage: React.FC = () => {
                 setIsProjectDialogOpen(true);
               }}
             >
-              Update Contribution
+              Mettre à jour ma contribution
             </Button>
           </div>
         </div>
@@ -332,8 +320,8 @@ const TrainingProjectsPage: React.FC = () => {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Training & Projects</h1>
-        <p className="text-muted-foreground">Track your professional development and project experience</p>
+        <h1 className="text-2xl font-bold text-foreground">Formations & Projets</h1>
+        <p className="text-muted-foreground">Suivez votre développement professionnel et votre expérience projet</p>
       </div>
 
       {/* Tabs */}
@@ -341,18 +329,18 @@ const TrainingProjectsPage: React.FC = () => {
         <TabsList className="grid w-full max-w-md grid-cols-2">
           <TabsTrigger value="trainings" className="flex items-center gap-2">
             <GraduationCap className="h-4 w-4" />
-            Training ({trainings.length})
+            Formations ({trainings.length})
           </TabsTrigger>
           <TabsTrigger value="projects" className="flex items-center gap-2">
             <Briefcase className="h-4 w-4" />
-            Projects ({projects.length})
+            Projets ({projects.length})
           </TabsTrigger>
         </TabsList>
 
         {/* Training Tab */}
         <TabsContent value="trainings" className="space-y-4">
           {isLoading ? (
-            <Card><CardContent className="py-8 text-center text-muted-foreground">Loading trainings...</CardContent></Card>
+            <Card><CardContent className="py-8 text-center text-muted-foreground">Chargement des formations...</CardContent></Card>
           ) : trainings.length > 0 ? (
             <div className="grid gap-4 md:grid-cols-2">
               {trainings.map((training) => (
@@ -363,9 +351,9 @@ const TrainingProjectsPage: React.FC = () => {
             <Card>
               <CardContent className="py-12 text-center">
                 <GraduationCap className="h-12 w-12 mx-auto text-muted-foreground/50 mb-4" />
-                <h3 className="font-medium text-lg mb-1">No training records</h3>
+                <h3 className="font-medium text-lg mb-1">Aucune formation enregistrée</h3>
                 <p className="text-muted-foreground text-sm">
-                  Trainings are assigned by your manager. Check back soon.
+                  Les formations sont assignées par votre manager. Revenez bientôt.
                 </p>
               </CardContent>
             </Card>
@@ -375,7 +363,7 @@ const TrainingProjectsPage: React.FC = () => {
         {/* Projects Tab */}
         <TabsContent value="projects" className="space-y-4">
           {isProjectLoading ? (
-            <Card><CardContent className="py-8 text-center text-muted-foreground">Loading projects...</CardContent></Card>
+            <Card><CardContent className="py-8 text-center text-muted-foreground">Chargement des projets...</CardContent></Card>
           ) : projects.length > 0 ? (
             <div className="grid gap-4 md:grid-cols-2">
               {projects.map((project) => (
@@ -386,9 +374,9 @@ const TrainingProjectsPage: React.FC = () => {
             <Card>
               <CardContent className="py-16 text-center">
                 <Briefcase className="h-12 w-12 mx-auto text-muted-foreground/50 mb-4" />
-                <h3 className="font-medium text-lg mb-1">No assigned projects</h3>
+                <h3 className="font-medium text-lg mb-1">Aucun projet assigné</h3>
                 <p className="text-muted-foreground text-sm mb-4">
-                  Your manager will assign projects here. Once assigned, add your contribution details.
+                  Votre manager assignera des projets ici. Une fois assigné, ajoutez vos détails de contribution.
                 </p>
               </CardContent>
             </Card>
@@ -429,46 +417,100 @@ const TrainingProjectsPage: React.FC = () => {
       <Dialog open={completionDialogOpen} onOpenChange={setCompletionDialogOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Complete Training</DialogTitle>
+            <DialogTitle>Terminer la formation</DialogTitle>
             <DialogDescription>
-              Confirm completion and optionally attach a certification proof.
+              Confirmez que vous avez terminé cette formation.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            <div className="space-y-1">
-              <Label>Training</Label>
-              <p className="text-lg font-semibold text-green-700">{selectedTraining?.name}</p>
+            {/* Training name highlight */}
+            <div className="rounded-lg bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 p-3 flex items-center gap-3">
+              <GraduationCap className="h-5 w-5 text-green-600 dark:text-green-400 shrink-0" />
+              <p className="font-semibold text-green-700 dark:text-green-300">{selectedTraining?.name}</p>
             </div>
-            <div className="space-y-1">
-              <Label htmlFor="description">Comment for manager (optional)</Label>
+
+            {/* Comment */}
+            <div className="space-y-1.5">
+              <Label htmlFor="description">
+                Commentaire pour le manager{' '}
+                <span className="text-muted-foreground font-normal text-xs">(optionnel)</span>
+              </Label>
               <Textarea
                 id="description"
                 value={completionComment}
                 onChange={(e) => setCompletionComment(e.target.value)}
-                placeholder="Notes for your manager (optional)"
+                placeholder="Partagez vos impressions ou remarques avec votre manager..."
+                rows={3}
               />
             </div>
-            <div className="space-y-1">
-              <Label htmlFor="proof">Upload certification (optional)</Label>
-              <Input
-                id="proof"
-                type="file"
-                accept=".pdf,.docx,.png,.jpg,.jpeg"
-                onChange={(e) => setCompletionFile(e.target.files?.[0] || null)}
-              />
-              {completionFile && (
-                <p className="text-xs text-muted-foreground">Selected: {completionFile.name}</p>
+
+            {/* Proof upload — improved UX */}
+            <div className="space-y-2">
+              <Label>
+                Preuve de certification{' '}
+                <span className="text-muted-foreground font-normal text-xs">(optionnel)</span>
+              </Label>
+              {completionFile ? (
+                <div className="flex items-center gap-3 p-3 rounded-lg bg-primary/5 border border-primary/20">
+                  <Check className="h-4 w-4 text-primary shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{completionFile.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {(completionFile.size / 1024).toFixed(0)} KB
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 shrink-0"
+                    onClick={() => setCompletionFile(null)}
+                    aria-label="Supprimer le fichier"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <label
+                    htmlFor="proof"
+                    className="flex flex-col items-center gap-2 p-4 rounded-lg border-2 border-dashed border-muted hover:border-primary/40 cursor-pointer transition-colors text-center"
+                  >
+                    <Upload className="h-5 w-5 text-muted-foreground" />
+                    <span className="text-sm text-muted-foreground">
+                      Cliquez pour joindre une certification
+                    </span>
+                    <span className="text-xs text-muted-foreground">PDF, DOCX, PNG, JPG</span>
+                    <input
+                      id="proof"
+                      type="file"
+                      accept=".pdf,.docx,.png,.jpg,.jpeg"
+                      className="hidden"
+                      onChange={(e) => setCompletionFile(e.target.files?.[0] || null)}
+                    />
+                  </label>
+                  <div className="rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-2.5 flex items-start gap-2">
+                    <Info className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                    <p className="text-xs text-amber-700 dark:text-amber-300">
+                      Vous pouvez terminer sans preuve. Joindre une certification officielle permet de valider votre complétion et améliore votre score.
+                    </p>
+                  </div>
+                </div>
               )}
             </div>
+
+            {/* Related project */}
             {projects.length > 0 && (
-              <div className="space-y-1">
-                <Label htmlFor="relatedProject">Related project (optional)</Label>
+              <div className="space-y-1.5">
+                <Label htmlFor="relatedProject">
+                  Projet associé{' '}
+                  <span className="text-muted-foreground font-normal text-xs">(optionnel)</span>
+                </Label>
                 <Select value={completionProjectId} onValueChange={(v) => setCompletionProjectId(v === 'none' ? '' : v)}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Select a project..." />
+                    <SelectValue placeholder="Sélectionner un projet..." />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">None</SelectItem>
+                    <SelectItem value="none">Aucun</SelectItem>
                     {projects.map((p) => (
                       <SelectItem key={p.id} value={p.id}>
                         {p.name}{p.client ? ` — ${p.client}` : ''}
@@ -481,10 +523,10 @@ const TrainingProjectsPage: React.FC = () => {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCompletionDialogOpen(false)}>
-              Cancel
+              Annuler
             </Button>
             <Button onClick={handleComplete} disabled={!selectedTraining || isSubmitting}>
-              {isSubmitting ? 'Submitting...' : 'Confirm completion'}
+              {isSubmitting ? 'Envoi en cours...' : completionFile ? 'Confirmer avec preuve' : 'Confirmer sans preuve'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -494,22 +536,22 @@ const TrainingProjectsPage: React.FC = () => {
       <Dialog open={isProjectDialogOpen} onOpenChange={setIsProjectDialogOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Update Contribution</DialogTitle>
+            <DialogTitle>Mettre à jour ma contribution</DialogTitle>
             <DialogDescription>
-              Describe what you contributed to this project. This will appear in your CV.
+              Décrivez votre contribution à ce projet. Cela apparaîtra dans votre CV.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1">
-              <Label>Project</Label>
-              <p className="text-sm font-semibold text-foreground">{selectedProject?.name || 'Project'}</p>
+              <Label>Projet</Label>
+              <p className="text-sm font-semibold text-foreground">{selectedProject?.name || 'Projet'}</p>
               {selectedProject?.client && (
                 <p className="text-xs text-muted-foreground">{selectedProject.client}</p>
               )}
             </div>
             {selectedProject?.role && (
               <div className="space-y-1">
-                <Label>Your Role</Label>
+                <Label>Votre rôle</Label>
                 <p className="text-sm text-muted-foreground">{selectedProject.role}</p>
               </div>
             )}
@@ -519,14 +561,14 @@ const TrainingProjectsPage: React.FC = () => {
                 id="projectContribution"
                 value={projectDescription}
                 onChange={(e) => setProjectDescription(e.target.value)}
-                placeholder="Describe your contributions and achievements..."
+                placeholder="Décrivez vos contributions et réalisations..."
                 rows={5}
               />
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsProjectDialogOpen(false)}>
-              Cancel
+              Annuler
             </Button>
             <Button
               onClick={async () => {
@@ -535,15 +577,15 @@ const TrainingProjectsPage: React.FC = () => {
                   await projectService.updateParticipation(selectedProject.id, {
                     description: projectDescription,
                   });
-                  toast.success('Project contribution updated');
+                  toast.success('Contribution au projet mise à jour');
                   setIsProjectDialogOpen(false);
                   loadProjects();
                 } catch (error: any) {
-                  toast.error(error?.response?.data?.message || 'Unable to update project');
+                  toast.error(error?.response?.data?.message || 'Impossible de mettre à jour le projet');
                 }
               }}
             >
-              Save Changes
+              Enregistrer
             </Button>
           </DialogFooter>
         </DialogContent>

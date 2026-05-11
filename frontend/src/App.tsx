@@ -12,6 +12,7 @@ import ResetPasswordPage from "@/pages/auth/ResetPasswordPage";
 import { EmployeeDashboard, CVUploadPage, CertificationsPage, TrainingProjectsPage, CVPreviewPage, EmployeeScoringPage } from "@/pages/employee";
 import { ManagerDashboard, TeamMembersPage, MemberProfilePage, CertificationTrackingPage, ManagerTrainingsPage, ManagerProjectsPage, ManagerScoringPage } from "@/pages/manager";
 import { BIDDashboard, EmployeeDirectoryPage, AIChatPage, CVGenerationPage } from "@/pages/bid";
+import BIDScoringPage from "@/pages/bid/BIDScoringPage";
 import ProfileSettingsPage from "./pages/ProfileSettingsPage";
 import NotFound from "./pages/NotFound";
 
@@ -63,7 +64,7 @@ const App = () => (
             <Route element={<MainLayout requiredRole="bid_manager" />}>
               <Route path="/bid/dashboard" element={<BIDDashboard />} />
               <Route path="/bid/directory" element={<EmployeeDirectoryPage />} />
-              <Route path="/bid/scoring" element={<Navigate to="/bid/dashboard" replace />} />
+              <Route path="/bid/scoring" element={<BIDScoringPage />} />
               <Route path="/bid/employee/:memberId" element={<MemberProfilePage />} />
               <Route path="/bid/ai-chat" element={<AIChatPage />} />
               <Route path="/bid/cv-generation" element={<CVGenerationPage />} />

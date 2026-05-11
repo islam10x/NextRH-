@@ -56,7 +56,7 @@ export class UsersService {
 
     async findAll(managerId?: string): Promise<any[]> {
         const query = this.usersRepository.createQueryBuilder('u')
-            .select(['u.user_id', 'u.email', 'u.firstName', 'u.lastName', 'u.role', 'u.status', 'u.createdAt', 'u.updatedAt', 'u.invitedBy', 'u.avatarPath'])
+            .select(['u.user_id', 'u.email', 'u.firstName', 'u.lastName', 'u.role', 'u.status', 'u.createdAt', 'u.updatedAt', 'u.invitedBy', 'u.invitedAt', 'u.avatarPath'])
             .leftJoin('team_members', 'tm', 'tm.employee_id = u.user_id')
             .leftJoin('teams', 't', 't.team_id = tm.team_id');
             
@@ -251,6 +251,7 @@ export class UsersService {
             status: user.status,
             createdAt: user.createdAt,
             updatedAt: user.updatedAt,
+            invitedAt: user.invitedAt ?? null,
             avatarUrl: this.getAvatarUrl(user.avatarPath),
         };
     }

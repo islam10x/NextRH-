@@ -11,6 +11,7 @@ export interface BidCertStats {
 
 export interface BidDashboardStats {
   totalEmployees: number;
+  activeEmployees: number;
   totalTeams: number;
   certStats: BidCertStats;
 }
@@ -48,9 +49,11 @@ export const bidService = {
     ]);
 
     const employees = (usersRes.data as any[]).filter((u) => u.role === 'employee');
+    const activeEmployees = employees.filter((u) => u.isActive !== false && u.status !== 'inactive').length;
 
     return {
       totalEmployees: employees.length,
+      activeEmployees,
       totalTeams: teamsRes.data.count,
       certStats: certStatsRes.data as BidCertStats,
     };
@@ -72,13 +75,16 @@ export const bidService = {
     employeeId: string,
     templateFile: File,
     format: 'docx' | 'pdf' = 'docx',
-    engine: 'primary' | 'fallback' = 'primary',
-  ): Promise<Blob> {
+    language: 'en' | 'fr' | 'original' = 'original',
+    engine: 'primary' | 'fallback' = 'fallback',
+    options?: { signal?: AbortSignal },
+  ): Promise<{ blob: Blob; warnings: CvWarning[] }> {
     const formData = new FormData();
     formData.append('template', templateFile);
     formData.append('employeeId', employeeId);
 
-    const res = await api.post(`/cv/generate?format=${format}&engine=${engine}`, formData, {
+    const params = new URLSearchParams({ format, language, engine });
+    const res = await api.post(`/cv/generate?${params.toString()}`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
       responseType: 'blob',
       signal: options?.signal,
@@ -199,10 +205,9 @@ export const bidService = {
     templateEmployeeId: string,
     targetEmployeeId: string,
     format: 'docx' | 'pdf' = 'docx',
-    engine: 'primary' | 'fallback' = 'primary',
   ): Promise<Blob> {
     const res = await api.post(
-      `/cv/generate-from-stored?format=${format}&engine=${engine}`,
+      `/cv/generate-from-stored?format=${format}`,
       { templateEmployeeId, targetEmployeeId },
       { responseType: 'blob' },
     );

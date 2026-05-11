@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
+import { EmptyState } from '@/components/common/EmptyState';
 import { Trophy, Calculator, FileCheck, ClipboardList, Info, BriefcaseBusiness, UserRound, CalendarClock, ChevronRight } from 'lucide-react';
 import {
   scoringService,
@@ -36,15 +37,15 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
 const currentYear = new Date().getFullYear();
 
-const complexityLabel: Record<string, string> = { low: 'Low', medium: 'Medium', high: 'High' };
+const complexityLabel: Record<string, string> = { low: 'Faible', medium: 'Moyenne', high: 'Élevée' };
 const complexityColor: Record<string, string> = {
-  low: 'border border-emerald-200 bg-emerald-50 text-emerald-700',
-  medium: 'border border-sky-200 bg-sky-50 text-sky-700',
-  high: 'border border-rose-200 bg-rose-50 text-rose-700',
+  low: 'border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400',
+  medium: 'border border-sky-200 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/30 text-sky-700 dark:text-sky-400',
+  high: 'border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-400',
 };
 
 const formatDate = (dateString?: string | null) => {
-  if (!dateString) return 'No date';
+  if (!dateString) return 'Aucune date';
   const parsed = new Date(dateString);
   if (Number.isNaN(parsed.getTime())) return dateString;
   return parsed.toLocaleDateString();
@@ -109,7 +110,7 @@ const ManagerScoringPage: React.FC = () => {
         })),
       );
     } catch {
-      toast.error('Failed to load team members');
+      toast.error("Impossible de charger les membres — veuillez actualiser la page.");
     }
   };
 
@@ -167,9 +168,14 @@ const ManagerScoringPage: React.FC = () => {
   };
 
   const fullTeamScores = getFullTeamScores();
-  const scoredMembersCount = leaderboard.length;
   const pendingReviewsCount = orderedPendingEvaluations.length;
   const totalMembersCount = fullTeamScores.length;
+  const scoredEntries = leaderboard.filter((e) => e.finalScore > 0);
+  const scoredMembersCount = scoredEntries.length;
+  const avgScore = scoredMembersCount > 0
+    ? scoredEntries.reduce((sum, e) => sum + e.finalScore, 0) / scoredMembersCount
+    : null;
+  const topEntry = scoredEntries[0] ?? null;
 
   const handleOpenBreakdown = async (entry: LeaderboardEntry) => {
     setSelectedEntry(entry);
@@ -191,11 +197,11 @@ const ManagerScoringPage: React.FC = () => {
     setSettingTarget(true);
     try {
       await scoringService.setTarget(targetProfileId, year, targetCertValue);
-      toast.success('Certification target updated');
+      toast.success('Objectif de certification mis à jour');
       setTargetOpen(false);
       await loadLeaderboard();
     } catch (error: unknown) {
-      toast.error(getApiErrorMessage(error, 'Failed to set target'));
+      toast.error(getApiErrorMessage(error, 'Impossible de définir l\'objectif'));
     } finally {
       setSettingTarget(false);
     }
@@ -205,10 +211,10 @@ const ManagerScoringPage: React.FC = () => {
     setLoading(true);
     try {
       await scoringService.computeTeamScores(year);
-      toast.success('Team scores computed');
+      toast.success('Scores de l\'équipe calculés');
       await loadLeaderboard();
     } catch (error: unknown) {
-      toast.error(getApiErrorMessage(error, 'Score calculation failed'));
+      toast.error(getApiErrorMessage(error, 'Échec du calcul des scores'));
     } finally {
       setLoading(false);
     }
@@ -218,14 +224,14 @@ const ManagerScoringPage: React.FC = () => {
     const rawScore = externalScores[recordId];
     const numericScore = Number(rawScore);
     if (!Number.isFinite(numericScore) || numericScore < 0 || numericScore > 20) {
-      toast.error('Enter a score between 0 and 20.');
+      toast.error('Saisissez un score entre 0 et 20.');
       return;
     }
 
     setSubmittingExternal(recordId);
     try {
       await scoringService.scoreExternalEvaluation(recordId, numericScore);
-      toast.success('External evaluation saved and added to the score');
+      toast.success('Évaluation externe enregistrée et ajoutée au score');
       setExternalScores((prev) => ({ ...prev, [recordId]: '' }));
       await Promise.all([loadPendingExternalEvaluations(), loadLeaderboard()]);
       window.dispatchEvent(new Event('scoring:updated'));
@@ -237,7 +243,7 @@ const ManagerScoringPage: React.FC = () => {
         setSearchParams(next, { replace: true });
       }
     } catch (error: unknown) {
-      toast.error(getApiErrorMessage(error, 'Failed to submit external score'));
+      toast.error(getApiErrorMessage(error, 'Échec de la soumission du score externe'));
     } finally {
       setSubmittingExternal(null);
     }
@@ -248,14 +254,14 @@ const ManagerScoringPage: React.FC = () => {
       <div className="flex items-center justify-between">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold">Team Scoring</h1>
+            <h1 className="text-2xl font-bold">Scoring d'équipe</h1>
             {pendingReviewsCount > 0 && (
               <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">
-                {pendingReviewsCount} pending external review{pendingReviewsCount > 1 ? 's' : ''}
+                {pendingReviewsCount} révision{pendingReviewsCount > 1 ? 's' : ''} externe{pendingReviewsCount > 1 ? 's' : ''} en attente
               </Badge>
             )}
           </div>
-          <p className="text-muted-foreground">Use this page for ranking visibility and external review decisions.</p>
+          <p className="text-muted-foreground">Utilisez cette page pour la visibilité du classement et les décisions de révision externe.</p>
         </div>
         <div className="flex items-center gap-3">
           <Select value={String(year)} onValueChange={(v) => setYear(Number(v))}>
@@ -275,45 +281,85 @@ const ManagerScoringPage: React.FC = () => {
 
       <div className="flex gap-3 flex-wrap">
         <Button variant="outline" onClick={() => setTargetOpen(true)}>
-          <FileCheck className="mr-2 h-4 w-4" /> Set Certification Target
+          <FileCheck className="mr-2 h-4 w-4" /> Définir un objectif de certification
         </Button>
         <Button variant="secondary" onClick={handleComputeTeam} disabled={loading}>
           <Calculator className="mr-2 h-4 w-4" />
-          {loading ? 'Computing...' : 'Compute Scores'}
+          {loading ? 'Calcul en cours...' : 'Calculer les scores'}
         </Button>
       </div>
 
-      <Card className="border-slate-200 bg-white shadow-sm">
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Membres évalués</CardTitle>
+            <Trophy className="h-4 w-4 text-primary" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold">{scoredMembersCount}<span className="text-lg font-normal text-muted-foreground"> / {totalMembersCount}</span></div>
+            <p className="text-xs text-muted-foreground mt-1">Ont un score pour {year}</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Moyenne de l'équipe</CardTitle>
+            <Calculator className="h-4 w-4 text-primary" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold">{avgScore !== null ? avgScore.toFixed(1) : '—'}</div>
+            <p className="text-xs text-muted-foreground mt-1">Moyenne du score final</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Meilleur performeur</CardTitle>
+            <Trophy className="h-4 w-4 text-yellow-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-lg font-bold truncate">{topEntry ? topEntry.employeeName.split(' ')[0] : '—'}</div>
+            <p className="text-xs text-muted-foreground mt-1">{topEntry ? `Score : ${topEntry.finalScore.toFixed(1)}` : 'Aucun score disponible'}</p>
+          </CardContent>
+        </Card>
+
+      </div>
+
+      <Card className="border-border bg-card shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-xl">
-            <Trophy className="h-5 w-5 text-slate-700" />
-            Team Ranking {year}
+            <Trophy className="h-5 w-5 text-foreground" />
+            Classement de l'équipe {year}
           </CardTitle>
-          <CardDescription>Open on the full team ranking by default. Click a member row to inspect exactly how the score was built.</CardDescription>
+          <CardDescription>Affiche le classement complet de l'équipe par défaut. Cliquez sur une ligne pour voir le détail du calcul du score.</CardDescription>
         </CardHeader>
         <CardContent>
           {fullTeamScores.length === 0 ? (
-            <p className="py-8 text-center text-muted-foreground">No team members available.</p>
+            <EmptyState
+              icon={<Trophy />}
+              title="Aucun score disponible"
+              description="Les scores apparaîtront ici une fois que les membres de l'équipe auront importé leur CV et été évalués."
+            />
           ) : (
-            <div className="rounded-2xl border border-slate-200 bg-white">
+            <div className="rounded-2xl border border-border bg-card">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-16">Rank</TableHead>
-                    <TableHead>Employee</TableHead>
-                    <TableHead className="text-right">Projects</TableHead>
+                    <TableHead className="w-16">Rang</TableHead>
+                    <TableHead>Employé</TableHead>
+                    <TableHead className="text-right">Projets</TableHead>
                     <TableHead className="text-right">Cert.</TableHead>
-                    <TableHead className="text-right">Training</TableHead>
                     <TableHead className="text-right">Formation</TableHead>
+                    <TableHead className="text-right">Formations</TableHead>
                     <TableHead className="text-right">Final</TableHead>
-                    <TableHead className="w-20 text-right">Details</TableHead>
+                    <TableHead className="w-20 text-right">Détails</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {fullTeamScores.map((entry) => (
                     <TableRow
                       key={entry.profileId}
-                      className="cursor-pointer hover:bg-slate-50"
+                      className="cursor-pointer hover:bg-muted/50"
                       onClick={() => handleOpenBreakdown(entry)}
                     >
                       <TableCell>
@@ -332,7 +378,7 @@ const ManagerScoringPage: React.FC = () => {
                       <TableCell className="text-right">{(entry.formationScore ?? 0).toFixed(1)}</TableCell>
                       <TableCell className="text-right font-bold">{entry.finalScore.toFixed(1)}</TableCell>
                       <TableCell className="text-right">
-                        <ChevronRight className="ml-auto h-4 w-4 text-slate-400" />
+                        <ChevronRight className="ml-auto h-4 w-4 text-muted-foreground" />
                       </TableCell>
                     </TableRow>
                   ))}
@@ -344,27 +390,27 @@ const ManagerScoringPage: React.FC = () => {
       </Card>
 
       {user?.role === 'team_manager' && (orderedPendingEvaluations.length > 0 || focusedRecordId) && (
-        <Card className="border-slate-200 bg-white shadow-sm">
+        <Card className="border-border bg-card shadow-sm">
           <CardHeader className="pb-4">
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div className="space-y-1">
                 <CardTitle className="flex items-center gap-2 text-xl">
-                  <ClipboardList className="h-5 w-5 text-slate-700" />
-                  Incoming Review Requests
+                  <ClipboardList className="h-5 w-5 text-foreground" />
+                  Demandes d'évaluation reçues
                 </CardTitle>
                 <CardDescription>
-                  Each card below is one pending decision. Identity, project context, manager notes, and scoring action are separated so you can review faster with less visual noise.
+                  Chaque carte ci-dessous correspond à une décision en attente. L'identité, le contexte du projet, les notes du manager et l'action de scoring sont séparés pour faciliter la révision.
                 </CardDescription>
               </div>
               <Badge className="w-fit bg-sky-600 text-white hover:bg-sky-600">
-                {orderedPendingEvaluations.length} pending
+                {orderedPendingEvaluations.length} en attente
               </Badge>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
             {orderedPendingEvaluations.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-slate-300 bg-white/70 p-4 text-sm text-muted-foreground">
-                This external evaluation is no longer pending.
+              <div className="rounded-xl border border-dashed border-border bg-card/70 p-4 text-sm text-muted-foreground">
+                Cette évaluation externe n'est plus en attente.
               </div>
             ) : (
               orderedPendingEvaluations.map((item) => {
@@ -374,57 +420,57 @@ const ManagerScoringPage: React.FC = () => {
                     key={item.recordId}
                     className={`rounded-2xl border p-4 shadow-sm transition-colors ${
                       isFocused
-                        ? 'border-sky-300 bg-sky-50/30 ring-2 ring-sky-100'
-                        : 'border-slate-200 bg-white'
+                        ? 'border-sky-300 dark:border-sky-700 bg-sky-50/30 dark:bg-sky-950/20 ring-2 ring-sky-100 dark:ring-sky-900'
+                        : 'border-border bg-card'
                     }`}
                   >
                     <div className="grid gap-4 xl:grid-cols-[1.15fr_1fr_320px]">
-                      <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="space-y-3 rounded-2xl border border-border bg-muted/50 p-4">
                         <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-lg font-semibold text-slate-950">{item.employeeName}</p>
+                          <p className="text-lg font-semibold text-foreground">{item.employeeName}</p>
                           <Badge className={complexityColor[item.complexity || 'medium'] || complexityColor.medium}>
                             {complexityLabel[item.complexity || 'medium'] || 'Medium'} complexity
                           </Badge>
-                          {isFocused && <Badge className="border border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-50">Opened from notification</Badge>}
+                          {isFocused && <Badge className="border border-sky-200 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/30 text-sky-700 dark:text-sky-400 hover:bg-sky-50 dark:hover:bg-sky-950/30">Ouvert depuis une notification</Badge>}
                         </div>
                         <div className="grid gap-3 sm:grid-cols-2">
-                          <div className="rounded-xl border border-slate-200 bg-white p-3">
-                            <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                              <UserRound className="h-3.5 w-3.5" /> Employee
+                          <div className="rounded-xl border border-border bg-card p-3">
+                            <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                              <UserRound className="h-3.5 w-3.5" /> Employé
                             </p>
-                            <p className="font-medium text-slate-900">{item.employeeName}</p>
-                            <p className="text-sm text-slate-600">External member review pending final decision.</p>
+                            <p className="font-medium text-foreground">{item.employeeName}</p>
+                            <p className="text-sm text-muted-foreground">Évaluation du membre externe en attente de décision finale.</p>
                           </div>
-                          <div className="rounded-xl border border-slate-200 bg-white p-3">
-                            <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                              <BriefcaseBusiness className="h-3.5 w-3.5" /> Project
+                          <div className="rounded-xl border border-border bg-card p-3">
+                            <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                              <BriefcaseBusiness className="h-3.5 w-3.5" /> Projet
                             </p>
-                            <p className="font-medium text-slate-900">{item.projectName}</p>
-                            <p className="text-sm text-slate-600">{item.clientName || 'No client specified'}</p>
+                            <p className="font-medium text-foreground">{item.projectName}</p>
+                            <p className="text-sm text-muted-foreground">{item.clientName || 'Aucun client spécifié'}</p>
                           </div>
-                          <div className="rounded-xl border border-slate-200 bg-white p-3 sm:col-span-2">
-                            <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                              <CalendarClock className="h-3.5 w-3.5" /> Timing
+                          <div className="rounded-xl border border-border bg-card p-3 sm:col-span-2">
+                            <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                              <CalendarClock className="h-3.5 w-3.5" /> Calendrier
                             </p>
-                            <p className="text-sm text-slate-700">Submitted {formatDate(item.createdAt)} and linked to PV dated {formatDate(item.completionDate)}.</p>
+                            <p className="text-sm text-foreground">Soumis le {formatDate(item.createdAt)} et lié au PV daté du {formatDate(item.completionDate)}.</p>
                           </div>
                         </div>
                       </div>
 
-                      <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                          Project manager summary
+                      <div className="rounded-2xl border border-border bg-card p-4">
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          Résumé du chef de projet
                         </p>
-                        <p className="text-sm leading-6 text-slate-800">
-                          {item.externalContributionDescription || 'No contribution description was provided.'}
+                        <p className="text-sm leading-6 text-foreground">
+                          {item.externalContributionDescription || 'Aucune description de contribution n\'a été fournie.'}
                         </p>
                       </div>
 
-                      <div className="w-full space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="w-full space-y-3 rounded-2xl border border-border bg-muted/50 p-4">
                         <div>
-                          <Label className="text-sm font-semibold">Final score (/20)</Label>
+                          <Label className="text-sm font-semibold">Score final (/20)</Label>
                           <p className="mt-1 text-xs text-muted-foreground">
-                            This score is converted to /100 and becomes the definitive project contribution for the employee.
+                            Ce score est converti en /100 et devient la contribution définitive au projet pour l'employé.
                           </p>
                         </div>
                         <Input
@@ -432,7 +478,7 @@ const ManagerScoringPage: React.FC = () => {
                           min={0}
                           max={20}
                           step="0.5"
-                          placeholder="Example: 16.5"
+                          placeholder="Exemple : 16.5"
                           value={externalScores[item.recordId] || ''}
                           onChange={(e) =>
                             setExternalScores((prev) => ({ ...prev, [item.recordId]: e.target.value }))
@@ -443,7 +489,7 @@ const ManagerScoringPage: React.FC = () => {
                           onClick={() => handleSubmitExternalScore(item.recordId)}
                           disabled={submittingExternal === item.recordId}
                         >
-                          {submittingExternal === item.recordId ? 'Saving...' : 'Submit score and update ranking'}
+                          {submittingExternal === item.recordId ? 'Enregistrement...' : 'Soumettre le score et mettre à jour le classement'}
                         </Button>
                       </div>
                     </div>
@@ -458,88 +504,88 @@ const ManagerScoringPage: React.FC = () => {
       <Dialog open={breakdownOpen} onOpenChange={setBreakdownOpen}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{selectedEntry?.employeeName || 'Score Breakdown'}</DialogTitle>
-            <DialogDescription>Detailed score explanation for {year}. This dialog shows the exact pillars and project contributions currently counted in the employee&apos;s score.</DialogDescription>
+            <DialogTitle>{selectedEntry?.employeeName || 'Détail du score'}</DialogTitle>
+            <DialogDescription>Explication détaillée du score pour {year}. Ce panneau affiche les piliers exacts et les contributions aux projets comptabilisés dans le score de l'employé.</DialogDescription>
           </DialogHeader>
           {loadingBreakdown ? (
-            <p className="py-8 text-center text-muted-foreground">Loading score breakdown...</p>
+            <p className="py-8 text-center text-muted-foreground">Chargement du détail du score...</p>
           ) : !selectedScore ? (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-600">
-              No computed annual score is available yet for this employee.
+            <div className="rounded-2xl border border-dashed border-border bg-muted/50 p-6 text-sm text-muted-foreground">
+              Aucun score annuel calculé n'est encore disponible pour cet employé.
             </div>
           ) : (
             <div className="space-y-4">
               <div className="grid gap-3 md:grid-cols-5">
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Final</p>
-                  <p className="mt-2 text-2xl font-semibold text-slate-900">{selectedScore.finalScore.toFixed(1)}</p>
+                <div className="rounded-2xl border border-border bg-muted/50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Final</p>
+                  <p className="mt-2 text-2xl font-semibold text-foreground">{selectedScore.finalScore.toFixed(1)}</p>
                 </div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Projects</p>
-                  <p className="mt-2 text-2xl font-semibold text-slate-900">{selectedScore.projectScore.toFixed(1)}</p>
+                <div className="rounded-2xl border border-border bg-muted/50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Projets</p>
+                  <p className="mt-2 text-2xl font-semibold text-foreground">{selectedScore.projectScore.toFixed(1)}</p>
                 </div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Certifications</p>
-                  <p className="mt-2 text-2xl font-semibold text-slate-900">{selectedScore.certificationScore.toFixed(1)}</p>
+                <div className="rounded-2xl border border-border bg-muted/50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Certifications</p>
+                  <p className="mt-2 text-2xl font-semibold text-foreground">{selectedScore.certificationScore.toFixed(1)}</p>
                 </div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Trainings</p>
-                  <p className="mt-2 text-2xl font-semibold text-slate-900">{selectedScore.trainingScore.toFixed(1)}</p>
+                <div className="rounded-2xl border border-border bg-muted/50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Formations</p>
+                  <p className="mt-2 text-2xl font-semibold text-foreground">{selectedScore.trainingScore.toFixed(1)}</p>
                 </div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Formations</p>
-                  <p className="mt-2 text-2xl font-semibold text-slate-900">{selectedScore.formationScore.toFixed(1)}</p>
+                <div className="rounded-2xl border border-border bg-muted/50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Formations internes</p>
+                  <p className="mt-2 text-2xl font-semibold text-foreground">{selectedScore.formationScore.toFixed(1)}</p>
                 </div>
               </div>
 
               {selectedScore.scoreDetails?.headline && (
-                <Alert className="border-slate-200 bg-slate-50">
-                  <Info className="h-4 w-4 text-slate-700" />
+                <Alert className="border-border bg-muted/50">
+                  <Info className="h-4 w-4 text-foreground" />
                   <AlertTitle>{selectedScore.scoreDetails.headline.title}</AlertTitle>
                   <AlertDescription>{selectedScore.scoreDetails.headline.message}</AlertDescription>
                 </Alert>
               )}
 
-              <Card className="border-slate-200">
+              <Card className="border-border">
                 <CardHeader>
-                  <CardTitle className="text-base">Applied formulas</CardTitle>
+                  <CardTitle className="text-base">Formules appliquées</CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-2 text-sm text-slate-700">
-                  <p>{selectedScore.scoreDetails?.formulas?.projects || 'Project contribution is based on manager score when available, otherwise on project complexity only.'}</p>
-                  <p>{selectedScore.scoreDetails?.formulas?.certifications || 'Certification score depends on progress against the annual target.'}</p>
-                  <p>{selectedScore.scoreDetails?.formulas?.trainings || 'Completed trainings add 20 points each.'}</p>
-                  <p>{selectedScore.scoreDetails?.formulas?.formations || 'Delivered formations add 25 points each.'}</p>
-                  <p>{selectedScore.scoreDetails?.formulas?.final || 'Final score = average of the four pillars.'}</p>
+                <CardContent className="space-y-2 text-sm text-foreground">
+                  <p>{selectedScore.scoreDetails?.formulas?.projects || 'La contribution au projet est basée sur le score du manager si disponible, sinon sur la complexité du projet uniquement.'}</p>
+                  <p>{selectedScore.scoreDetails?.formulas?.certifications || 'Le score de certification dépend de la progression par rapport à l\'objectif annuel.'}</p>
+                  <p>{selectedScore.scoreDetails?.formulas?.trainings || 'Chaque formation complétée ajoute 20 points.'}</p>
+                  <p>{selectedScore.scoreDetails?.formulas?.formations || 'Chaque formation dispensée ajoute 25 points.'}</p>
+                  <p>{selectedScore.scoreDetails?.formulas?.final || 'Score final = moyenne des quatre piliers.'}</p>
                 </CardContent>
               </Card>
 
-              <Card className="border-slate-200">
+              <Card className="border-border">
                 <CardHeader>
-                  <CardTitle className="text-base">Project contribution details</CardTitle>
-                  <CardDescription>Each card below explains one project currently counted in the employee&apos;s score.</CardDescription>
+                  <CardTitle className="text-base">Détail des contributions aux projets</CardTitle>
+                  <CardDescription>Chaque carte ci-dessous explique un projet actuellement comptabilisé dans le score de l'employé.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
                   {(selectedScore.scoreDetails?.pillars?.projects?.items || []).length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-600">
-                      No project contribution is currently counted for this employee.
+                    <div className="rounded-2xl border border-dashed border-border bg-muted/50 p-5 text-sm text-muted-foreground">
+                      Aucune contribution au projet n'est actuellement comptabilisée pour cet employé.
                     </div>
                   ) : (
                     (selectedScore.scoreDetails?.pillars?.projects?.items || []).map((project: ProjectScoreDetail) => (
-                      <div key={`${project.project_name}-${project.completion_date || 'undated'}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <div key={`${project.project_name}-${project.completion_date || 'undated'}`} className="rounded-2xl border border-border bg-muted/50 p-4">
                         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                           <div className="space-y-2">
                             <div className="flex flex-wrap items-center gap-2">
-                              <p className="font-semibold text-slate-900">{project.project_name}</p>
+                              <p className="font-semibold text-foreground">{project.project_name}</p>
                               <Badge className={complexityColor[project.complexity]}>{project.complexity}</Badge>
                               <Badge variant="outline">{project.evaluation_status}</Badge>
-                              {project.pv_verified && <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">Verified PV</Badge>}
+                              {project.pv_verified && <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">PV vérifié</Badge>}
                             </div>
-                            <p className="text-xs text-slate-500">Reference date: {project.completion_date || 'Current assignment year'}</p>
-                            <p className="text-sm text-slate-700">{project.explanation}</p>
+                            <p className="text-xs text-muted-foreground">Date de référence : {project.completion_date || 'Année d\'affectation en cours'}</p>
+                            <p className="text-sm text-foreground">{project.explanation}</p>
                           </div>
-                          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-right">
-                            <p className="text-xs uppercase tracking-wide text-slate-500">Contribution</p>
-                            <p className="mt-1 text-2xl font-semibold text-slate-900">{project.contribution_score.toFixed(1)}</p>
+                          <div className="rounded-2xl border border-border bg-card px-4 py-3 text-right">
+                            <p className="text-xs uppercase tracking-wide text-muted-foreground">Contribution</p>
+                            <p className="mt-1 text-2xl font-semibold text-foreground">{project.contribution_score.toFixed(1)}</p>
                           </div>
                         </div>
                       </div>
@@ -555,17 +601,17 @@ const ManagerScoringPage: React.FC = () => {
       <Dialog open={targetOpen} onOpenChange={setTargetOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Certification Target {year}</DialogTitle>
+            <DialogTitle>Objectif de certification {year}</DialogTitle>
             <DialogDescription>
-              Set yearly certification target for one member in your team.
+              Définissez un objectif annuel de certification pour un membre de votre équipe.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label>Employee</Label>
+              <Label>Employé</Label>
               <Select value={targetProfileId} onValueChange={setTargetProfileId}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Select employee" />
+                  <SelectValue placeholder="Sélectionner un employé" />
                 </SelectTrigger>
                 <SelectContent>
                   {members
@@ -579,7 +625,7 @@ const ManagerScoringPage: React.FC = () => {
               </Select>
             </div>
             <div>
-              <Label>Certification count</Label>
+              <Label>Nombre de certifications</Label>
               <Input
                 type="number"
                 min={0}
@@ -591,10 +637,10 @@ const ManagerScoringPage: React.FC = () => {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setTargetOpen(false)}>
-              Cancel
+              Annuler
             </Button>
             <Button onClick={handleSetTarget} disabled={settingTarget || !targetProfileId}>
-              {settingTarget ? 'Saving...' : 'Save'}
+              {settingTarget ? 'Enregistrement...' : 'Enregistrer'}
             </Button>
           </DialogFooter>
         </DialogContent>

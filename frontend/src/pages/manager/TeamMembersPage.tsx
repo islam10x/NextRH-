@@ -29,17 +29,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
 import api from '@/services/api';
-
-interface DBUser {
-  user_id: string;
-  email: string;
-  role: string;
-  status: 'active' | 'pending_invitation' | 'deactivated';
-  firstName?: string;
-  lastName?: string;
-  invitedAt?: string;
-  avatarUrl?: string | null;
-}
+import { userService } from '@/services/user.service';
+import { DBUser } from '@/types';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 const TeamMembersPage: React.FC = () => {
   const navigate = useNavigate();
@@ -49,16 +41,14 @@ const TeamMembersPage: React.FC = () => {
   const [isInviteDialogOpen, setIsInviteDialogOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [cancelTarget, setCancelTarget] = useState<string | null>(null);
 
   const fetchUsers = async () => {
     setIsLoading(true);
     try {
-      const response = await api.get<DBUser[]>('/users');
-      // For Team Managers, we might want to filter by who they invited
-      // or show relevant team members. For now, we'll show all and they can manage.
-      setUsers(response.data);
-    } catch (err: any) {
-      toast.error('Failed to fetch team members');
+      setUsers(await userService.listAll());
+    } catch {
+      toast.error("Impossible de charger les membres — vérifiez votre connexion et réessayez.");
     } finally {
       setIsLoading(false);
     }
@@ -71,26 +61,26 @@ const TeamMembersPage: React.FC = () => {
   const handleInviteSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inviteEmail) {
-      toast.error('Please enter an email address');
+      toast.error('Veuillez saisir une adresse e-mail');
       return;
     }
 
     // Basic email regex validation to ensure it has a TLD
     const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
     if (!emailRegex.test(inviteEmail)) {
-      toast.error('Please enter a valid business email address (e.g., name@company.com)');
+      toast.error('Veuillez saisir une adresse e-mail professionnelle valide (ex. : nom@entreprise.com)');
       return;
     }
 
     setIsSubmitting(true);
     try {
       await api.post('/auth/invite', { email: inviteEmail, role: 'employee' });
-      toast.success(`Invitation sent to ${inviteEmail}`);
+      toast.success(`Invitation envoyée à ${inviteEmail}`);
       setInviteEmail('');
       setIsInviteDialogOpen(false);
       fetchUsers();
     } catch (err: any) {
-      toast.error(err.response?.data?.message || 'Failed to send invitation');
+      toast.error(err.response?.data?.message || 'Échec de l\'envoi de l\'invitation');
     } finally {
       setIsSubmitting(false);
     }
@@ -99,24 +89,49 @@ const TeamMembersPage: React.FC = () => {
   const handleResend = async (userId: string, email: string) => {
     try {
       await api.post(`/auth/invite/resend/${userId}`);
-      toast.success(`Invitation resent to ${email}`);
+      toast.success(`Invitation renvoyée à ${email}`);
     } catch (err: any) {
-      toast.error('Failed to resend invitation');
+      toast.error(`Impossible de renvoyer l'invitation à ${email}. Réessayez dans un instant.`);
     }
   };
 
-  const handleCancel = async (userId: string) => {
-    if (!window.confirm('Are you sure you want to cancel this invitation?')) {
-      return;
-    }
-
+  const handleCancelConfirmed = async () => {
+    if (!cancelTarget) return;
     try {
-      await api.delete(`/auth/invite/${userId}`);
-      toast.success('Invitation cancelled');
+      await api.delete(`/auth/invite/${cancelTarget}`);
+      toast.success('Invitation annulée — le lien n\'est plus valide.');
       fetchUsers();
-    } catch (err: any) {
-      toast.error('Failed to cancel invitation');
+    } catch {
+      toast.error("Impossible d'annuler l'invitation. Réessayez.");
+    } finally {
+      setCancelTarget(null);
     }
+  };
+
+  const exportToCSV = () => {
+    const SEP = ';';
+    const rows = [
+      ['Prénom', 'Nom', 'E-mail', 'Rôle', 'Statut', 'Invité le'],
+      ...users.map((u) => [
+        u.firstName || '',
+        u.lastName || '',
+        u.email,
+        u.role.replace(/_/g, ' '),
+        u.status.replace(/_/g, ' '),
+        u.invitedAt ? new Date(u.invitedAt).toISOString().slice(0, 10) : '',
+      ]),
+    ];
+    const csv = rows.map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(SEP)).join('\r\n');
+    const BOM = '﻿';
+    const blob = new Blob([BOM + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `team-members-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const filteredUsers = users.filter((u) => {
@@ -134,20 +149,28 @@ const TeamMembersPage: React.FC = () => {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
+      <ConfirmDialog
+        open={!!cancelTarget}
+        onOpenChange={(open) => { if (!open) setCancelTarget(null); }}
+        title="Annuler l'invitation"
+        description="Cela annulera définitivement l'invitation. L'utilisateur ne pourra plus configurer son compte via ce lien."
+        confirmLabel="Annuler l'invitation"
+        onConfirm={handleCancelConfirmed}
+      />
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Team Management</h1>
-          <p className="text-muted-foreground text-sm">Manage your team members and invites</p>
+          <h1 className="text-2xl font-bold text-foreground">Gestion de l'équipe</h1>
+          <p className="text-muted-foreground text-sm">Gérez les membres de votre équipe et les invitations</p>
         </div>
         <div className="flex items-center gap-3">
-          <Button variant="outline" className="gap-2">
+          <Button variant="outline" className="gap-2" onClick={exportToCSV} disabled={users.length === 0}>
             <Download className="h-4 w-4" />
-            Export List
+            Exporter la liste
           </Button>
           <Button onClick={() => setIsInviteDialogOpen(true)} className="gap-2">
             <UserPlus className="h-4 w-4" />
-            Invite Resource
+            Inviter une ressource
           </Button>
         </div>
       </div>
@@ -159,15 +182,15 @@ const TeamMembersPage: React.FC = () => {
             <div className="h-12 w-12 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
               <UserPlus className="h-6 w-6 text-primary" />
             </div>
-            <DialogTitle className="text-xl">Invite New Member</DialogTitle>
+            <DialogTitle className="text-xl">Inviter un nouveau membre</DialogTitle>
             <DialogDescription>
-              A professional onboarding link will be sent via email.
+              Un lien d'intégration professionnel sera envoyé par e-mail.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleInviteSubmit}>
             <div className="space-y-6 py-4">
               <div className="space-y-2">
-                <Label htmlFor="email" className="text-sm font-semibold">Business Email</Label>
+                <Label htmlFor="email" className="text-sm font-semibold">E-mail professionnel</Label>
                 <div className="relative">
                   <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
@@ -184,7 +207,7 @@ const TeamMembersPage: React.FC = () => {
             </div>
             <DialogFooter className="pt-6 border-t mt-4 gap-2">
               <Button type="button" variant="ghost" onClick={() => setIsInviteDialogOpen(false)} className="h-11">
-                Cancel
+                Annuler
               </Button>
               <Button type="submit" disabled={isSubmitting} className="h-11 min-w-[140px]">
                 {isSubmitting ? (
@@ -192,7 +215,7 @@ const TeamMembersPage: React.FC = () => {
                 ) : (
                   <UserPlus className="h-4 w-4 mr-2" />
                 )}
-                {isSubmitting ? 'Sending...' : 'Send Invitation'}
+                {isSubmitting ? 'Envoi en cours...' : 'Envoyer l\'invitation'}
               </Button>
             </DialogFooter>
           </form>
@@ -205,7 +228,7 @@ const TeamMembersPage: React.FC = () => {
           <div className="relative max-w-md">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="Search by name, title, or email..."
+              placeholder="Rechercher par nom, titre ou e-mail..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-10"
@@ -216,20 +239,20 @@ const TeamMembersPage: React.FC = () => {
 
       <Tabs defaultValue="active" className="space-y-6">
         <TabsList className="bg-muted w-full md:w-auto p-1 h-auto grid grid-cols-2 md:inline-flex">
-          <TabsTrigger value="active" className="gap-2 px-8 h-10 data-[state=active]:bg-white data-[state=active]:shadow-sm">
+          <TabsTrigger value="active" className="gap-2 px-8 h-10 data-[state=active]:bg-background dark:data-[state=active]:bg-card data-[state=active]:shadow-sm">
             <UsersIcon className="h-4 w-4" />
-            Active ({activeMembers.length})
+            Actifs ({activeMembers.length})
           </TabsTrigger>
-          <TabsTrigger value="pending" className="gap-2 px-8 h-10 data-[state=active]:bg-white data-[state=active]:shadow-sm">
+          <TabsTrigger value="pending" className="gap-2 px-8 h-10 data-[state=active]:bg-background dark:data-[state=active]:bg-card data-[state=active]:shadow-sm">
             <Clock className="h-4 w-4" />
-            Pending ({pendingInvitations.length})
+            En attente ({pendingInvitations.length})
           </TabsTrigger>
         </TabsList>
 
         {isLoading ? (
           <div className="flex flex-col items-center justify-center py-20 gap-4">
             <Loader2 className="h-10 w-10 animate-spin text-primary/30" />
-            <p className="text-muted-foreground font-medium italic">Loading team...</p>
+            <p className="text-muted-foreground font-medium italic">Chargement de l'équipe...</p>
           </div>
         ) : (
           <>
@@ -263,7 +286,7 @@ const TeamMembersPage: React.FC = () => {
                             className="w-full mt-4 text-xs font-medium gap-1.5"
                             onClick={() => navigate(`/manager/member/${u.user_id}`)}
                           >
-                            <Eye className="h-4 w-4" /> View CV
+                            <Eye className="h-4 w-4" /> Voir le CV
                           </Button>
                         </CardContent>
                       </Card>
@@ -274,9 +297,9 @@ const TeamMembersPage: React.FC = () => {
                 <Card className="border-dashed py-20 bg-muted/20">
                   <CardContent className="flex flex-col items-center text-center">
                     <UsersIcon className="h-12 w-12 text-muted-foreground/30 mb-4" />
-                    <h3 className="text-lg font-semibold">No active members found</h3>
+                    <h3 className="text-lg font-semibold">Aucun membre actif trouvé</h3>
                     <p className="text-muted-foreground text-sm max-w-sm">
-                      Try adjusting your search or invite a new resource to your team.
+                      Ajustez votre recherche ou invitez une nouvelle ressource dans votre équipe.
                     </p>
                   </CardContent>
                 </Card>
@@ -298,7 +321,7 @@ const TeamMembersPage: React.FC = () => {
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
                               <h3 className="font-semibold truncate">{u.email}</h3>
-                              <Badge variant="secondary" className="bg-amber-100 text-amber-700 hover:bg-amber-100 text-[10px] h-4">Pending</Badge>
+                              <Badge variant="secondary" className="bg-amber-100 text-amber-700 hover:bg-amber-100 text-[10px] h-4">En attente</Badge>
                             </div>
                             <p className="text-sm text-muted-foreground capitalize">{u.role.replace('_', ' ')}</p>
                           </div>
@@ -306,10 +329,10 @@ const TeamMembersPage: React.FC = () => {
 
                         <div className="flex gap-2 mt-4">
                           <Button variant="outline" size="sm" className="flex-1 text-xs gap-1" onClick={() => handleResend(u.user_id, u.email)}>
-                            <RotateCcw className="h-3 w-3" /> Resend
+                            <RotateCcw className="h-3 w-3" /> Renvoyer
                           </Button>
-                          <Button variant="outline" size="sm" className="flex-1 text-xs gap-1 text-destructive hover:text-destructive" onClick={() => handleCancel(u.user_id)}>
-                            <Trash2 className="h-3 w-3" /> Cancel
+                          <Button variant="outline" size="sm" className="flex-1 text-xs gap-1 text-destructive hover:text-destructive" onClick={() => setCancelTarget(u.user_id)}>
+                            <Trash2 className="h-3 w-3" /> Annuler
                           </Button>
                         </div>
                       </CardContent>
@@ -320,9 +343,9 @@ const TeamMembersPage: React.FC = () => {
                 <Card className="border-dashed py-20 bg-muted/20">
                   <CardContent className="flex flex-col items-center text-center">
                     <Mail className="h-12 w-12 text-muted-foreground/30 mb-4" />
-                    <h3 className="text-lg font-semibold">No pending invitations</h3>
+                    <h3 className="text-lg font-semibold">Aucune invitation en attente</h3>
                     <p className="text-muted-foreground text-sm max-w-sm">
-                      Your invitation queue is empty.
+                      Votre file d'invitations est vide.
                     </p>
                   </CardContent>
                 </Card>

@@ -18,6 +18,12 @@ export class TeamsController {
         return { count };
     }
 
+    @Get('all')
+    @Roles(UserRole.BID_MANAGER)
+    async listAll() {
+        return this.teamsService.listAllWithMembers();
+    }
+
     @Get('members/me')
     @Roles(UserRole.TEAM_MANAGER)
     async myTeamMembers(@Req() req: any) {

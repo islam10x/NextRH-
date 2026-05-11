@@ -4,7 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Trophy, FolderKanban, Award, GraduationCap, BookOpen, History, Crown, RefreshCw, AlertCircle, Target, CheckCircle2, Clock3 } from 'lucide-react';
+import { Trophy, FolderKanban, Award, GraduationCap, BookOpen, History, RefreshCw, AlertCircle, Target, CheckCircle2, Clock3, HelpCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { scoringService, TrainingRecord, ProjectRecord, EmployeeScore, LeaderboardEntry, ScoringTarget, ProjectScoreDetail } from '@/services/scoring.service';
 import { projectService } from '@/services/project.service';
@@ -12,6 +12,7 @@ import { CvProfile, Project, Training } from '@/types';
 import api from '@/services/api';
 import { Separator } from '@/components/ui/separator';
 import { trainingService } from '@/services/training.service';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 const complexityLabel: Record<string, string> = { low: 'Basse', medium: 'Moyenne', high: 'Haute' };
 
@@ -32,11 +33,11 @@ const formatScore = (value?: number | null) => Number(value ?? 0).toFixed(1);
 const getEvaluationStatusBadge = (status?: ProjectScoreDetail['evaluation_status']) => {
   switch (status) {
     case 'pending_external_manager':
-      return { label: 'Awaiting home manager review', className: 'bg-amber-100 text-amber-900 hover:bg-amber-100' };
+      return { label: 'En attente de validation manager', className: 'bg-amber-100 text-amber-900 hover:bg-amber-100' };
     case 'scored_by_home_manager':
-      return { label: 'Reviewed by home manager', className: 'bg-emerald-100 text-emerald-900 hover:bg-emerald-100' };
+      return { label: 'Validé par le manager', className: 'bg-emerald-100 text-emerald-900 hover:bg-emerald-100' };
     default:
-      return { label: 'Reviewed by project manager', className: 'bg-sky-100 text-sky-900 hover:bg-sky-100' };
+      return { label: 'Validé par le chef de projet', className: 'bg-sky-100 text-sky-900 hover:bg-sky-100' };
   }
 };
 
@@ -112,7 +113,7 @@ const EmployeeScoringPage: React.FC = () => {
     }
   };
 
-  const bestScore = leaderboard.length > 0 ? leaderboard[0] : null;
+  const scoredCount = leaderboard.filter((e) => e.finalScore > 0).length;
   const certificationsThisYear = (profileData?.certifications || []).filter(
     (cert) => cert.status === 'active' && matchesYear(currentYear, cert.issueDate),
   ).length;
@@ -176,11 +177,11 @@ const EmployeeScoringPage: React.FC = () => {
   const pillarCards = [
     {
       key: 'projects',
-      label: 'Projects',
+      label: 'Projets',
       score: score?.projectScore ?? 0,
       description: scoreDetails?.formulas?.projects || 'Contribution = (execution / 20) × complexity ceiling. Low: ×45 | Medium: ×65 | High: ×85. No score yet = 0/100.',
       progress: Math.max(0, Math.min(100, score?.projectScore ?? 0)),
-      meta: `${projectDetails.length} project(s) counted`,
+      meta: `${projectDetails.length} projet(s) comptabilisé(s)`,
     },
     {
       key: 'certifications',
@@ -189,24 +190,24 @@ const EmployeeScoringPage: React.FC = () => {
       description: certificationDetails?.explanation || scoreDetails?.formulas?.certifications || 'Your certification score depends on progress against your annual target.',
       progress: Math.max(0, Math.min(100, certificationDetails?.progress_percent ?? score?.certificationScore ?? 0)),
       meta: certificationDetails
-        ? `${certificationDetails.count}/${certificationDetails.effective_target} target reached`
-        : `${certificationsThisYear} certification(s) counted`,
+        ? `${certificationDetails.count}/${certificationDetails.effective_target} objectif atteint`
+        : `${certificationsThisYear} certification(s) comptabilisée(s)`,
     },
     {
       key: 'trainings',
-      label: 'Trainings',
+      label: 'Formations assignées',
       score: score?.trainingScore ?? 0,
       description: trainingDetails?.explanation || scoreDetails?.formulas?.trainings || 'Each completed training adds 20 points.',
       progress: Math.max(0, Math.min(100, score?.trainingScore ?? 0)),
-      meta: `${trainingDetails?.count ?? completedAssignedTrainingsThisYear} completed training(s)`,
+      meta: `${trainingDetails?.count ?? completedAssignedTrainingsThisYear} formation(s) terminée(s)`,
     },
     {
       key: 'formations',
-      label: 'Formations',
+      label: 'Formations dispensées',
       score: score?.formationScore ?? 0,
       description: formationDetails?.explanation || scoreDetails?.formulas?.formations || 'Each delivered formation adds 25 points.',
       progress: Math.max(0, Math.min(100, score?.formationScore ?? 0)),
-      meta: `${formationDetails?.count ?? formationsThisYear} delivered formation(s)`,
+      meta: `${formationDetails?.count ?? formationsThisYear} formation(s) dispensée(s)`,
     },
   ];
 
@@ -246,11 +247,11 @@ const EmployeeScoringPage: React.FC = () => {
             <div className="text-2xl lg:text-3xl font-bold">{score ? Number(score.finalScore).toFixed(1) : '0.0'}</div>
             {score?.rankGlobal ? (
               <p className="text-xs text-muted-foreground mt-1">
-                Rang #{score.rankGlobal}
+                #{score.rankGlobal} sur {scoredCount > 0 ? scoredCount : leaderboard.length} employé{leaderboard.length !== 1 ? 's' : ''}
               </p>
             ) : (
               <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-                <AlertCircle className="h-3 w-3" /> Pas classé
+                <AlertCircle className="h-3 w-3" /> Pas encore classé
               </p>
             )}
           </CardContent>
@@ -302,35 +303,15 @@ const EmployeeScoringPage: React.FC = () => {
         </Card>
       </div>
 
-      {/* Best score highlight */}
-
-      {bestScore && (
-        <Card className="bg-gradient-to-r from-yellow-50 to-amber-50 dark:from-yellow-950/20 dark:to-amber-950/20 border-yellow-200 dark:border-yellow-800">
-          <CardContent className="flex items-center gap-4 py-4">
-            <Crown className="h-6 w-6 text-yellow-500" />
-            <div>
-              <p className="text-sm font-medium">Meilleur score {currentYear}</p>
-              <p className="text-lg font-bold">{bestScore.employeeName} — {bestScore.finalScore.toFixed(1)} pts</p>
-            </div>
-            {score?.rankGlobal && (
-              <div className="ml-auto text-right">
-                <p className="text-sm text-muted-foreground">Votre position</p>
-                <p className="text-lg font-bold">#{score.rankGlobal} / {leaderboard.length}</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
       {scoreHeadline && (
-        <Alert className="border-emerald-200 bg-gradient-to-r from-emerald-50 via-white to-cyan-50">
-          <Target className="h-4 w-4 text-emerald-700" />
+        <Alert className="border-emerald-200 dark:border-emerald-800 bg-gradient-to-r from-emerald-50 via-white to-cyan-50 dark:from-emerald-950/50 dark:via-background dark:to-cyan-950/40">
+          <Target className="h-4 w-4 text-emerald-700 dark:text-emerald-400" />
           <AlertTitle>{scoreHeadline.title}</AlertTitle>
           <AlertDescription>
             <p>{scoreHeadline.message}</p>
             {score?.percentile != null && (
               <p className="mt-2 text-xs text-muted-foreground">
-                You are ahead of {Number(score.percentile).toFixed(1)}% of scored employees this year.
+                Vous êtes devant {Number(score.percentile).toFixed(1)}% des employés scorés cette année.
               </p>
             )}
           </AlertDescription>
@@ -339,16 +320,31 @@ const EmployeeScoringPage: React.FC = () => {
 
       <Card>
         <CardHeader>
-          <CardTitle>How Your Score Is Calculated</CardTitle>
-          <CardDescription>The score is built from four pillars, then averaged for {currentYear}.</CardDescription>
+          <CardTitle>Comment votre score est calculé</CardTitle>
+          <CardDescription>Le score est construit sur quatre piliers, puis moyenné pour {currentYear}.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {pillarCards.map((pillar) => (
+            {pillarCards.map((pillar) => {
+              const tooltipText: Record<string, string> = {
+                projects: 'Score basé sur la complexité du projet et la note du manager. Un PV vérifié est requis pour que le projet soit comptabilisé.',
+                certifications: 'Score basé sur votre progression vers l\'objectif annuel de certifications fixé par votre manager.',
+                trainings: 'Chaque formation assignée et terminée ajoute 20 points à votre score.',
+                formations: 'Chaque formation que vous avez dispensée à des clients ajoute 25 points à votre score.',
+              };
+              return (
               <div key={pillar.key} className="rounded-2xl border bg-muted/20 p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="text-sm font-semibold">{pillar.label}</p>
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-sm font-semibold">{pillar.label}</p>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <HelpCircle className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-xs text-xs">{tooltipText[pillar.key]}</TooltipContent>
+                      </Tooltip>
+                    </div>
                     <p className="mt-1 text-xs text-muted-foreground">{pillar.meta}</p>
                   </div>
                   <Badge variant="secondary">
@@ -363,13 +359,14 @@ const EmployeeScoringPage: React.FC = () => {
                 </div>
                 <p className="mt-3 text-sm text-muted-foreground">{pillar.description}</p>
               </div>
-            ))}
+              );
+            })}
           </div>
 
           <Separator />
 
           <div className="space-y-2 text-sm">
-            <p className="font-medium">Applied formulas</p>
+            <p className="font-medium">Formules appliquées</p>
             <div className="space-y-1 text-muted-foreground">
               <p>{scoreDetails?.formulas?.projects || 'Contribution = (execution score / 20) × complexity ceiling. Low: ×45 | Medium: ×65 | High: ×85. No execution score yet = 0/100 (no fallback).'}</p>
               <p>{scoreDetails?.formulas?.certifications || 'Certifications are compared with the annual target.'}</p>
@@ -382,11 +379,11 @@ const EmployeeScoringPage: React.FC = () => {
           <Separator />
 
           <div className="space-y-2 text-sm">
-            <p className="font-medium">Certification target</p>
+            <p className="font-medium">Objectif de certifications</p>
             <p className="text-muted-foreground">
               {target
-                ? `Your manager set a target of ${target.certificationTarget} certification(s) for ${currentYear}. ${certificationsThisYear} certification(s) are currently counted.`
-                : `No custom certification target is set for ${currentYear}. ${certificationsThisYear} certification(s) are currently counted.`}
+                ? `Votre manager a fixé un objectif de ${target.certificationTarget} certification(s) pour ${currentYear}. ${certificationsThisYear} certification(s) comptabilisée(s) à ce jour.`
+                : `Aucun objectif de certifications défini pour ${currentYear}. ${certificationsThisYear} certification(s) comptabilisée(s) à ce jour.`}
             </p>
           </div>
 
@@ -394,15 +391,15 @@ const EmployeeScoringPage: React.FC = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
             <div>
-              <p className="text-muted-foreground">Completed trainings</p>
+              <p className="text-muted-foreground">Formations terminées</p>
               <p className="font-semibold">{completedAssignedTrainingsThisYear}</p>
             </div>
             <div>
-              <p className="text-muted-foreground">Delivered formations</p>
+              <p className="text-muted-foreground">Formations dispensées</p>
               <p className="font-semibold">{formationsThisYear}</p>
             </div>
             <div>
-              <p className="text-muted-foreground">Projects with verified PV</p>
+              <p className="text-muted-foreground">Projets avec PV vérifié</p>
               <p className="font-semibold">{verifiedProjectCount} / {projectOverview.length}</p>
             </div>
           </div>
@@ -411,15 +408,15 @@ const EmployeeScoringPage: React.FC = () => {
 
       <Card>
         <CardHeader>
-          <CardTitle>Why You Got This Score</CardTitle>
+          <CardTitle>Pourquoi ce score ?</CardTitle>
           <CardDescription>
-            Every in-year project counted by the scoring engine and the exact rule used for its contribution.
+            Chaque projet de l'année pris en compte par le moteur de scoring et la règle exacte appliquée.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {projectDetails.length === 0 ? (
             <div className="rounded-2xl border border-dashed p-6 text-sm text-muted-foreground">
-              No project contribution is currently counted for {currentYear}. Once a project falls inside the scoring year, it will appear here with its exact score explanation.
+              Aucune contribution projet comptabilisée pour {currentYear}. Dès qu'un projet entre dans l'année de scoring, il apparaîtra ici avec l'explication exacte du calcul.
             </div>
           ) : (
             <div className="space-y-3">
@@ -433,17 +430,17 @@ const EmployeeScoringPage: React.FC = () => {
                           <p className="font-semibold">{project.project_name}</p>
                           <Badge variant="outline">{complexityLabel[project.complexity] || project.complexity}</Badge>
                           <Badge className={statusBadge.className}>{statusBadge.label}</Badge>
-                          {project.pv_verified && <Badge className="bg-emerald-500 hover:bg-emerald-500">Verified PV</Badge>}
+                          {project.pv_verified && <Badge className="bg-emerald-500 hover:bg-emerald-500">PV vérifié</Badge>}
                         </div>
                         <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
                           <span className="inline-flex items-center gap-1">
                             <Clock3 className="h-3.5 w-3.5" />
-                            {project.completion_date || 'No completion date'}
+                            {project.completion_date || 'Pas de date de fin'}
                           </span>
                           {project.manager_score_raw != null && (
                             <span className="inline-flex items-center gap-1">
                               <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                              Manager input: {formatScore(project.manager_score_raw)}/{project.manager_score_scale_max}
+                              Note manager : {formatScore(project.manager_score_raw)}/{project.manager_score_scale_max}
                             </span>
                           )}
                         </div>
@@ -452,7 +449,7 @@ const EmployeeScoringPage: React.FC = () => {
                       <div className="min-w-[150px] rounded-2xl bg-muted/30 p-4 text-right">
                         <p className="text-xs uppercase tracking-wide text-muted-foreground">Contribution</p>
                         <p className="mt-1 text-2xl font-bold">{formatScore(project.contribution_score)}</p>
-                        <p className="text-xs text-muted-foreground">out of 100 in the project pillar</p>
+                        <p className="text-xs text-muted-foreground">sur 100 dans le pilier projets</p>
                       </div>
                     </div>
                   </div>
@@ -519,7 +516,7 @@ const EmployeeScoringPage: React.FC = () => {
               <Card>
                 <CardHeader>
                   <CardTitle>Détail des PV importés</CardTitle>
-                  <CardDescription>Imported PVs from your manager. When a manager score is not entered yet, a verified PV can still support a provisional project score.</CardDescription>
+                  <CardDescription>PV importés par votre manager. En l'absence de note manager, un PV vérifié peut supporter un score provisoire.</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <Table>
@@ -551,7 +548,7 @@ const EmployeeScoringPage: React.FC = () => {
                             <TableCell>
                               <div className="space-y-1">
                                 <Badge className={statusBadge.className}>{statusBadge.label}</Badge>
-                                {r.pvVerified && <p className="text-xs text-muted-foreground">Verified PV on file</p>}
+                                {r.pvVerified && <p className="text-xs text-muted-foreground">PV vérifié</p>}
                               </div>
                             </TableCell>
                             <TableCell>
@@ -561,7 +558,7 @@ const EmployeeScoringPage: React.FC = () => {
                                   <p className="text-xs text-muted-foreground">{matchingBreakdown.explanation}</p>
                                 </div>
                               ) : (
-                                <span className="text-muted-foreground">Available after the next recompute</span>
+                                <span className="text-muted-foreground">Disponible après le prochain recalcul</span>
                               )}
                             </TableCell>
                             <TableCell>{r.completionDate || r.createdAt?.slice(0, 10) || '—'}</TableCell>
@@ -635,10 +632,6 @@ const EmployeeScoringPage: React.FC = () => {
                     <TableRow>
                       <TableHead className="w-16">Rang</TableHead>
                       <TableHead>Employé</TableHead>
-                      <TableHead className="text-right">Projets</TableHead>
-                      <TableHead className="text-right">Certif.</TableHead>
-                      <TableHead className="text-right">Trainings</TableHead>
-                      <TableHead className="text-right">Format.</TableHead>
                       <TableHead className="text-right">Score Final</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -658,11 +651,7 @@ const EmployeeScoringPage: React.FC = () => {
                           <TableCell className={isMe ? 'font-bold' : 'font-medium'}>
                             {entry.employeeName}{isMe ? ' (vous)' : ''}
                           </TableCell>
-                          <TableCell className="text-right">{entry.projectScore.toFixed(1)}</TableCell>
-                          <TableCell className="text-right">{entry.certificationScore.toFixed(1)}</TableCell>
-                          <TableCell className="text-right">{entry.trainingScore.toFixed(1)}</TableCell>
-                          <TableCell className="text-right">{(entry.formationScore ?? 0).toFixed(1)}</TableCell>
-                          <TableCell className="text-right font-bold">{entry.finalScore.toFixed(1)}</TableCell>
+                          <TableCell className="text-right font-bold">{isMe ? entry.finalScore.toFixed(1) : '—'}</TableCell>
                         </TableRow>
                       );
                     })}

@@ -77,6 +77,11 @@ export const teamService = {
     }
   },
 
+  async listAllForBid(): Promise<{ teamId: string; teamName: string; memberUserIds: string[] }[]> {
+    const res = await api.get('/teams/all');
+    return res.data || [];
+  },
+
   async listOtherTeams(): Promise<ExternalTeamLite[]> {
     const res = await api.get('/teams/other');
     return (res.data || []).map((t: any) => ({

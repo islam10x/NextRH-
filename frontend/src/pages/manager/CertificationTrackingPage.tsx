@@ -62,7 +62,7 @@ const CertificationTrackingPage: React.FC = () => {
       setCertificationStats(stats);
     } catch (error) {
       console.error('Failed to load certifications:', error);
-      toast.error('Failed to load team certifications');
+      toast.error('Impossible de charger les certifications de l\'équipe');
     } finally {
       setLoading(false);
     }
@@ -86,6 +86,32 @@ const CertificationTrackingPage: React.FC = () => {
     return matchesSearch && matchesStatus && matchesDate;
   });
 
+  const exportToCSV = () => {
+    const headers = ['Certification', 'Employé', 'E-mail', 'Émetteur', 'Date d\'émission', 'Date d\'expiration', 'Statut'];
+    const rows = filteredCertifications.map((cert) => [
+      cert.certificationName,
+      cert.employeeName,
+      cert.employeeEmail || '',
+      cert.issuingOrganization || '',
+      cert.issueDate ? formatDate(cert.issueDate) : '',
+      cert.expirationDate ? formatDate(cert.expirationDate) : '',
+      cert.status.replace('_', ' '),
+    ]);
+
+    const escape = (val: string) => `"${String(val).replace(/"/g, '""')}"`;
+    const csv =
+      '﻿' +
+      [headers, ...rows].map((row) => row.map(escape).join(';')).join('\r\n');
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `certifications_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const formatDate = (dateString: string | Date | null) => {
     if (!dateString) return 'N/A';
     try {
@@ -100,12 +126,12 @@ const CertificationTrackingPage: React.FC = () => {
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Certification Tracking</h1>
-          <p className="text-muted-foreground">Monitor team certifications and expirations</p>
+          <h1 className="text-2xl font-bold text-foreground">Suivi des certifications</h1>
+          <p className="text-muted-foreground">Suivez les certifications et expirations de votre équipe</p>
         </div>
-        <Button variant="outline">
+        <Button variant="outline" onClick={exportToCSV} disabled={filteredCertifications.length === 0}>
           <Download className="h-4 w-4 mr-2" />
-          Export CSV
+          Exporter CSV
         </Button>
       </div>
 
@@ -113,7 +139,7 @@ const CertificationTrackingPage: React.FC = () => {
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          <span className="ml-2 text-muted-foreground">Loading certifications...</span>
+          <span className="ml-2 text-muted-foreground">Chargement des certifications...</span>
         </div>
       ) : (
         <>
@@ -124,7 +150,7 @@ const CertificationTrackingPage: React.FC = () => {
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                placeholder="Search by certification, issuer, or employee..."
+                placeholder="Rechercher par certification, émetteur ou employé..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-10"
@@ -133,13 +159,13 @@ const CertificationTrackingPage: React.FC = () => {
             <div className="flex gap-2">
               <Select value={statusFilter} onValueChange={setStatusFilter}>
                 <SelectTrigger className="w-[150px]">
-                  <SelectValue placeholder="Status" />
+                  <SelectValue placeholder="Statut" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Status</SelectItem>
-                  <SelectItem value="active">Active</SelectItem>
-                  <SelectItem value="expiring_soon">Expiring Soon</SelectItem>
-                  <SelectItem value="expired">Expired</SelectItem>
+                  <SelectItem value="all">Tous les statuts</SelectItem>
+                  <SelectItem value="active">Actives</SelectItem>
+                  <SelectItem value="expiring_soon">Expirant bientôt</SelectItem>
+                  <SelectItem value="expired">Expirées</SelectItem>
                 </SelectContent>
               </Select>
 
@@ -156,7 +182,7 @@ const CertificationTrackingPage: React.FC = () => {
                         format(dateRange.from, 'LLL dd, y')
                       )
                     ) : (
-                      <span>Expiration range</span>
+                      <span>Plage d'expiration</span>
                     )}
                   </Button>
                 </PopoverTrigger>
@@ -180,7 +206,7 @@ const CertificationTrackingPage: React.FC = () => {
                     setDateRange({});
                   }}
                 >
-                  Clear
+                  Réinitialiser
                 </Button>
               )}
             </div>
@@ -193,17 +219,17 @@ const CertificationTrackingPage: React.FC = () => {
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="text-lg">
-              {filteredCertifications.length} Certification{filteredCertifications.length !== 1 ? 's' : ''}
+              {filteredCertifications.length} Certification{filteredCertifications.length !== 1 ? 's' : ''} trouvée{filteredCertifications.length !== 1 ? 's' : ''}
             </CardTitle>
             <div className="flex gap-2 text-sm text-muted-foreground">
               <Badge variant="outline" className="bg-success/10 text-success">
-                {certificationStats.active} Active
+                {certificationStats.active} Actives
               </Badge>
               <Badge variant="outline" className="bg-warning/10 text-warning">
-                {certificationStats.expiring_soon} Expiring
+                {certificationStats.expiring_soon} Expirant bientôt
               </Badge>
               <Badge variant="outline" className="bg-destructive/10 text-destructive">
-                {certificationStats.expired} Expired
+                {certificationStats.expired} Expirées
               </Badge>
             </div>
           </div>
@@ -213,11 +239,11 @@ const CertificationTrackingPage: React.FC = () => {
             <TableHeader>
               <TableRow>
                 <TableHead>Certification</TableHead>
-                <TableHead>Employee</TableHead>
-                <TableHead>Issuer</TableHead>
-                <TableHead>Issue Date</TableHead>
+                <TableHead>Employé</TableHead>
+                <TableHead>Émetteur</TableHead>
+                <TableHead>Date d'émission</TableHead>
                 <TableHead>Expiration</TableHead>
-                <TableHead>Status</TableHead>
+                <TableHead>Statut</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -260,11 +286,11 @@ const CertificationTrackingPage: React.FC = () => {
           {filteredCertifications.length === 0 && !loading && (
             <div className="py-16 text-center">
               <Award className="h-12 w-12 mx-auto text-muted-foreground/50 mb-4" />
-              <h3 className="font-medium text-lg mb-1">No certifications found</h3>
+              <h3 className="font-medium text-lg mb-1">Aucune certification trouvée</h3>
               <p className="text-muted-foreground text-sm">
-                {allCertifications.length === 0 
-                  ? 'No team members have uploaded certifications yet'
-                  : 'Try adjusting your filters'
+                {allCertifications.length === 0
+                  ? 'Aucun membre de l\'équipe n\'a encore importé de certification'
+                  : 'Essayez d\'ajuster vos filtres'
                 }
               </p>
             </div>

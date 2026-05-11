@@ -14,6 +14,8 @@ import {
   Users,
   UserPlus,
   X,
+  Sun,
+  Moon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -43,14 +45,14 @@ function timeAgo(dateStr: string): string {
   if (Number.isNaN(date.getTime())) return '';
   const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
 
-  if (seconds < 60) return `${Math.max(seconds, 1)}s ago`;
+  if (seconds < 60) return `${Math.max(seconds, 1)}s`;
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 60) return `${minutes}min`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) return `${hours}h`;
   const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return date.toLocaleDateString();
+  if (days < 7) return `${days}j`;
+  return date.toLocaleDateString('fr-FR');
 }
 
 /** Returns an icon component based on notification type */
@@ -85,11 +87,37 @@ function getNotificationIcon(type?: string) {
   }
 }
 
+function useDarkMode() {
+  const [isDark, setIsDark] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    const stored = localStorage.getItem('theme');
+    if (stored) return stored === 'dark';
+    return document.documentElement.classList.contains('dark');
+  });
+
+  const toggle = useCallback(() => {
+    setIsDark((prev) => {
+      const next = !prev;
+      if (next) {
+        document.documentElement.classList.add('dark');
+        localStorage.setItem('theme', 'dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+        localStorage.setItem('theme', 'light');
+      }
+      return next;
+    });
+  }, []);
+
+  return { isDark, toggle };
+}
+
 export const TopHeader: React.FC<TopHeaderProps> = ({ title, showSearch = false }) => {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const { isDark, toggle: toggleDark } = useDarkMode();
 
   const loadNotifications = useCallback(async () => {
     if (!user) {
@@ -214,7 +242,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ title, showSearch = false 
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               type="search"
-              placeholder="Search..."
+              placeholder="Rechercher..."
               className="pl-10 bg-muted/50 border-0 focus-visible:ring-1"
             />
           </div>
@@ -222,6 +250,9 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ title, showSearch = false 
       )}
 
       <div className="flex items-center gap-2 ml-auto">
+        <Button variant="ghost" size="icon" onClick={toggleDark} title={isDark ? 'Mode clair' : 'Mode sombre'}>
+          {isDark ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+        </Button>
         <DropdownMenu onOpenChange={(open) => { if (open) markAllAsRead(); }}>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" className="relative">
@@ -252,7 +283,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ title, showSearch = false 
                     }}
                   >
                     <CheckCheck className="h-3.5 w-3.5" />
-                    Mark all read
+                    Tout marquer lu
                   </Button>
                 )}
               </div>
@@ -261,7 +292,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ title, showSearch = false 
             {notifications.length === 0 ? (
               <div className="p-6 text-center text-sm text-muted-foreground">
                 <Bell className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                No notifications
+                Aucune notification
               </div>
             ) : (
               [...notifications.filter((notification) => !notification.read), ...notifications.filter((notification) => notification.read)]

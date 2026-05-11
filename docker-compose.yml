@@ -169,7 +169,7 @@ services:
       - N8N_PORT=5678
       - N8N_PROTOCOL=http
       - WEBHOOK_URL=http://localhost:5678/
-      - N8N_RUNNERS_MODE=external
+      - N8N_RUNNERS_ENABLED=true
       - GENERIC_TIMEZONE=Europe/Paris
     volumes:
       - n8n-data:/home/node/.n8n

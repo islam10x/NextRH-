@@ -153,6 +153,15 @@ export class TeamsService {
         return this.teamRepo.count();
     }
 
+    async listAllWithMembers(): Promise<{ teamId: string; teamName: string; memberUserIds: string[] }[]> {
+        const teams = await this.teamRepo.find({ relations: ['members', 'members.employee'] });
+        return teams.map((t) => ({
+            teamId: t.team_id,
+            teamName: t.teamName || 'Team',
+            memberUserIds: (t.members || []).map((m) => m.employee?.user_id).filter(Boolean) as string[],
+        }));
+    }
+
     async getTeamIdForManager(managerUserId: string): Promise<string | null> {
         const team = await this.teamRepo.findOne({
             where: { manager: { user_id: managerUserId } },
