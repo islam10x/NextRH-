@@ -123,7 +123,7 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
         p["displayTitle"] = name or generated
         projects.append(p)
 
-    work_experiences = list(profile.get("workExperiences") or [])
+    work_experiences = list(profile.get("workExperiences") or profile.get("experience") or profile.get("work_experiences") or [])
 
     # Attach internal projects under the Next Step experience entry only.
     def _dedupe_preserve_order(items: List[str]) -> List[str]:
@@ -216,7 +216,7 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
         "total_experience_years": _safe_text(profile.get("totalExperienceYears")),
         "skills": profile.get("skills") or [],
         "work_experiences": work_experiences,
-        "educations": profile.get("educations") or [],
+        "educations": profile.get("educations") or profile.get("education") or [],
         "certifications": profile.get("certifications") or [],
         "projects": projects,
         "languages": profile.get("languages") or [],
@@ -346,7 +346,7 @@ _SECTION_KEYWORDS = {
         "parcours", "emploi", "poste", "fonctions", "carriere", "career",
     },
     "education": {
-        "education", "formation", "formation academique", "academique",
+        "education", "formation", "formation academique", "experience academique", "academique",
         "diplome", "etudes", "etudes superieures", "scolarite",
         "academic", "academics", "qualification",
     },
@@ -518,9 +518,9 @@ def _analyze_authoring_rules_docx(docx_path: str, note: Optional[str] = None) ->
                     col_map[str(col_idx)] = "date_range"
                 elif tokens & {"institution", "ecole", "universite", "school", "college"}:
                     col_map[str(col_idx)] = "institution"
-                elif tokens & {"diplome", "degree", "diploma"}:
+                elif tokens & {"diplome", "degree", "diploma", "formation"}:
                     col_map[str(col_idx)] = "degree"
-                elif tokens & {"specialite", "specialisation", "field", "filiere", "domaine"}:
+                elif tokens & {"specialite", "specialisation", "field", "filiere", "domaine", "etudes"}:
                     col_map[str(col_idx)] = "fieldOfStudy"
             elif inferred_section == "certifications":
                 if tokens & {"certificat", "certification", "certificate"}:
@@ -756,10 +756,17 @@ def _fill_common_placeholders(doc: DocxDocument, context: Dict[str, Any]) -> Non
                 _process_tables(footer.tables)
 
 
-def _resolve_rule_value(section: str, field: str, item: Dict[str, Any]) -> str:
+def _resolve_rule_value(section: str, field: str, item: Any) -> str:
     field = field or ""
+    
+    # Defensive: if item is a string (e.g. from a simple list of skills or certifications),
+    # return it directly if the field is empty or looks like a name/skill field.
+    if isinstance(item, str):
+        if not field or field in {"name", "skill", "label", "title", "certification_name"}:
+            return item
+        return ""
     if field == "date_range":
-        return str(item.get("date_range") or "")
+        return str(item.get("date_range") or item.get("dates") or item.get("periode") or "")
     if field == "year":
         start = item.get("startDate") or ""
         end = item.get("endDate") or ""
@@ -769,11 +776,11 @@ def _resolve_rule_value(section: str, field: str, item: Dict[str, Any]) -> str:
     # Standard mappings
     if section == "experience":
         if field == "companyName":
-            return str(item.get("companyName") or "")
+            return str(item.get("companyName") or item.get("company") or item.get("organisme") or "")
         if field == "jobTitle":
-            return str(item.get("jobTitle") or "")
+            return str(item.get("jobTitle") or item.get("title") or item.get("role") or "")
         if field == "duration":
-            return str(item.get("duration") or "")
+            return str(item.get("duration") or item.get("dates") or "")
     if section == "projects":
         if field in {"displayTitle", "name"}:
             return str(item.get("displayTitle") or item.get("name") or "")
@@ -783,10 +790,10 @@ def _resolve_rule_value(section: str, field: str, item: Dict[str, Any]) -> str:
             return str(item.get("duration") or "")
     if section == "education":
         if field == "institution":
-            return str(item.get("institution") or item.get("school") or "")
+            return str(item.get("institution") or item.get("school") or item.get("universite") or item.get("ecole") or "")
         if field == "degree":
-            degree = item.get("degree") or ""
-            field_of = item.get("fieldOfStudy") or item.get("field") or ""
+            degree = item.get("degree") or item.get("diplome") or ""
+            field_of = item.get("fieldOfStudy") or item.get("field") or item.get("specialite") or ""
             return str(f"{degree} - {field_of}".strip(" -")) if field_of else str(degree)
         if field == "fieldOfStudy":
             return str(item.get("fieldOfStudy") or item.get("field") or "")

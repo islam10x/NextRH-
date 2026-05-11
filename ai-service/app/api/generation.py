@@ -291,7 +291,7 @@ def _profile_to_fallback_payload(profile: Dict[str, Any]) -> Dict[str, Any]:
         "experience": normalized_experience,
         "education": normalized_education,
         "languages": _coerce_string_list(profile.get("languages"), ("name", "language", "label", "lang")),
-        "certifications": profile.get("certifications") or [],
+        "certifications": _coerce_string_list(profile.get("certifications"), ("name", "certification_name", "title")),
         "projects": profile.get("projects") or [],
         "photo": profile.get("photo"),
     }

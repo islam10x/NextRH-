@@ -1352,6 +1352,11 @@ RULES:
 - If no matching data exists, reply exactly: "I don't have that information."
 - Answer only what was asked. Keep it short.
 - For greetings or small talk, respond briefly and explain you can help with employee data.
+- Format for readability:
+  - When listing multiple employees, use a numbered list with one employee per line.
+  - Put employee names in markdown bold: **Employee Name**.
+  - Keep each item compact (name + most relevant attributes).
+  - Avoid one long paragraph.
 
 Question: {standalone_query}""",
             ),

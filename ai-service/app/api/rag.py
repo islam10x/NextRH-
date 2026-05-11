@@ -30,11 +30,22 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str = "default"
 
-# Global or lazy-loaded chain
-_chain = None
+# Lazy-built RAG artifacts (chain + stream function).
+_built = None
+
+
+def _get_built():
+    global _built
+    if _built is None:
+        _built = build_chain()
+    return _built
 
 def get_chain():
     return _get_built()["chain"]
+
+
+def get_stream():
+    return _get_built()["stream"]
 
 @router.post("/chat")
 async def chat_rag(request: ChatRequest):
@@ -62,3 +73,33 @@ async def chat_rag(request: ChatRequest):
                 "context": [],
             }
         raise HTTPException(status_code=500, detail=err)
+
+
+@router.post("/chat/stream")
+async def chat_rag_stream(request: ChatRequest):
+    """Perform a RAG chat interaction and stream NDJSON chunks."""
+    message = (request.message or "").strip()
+    stream_invoke = get_stream()
+
+    def _ndjson_stream():
+        import json as _json
+
+        try:
+            yield from stream_invoke(message, request.session_id)
+        except Exception as exc:
+            err = str(exc or "").strip().lower()
+            if "timed out" in err or "timeout" in err:
+                answer = "The model timed out while processing your request. Please retry or use a faster model."
+            else:
+                answer = "An error occurred while generating the response."
+            yield _json.dumps({"type": "token", "data": answer}) + "\n"
+            yield _json.dumps({"type": "done"}) + "\n"
+
+    return StreamingResponse(
+        _ndjson_stream(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

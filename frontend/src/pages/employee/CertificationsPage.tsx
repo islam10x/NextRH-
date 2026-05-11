@@ -27,6 +27,24 @@ interface UploadedFileInfo {
   type: string;
 }
 
+const parseDateOnly = (value?: string | null): Date | null => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+};
+
+const getDynamicStatus = (cert: CvCertification): CvCertification['status'] => {
+  const expDate = parseDateOnly(cert.expirationDate);
+  if (!expDate) return cert.status || 'active';
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const daysUntilExpiration = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  if (daysUntilExpiration < 0) return 'expired';
+  if (daysUntilExpiration <= 30) return 'expiring_soon';
+  return 'active';
+};
+
 const CertificationsPage: React.FC = () => {
   const ALLOWED_TYPES = useMemo(
     () => [
@@ -224,24 +242,6 @@ const CertificationsPage: React.FC = () => {
     setProgress(0);
     setUploadError(null);
     setUploadedFile(null);
-  };
-
-  const parseDateOnly = (value?: string | null) => {
-    if (!value) return null;
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) return null;
-    return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
-  };
-
-  const getDynamicStatus = (cert: CvCertification): CvCertification['status'] => {
-    const expDate = parseDateOnly(cert.expirationDate);
-    if (!expDate) return cert.status || 'active';
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const daysUntilExpiration = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-    if (daysUntilExpiration < 0) return 'expired';
-    if (daysUntilExpiration <= 30) return 'expiring_soon';
-    return 'active';
   };
 
   return (

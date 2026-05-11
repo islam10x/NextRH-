@@ -1747,25 +1747,30 @@ export class CvService {
             address: profileData.address || '',
             summary: profileData.professionalSummary || '',
             skills: profileData.skills || [],
-            experience: (profileData.workExperiences || [])
+            workExperiences: (profileData.workExperiences || [])
                 .filter((exp: any) => exp.jobTitle && exp.companyName)
                 .map((exp: any) => ({
                     title: exp.jobTitle,
+                    jobTitle: exp.jobTitle,
                     company: exp.companyName,
+                    companyName: exp.companyName,
                     dates: [exp.startDate, exp.isCurrent ? 'Present' : exp.endDate]
                         .filter(Boolean)
                         .join(' - '),
                     description: exp.description || '',
                 })),
-            education: (profileData.educations || []).map((edu: any) => ({
+            educations: (profileData.educations || []).map((edu: any) => ({
                 degree: edu.degree,
                 institution: edu.institution,
+                fieldOfStudy: edu.fieldOfStudy || '',
                 dates: edu.endDate || '',
             })),
             languages: [],
-            certifications: (profileData.certifications || []).map(
-                (c: any) => c.name || '',
-            ),
+            certifications: (profileData.certifications || []).map((c: any) => ({
+                name: c.name || '',
+                issueDate: c.issueDate || '',
+                issuingOrganization: c.issuingOrganization || '',
+            })),
             projects: (profileData.projects || []).map((p: any) => {
                 const rawName = (p.name || '').trim();
                 const isUnknown = !rawName || rawName.toLowerCase() === 'unknown project';
