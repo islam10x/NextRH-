@@ -15,7 +15,9 @@ import { RagService } from '../rag/rag.service';
 import { FileValidationService } from '../file-validation/file-validation.service';
 import { normalizeFlexibleDate, parseFlexibleDateRange } from '../utils/date-normalizer';
 import { AIGenerationService } from '../ai-generation/ai-generation.service';
-import { CvTemplatesService } from '../cv-templates/cv-templates.service';
+import * as fs from 'fs';
+import * as fsPromises from 'fs/promises';
+import * as path from 'path';
 
 @Injectable()
 export class CvService {
@@ -60,7 +62,9 @@ export class CvService {
         const user = await this.userRepository.findOne({ where: { user_id: userId } });
         if (!user) throw new NotFoundException(`User ${userId} not found`);
 
-        const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email;
+        const fullName =
+            [this.cleanText(user.firstName), this.cleanText(user.lastName)].filter(Boolean).join(' ') ||
+            user.email;
 
         const profile = await this.profileRepository.findOne({
             where: { user: { user_id: userId } },
@@ -78,47 +82,17 @@ export class CvService {
         this.logger.error(`[STABILIZATION] ATTEMPTING DATA RECOVERY FOR USER: ${userId}`);
         
         const metaData = await this.fileStorageService.getEmployeeMetadata(userId);
-        let rawMeta = await this.fileStorageService.getRawMetadata(userId);
-        
-        // STABILIZATION OVERRIDE: If metadata is missing, try fuzzy search directly for Aya
-        if (!rawMeta && fullName.includes('Aya')) {
-            this.logger.warn(`[STABILIZATION] Raw metadata null for Aya. Attempting fuzzy directory recovery...`);
-            const rootDir = (this.fileStorageService as any).getStorageRoot();
-            const folders = require('fs').readdirSync(rootDir);
-            const ayaFolder = folders.find(f => f.toLowerCase().includes('aya') && f.toLowerCase().includes('jemaa'));
-            if (ayaFolder) {
-                const p = require('path').join(rootDir, ayaFolder, 'metadata.json');
-                if (require('fs').existsSync(p)) {
-                    this.logger.log(`[STABILIZATION] RECOVERY SUCCESS: Found metadata at ${p}`);
-                    rawMeta = JSON.parse(require('fs').readFileSync(p, 'utf8'));
-                }
-            }
-        }
-
-        if (rawMeta) {
-            const certCount = (rawMeta.certifications || rawMeta.structured_data?.certifications || []).length;
-            const eduCount = (rawMeta.educations || rawMeta.education || rawMeta.structured_data?.educations || rawMeta.structured_data?.education || []).length;
-            this.logger.log(`[STABILIZATION] DATA FOUND: Certs=${certCount}, Edus=${eduCount}`);
-        } else {
-            this.logger.error(`[STABILIZATION] DATA NOT FOUND after recovery attempts.`);
-        }
-
-        const phone = rawMeta?.structured_data?.phone || null;
-        const structuredEmail: string | null =
-            (typeof rawMeta?.structured_data?.email === 'string' && rawMeta.structured_data.email.includes('@'))
-                ? rawMeta.structured_data.email.trim()
-                : user.email || null;
-        // Address often has trailing parser artifacts — cut at common section headers
-        const rawAddress: string = rawMeta?.structured_data?.address || '';
+        const rawMeta = await this.fileStorageService.getRawMetadata(userId);
+        const phone = this.cleanText(rawMeta?.structured_data?.phone) || null;
+        // Address often has trailing parser artifacts; cut at common section headers.
+        const rawAddress: string = this.cleanText(rawMeta?.structured_data?.address);
         const address = rawAddress
-            ? rawAddress
-                .split(
-                    /\s+(?:Exp[eé]riences?|Formation|Certif|Comp[eé]tences?|Skills|Education|Projects?|P[eé]riode|Organisme|Fonction\s+occup)/i,
-                )[0]
-                .trim() || null
+            ? this.stripAtFirstSectionMarker(rawAddress) || null
             : null;
         const cvFilename = rawMeta?.filename || null;
         const fallbackCertifications = this.extractCertificationsFromMetadata(rawMeta);
+        const fallbackWorkExperiences = this.extractWorkExperiencesFromMetadata(rawMeta);
+        const fallbackEducations = this.extractEducationsFromMetadata(rawMeta);
         const toDateString = (value: Date | string | null | undefined) => {
             if (!value) return null;
             try {
@@ -167,7 +141,7 @@ export class CvService {
                 profileId: null,
                 profile_id: null,
                 name: fullName,
-                email: structuredEmail || user.email,
+                email: user.email,
                 phone,
                 address,
                 cvFilename,
@@ -183,130 +157,119 @@ export class CvService {
             };
         }
 
-        let workExperiences = (profile.workExperiences ?? []).map((exp) => ({
+        const workExperiencesFromDb = (profile.workExperiences ?? []).map((exp) => ({
             id: exp.experience_id,
-            jobTitle: exp.jobTitle || (exp as any).job_title,
-            companyName: exp.companyName || (exp as any).company_name,
-            startDate: toDateString(exp.startDate || (exp as any).start_date),
-            endDate: toDateString(exp.endDate || (exp as any).end_date),
-            isCurrent: exp.isCurrent ?? (exp as any).is_current ?? false,
-            description: exp.description,
+            jobTitle: this.cleanText(exp.jobTitle),
+            companyName: this.cleanText(exp.companyName),
+            startDate: toDateString(exp.startDate),
+            endDate: toDateString(exp.endDate),
+            isCurrent: exp.isCurrent,
+            description: this.cleanText(exp.description),
         }));
-        if (workExperiences.length === 0 && fallbackWorkExperiences.length > 0) {
-            workExperiences = fallbackWorkExperiences;
-        }
+        const workExperiences = workExperiencesFromDb.length > 0 ? workExperiencesFromDb : fallbackWorkExperiences;
 
-        let educations = (profile.educations ?? []).map((edu) => ({
-            id: edu.education_id,
-            degree: edu.degree,
-            fieldOfStudy: edu.fieldOfStudy,
-            institution: edu.institution,
-            endDate: toDateString(edu.endDate),
-        }));
-
-        if (educations.length === 0) {
-            const rawMetadata = await this.fileStorageService.getRawMetadata(userId);
-            const fileEdus = rawMetadata?.educations || 
-                            rawMetadata?.education || 
-                            rawMetadata?.structured_data?.educations || 
-                            rawMetadata?.structured_data?.education ||
-                            rawMetadata?.academic_experience ||
-                            rawMetadata?.formation;
-            if (Array.isArray(fileEdus) && fileEdus.length > 0) {
-                educations = fileEdus.map((e: any, idx: number) => {
-                    const dates = e.dates || e.date || '';
-                    let end = dates;
-                    if (dates.includes('-')) {
-                        const parts = dates.split('-');
-                        end = parts[1].trim();
-                    }
-                    return {
-                        id: `file-edu-${idx}`,
-                        degree: e.degree || e.title || '',
-                        fieldOfStudy: e.fieldOfStudy || e.field || '',
-                        institution: e.institution || e.school || '',
-                        endDate: end,
-                    };
+        const educationsFromDb = (profile.educations ?? [])
+            .map((edu) => {
+                const normalized = this.normalizeEducationEntry({
+                    degree: edu.degree,
+                    fieldOfStudy: edu.fieldOfStudy,
+                    institution: edu.institution,
+                    endDate: edu.endDate,
                 });
+
+                if (!normalized) {
+                    return null;
+                }
+
+                return {
+                    id: edu.education_id,
+                    degree: normalized.degree,
+                    fieldOfStudy: normalized.fieldOfStudy,
+                    institution: normalized.institution,
+                    endDate: toDateString(normalized.endDate),
+                };
+            })
+            .filter(Boolean);
+        const educations = educationsFromDb.length > 0 ? educationsFromDb : fallbackEducations;
+
+        const certByKey = new Map<
+            string,
+            {
+                id: string;
+                name: string;
+                issuingOrganization: string | null;
+                issueDate: string | null;
+                expirationDate: string | null;
+                status: CertificationStatus;
+                isUploaded: boolean;
             }
-        }
+        >();
 
-        if (educations.length === 0 && fallbackEducations.length > 0) {
-            educations = fallbackEducations;
-        }
+        for (const cert of profile.certifications ?? []) {
+            const cleanedName = this.normalizeCertificationName(cert.certificationName);
+            if (!this.isUsableCertificationName(cleanedName)) {
+                continue;
+            }
 
-        let certifications = (profile.certifications ?? []).map((cert) => ({
-            id: cert.certification_id,
-            name: cert.certificationName || (cert as any).name || (cert as any).title || (cert as any).label,
-            issuingOrganization: cert.issuingOrganization || (cert as any).organization || (cert as any).issuer || (cert as any).authority,
-            issueDate: toDateString(cert.issueDate || (cert as any).date || (cert as any).issue_date),
-            expirationDate: toDateString(cert.expirationDate || (cert as any).expiration_date),
-            status: cert.status,
-            isUploaded: cert.isUploaded ?? false,
-        }));
-        if (certifications.length === 0) {
-            // SUPER FETCH: Check Email, Keyword, AND Metadata.json file
-            const user = await this.certificationRepository.manager.getRepository('User').findOne({ where: { user_id: userId } });
-            const email = user?.email;
-            const firstName = user?.firstName || 'Aya';
-            
-            // 1. Database fallback
-            const allCerts = await this.certificationRepository
-                .createQueryBuilder('cert')
-                .leftJoin('cert.profile', 'profile')
-                .leftJoin('profile.user', 'user')
-                .where('user.email = :email OR profile.user_id = :userId OR cert.certificationName LIKE :kw', { 
-                    email, 
-                    userId,
-                    kw: `%${firstName}%`
-                })
-                .getMany();
-            
-            if (allCerts.length > 0) {
-                certifications = allCerts.map(cert => ({
+            const key = this.normalizeCertKey(cleanedName);
+            const existing = certByKey.get(key);
+            const normalizedIssuer = this.cleanText(cert.issuingOrganization) || null;
+            const normalizedIssueDate = toDateString(cert.issueDate);
+            const normalizedExpirationDate = toDateString(cert.expirationDate);
+
+            if (!existing) {
+                certByKey.set(key, {
                     id: cert.certification_id,
-                    name: cert.certificationName || (cert as any).name || 'Certification',
-                    issuingOrganization: cert.issuingOrganization || (cert as any).issuer,
-                    issueDate: toDateString(cert.issueDate),
-                    expirationDate: toDateString(cert.expirationDate),
+                    name: cleanedName,
+                    issuingOrganization: normalizedIssuer,
+                    issueDate: normalizedIssueDate,
+                    expirationDate: normalizedExpirationDate,
                     status: cert.status,
                     isUploaded: cert.isUploaded ?? false,
-                }));
+                });
+                continue;
             }
 
-            // 2. Metadata.json fallback (The ultimate truth for parsed CVs)
-            if (certifications.length === 0) {
-                const rawMetadata = await this.fileStorageService.getRawMetadata(userId);
-                const fileCerts = rawMetadata?.certifications || rawMetadata?.structured_data?.certifications;
-                if (Array.isArray(fileCerts) && fileCerts.length > 0) {
-                    certifications = fileCerts.map((c: any, idx: number) => ({
-                        id: `file-cert-${idx}`,
-                        name: c.name || c.title || 'Certification',
-                        issuingOrganization: c.issuingOrganization || c.issuer || c.organization || '',
-                        issueDate: String(c.issueDate || c.date || ''),
-                        expirationDate: String(c.expirationDate || ''),
-                        status: CertificationStatus.ACTIVE,
-                        isUploaded: false,
-                    }));
-                }
+            existing.issuingOrganization = existing.issuingOrganization || normalizedIssuer;
+            existing.issueDate = existing.issueDate || normalizedIssueDate;
+            existing.expirationDate = existing.expirationDate || normalizedExpirationDate;
+            if (existing.status !== CertificationStatus.ACTIVE && cert.status === CertificationStatus.ACTIVE) {
+                existing.status = cert.status;
+            }
+            if (!existing.isUploaded && (cert.isUploaded ?? false)) {
+                existing.isUploaded = true;
             }
         }
 
+        let certifications = Array.from(certByKey.values());
         if (certifications.length === 0 && fallbackCertifications.length > 0) {
             certifications = fallbackCertifications;
         }
 
-        let projects = (profile.projectParticipations ?? []).map((p) => ({
-            id: p.participant_id,
-            name: p.project?.projectName ?? '',
-            generatedTitle: p.project?.generatedTitle ?? null,
-            client: p.project?.clientName ?? null,
-            description: p.description || p.project?.projectDescription || '',
-            role: null,
-            skills: (p.project?.skills ?? []).map((s) => s.skillName),
-            startDate: toDateString(p.project?.startDate),
-            endDate: toDateString(p.project?.endDate),
-        }));
+        const projects = (profile.projectParticipations ?? [])
+            .map((p) => {
+            const projectName = this.cleanText(p.project?.projectName);
+            const rawClientName = this.cleanText(p.project?.clientName);
+            const projectDescription = this.normalizeProjectDescription(
+                p.description || p.project?.projectDescription || '',
+                rawClientName,
+            );
+            const clientName = this.normalizeProjectClientName(rawClientName);
+            const role = this.normalizeProjectRole(p.role);
+
+            return {
+                id: p.participant_id,
+                name: projectName || 'Unknown Project',
+                generatedTitle: this.cleanText(p.project?.generatedTitle) || null,
+                client: clientName,
+                description: projectDescription,
+                role,
+                skills: (p.project?.skills ?? []).map((s) => this.cleanText(s.skillName)).filter(Boolean),
+                startDate: toDateString(p.project?.startDate),
+                endDate: toDateString(p.project?.endDate),
+            };
+        })
+            .filter((project) => !(project.name.toLowerCase() === 'unknown project' && !project.client && !project.description));
 
         if (projects.length === 0) {
             const rawMetadata = await this.fileStorageService.getRawMetadata(userId);
@@ -334,7 +297,7 @@ export class CvService {
             profileId: profile.profile_id,
             profile_id: profile.profile_id,
             name: fullName,
-            email: structuredEmail || user.email,
+            email: user.email,
             phone,
             address,
             cvFilename,
@@ -370,20 +333,22 @@ export class CvService {
         rawCerts.forEach((cert: any) => {
             if (cert == null) return;
             if (typeof cert === 'string') {
-                const name = cert.trim();
-                if (!name) return;
-                if (!deduped.has(name)) {
-                    deduped.set(name, { name, issuer: null, issue: null, expiration: null, isUploaded: false });
+                const name = this.normalizeCertificationName(cert);
+                if (!this.isUsableCertificationName(name)) return;
+                const key = this.normalizeCertKey(name);
+                if (!deduped.has(key)) {
+                    deduped.set(key, { name, issuer: null, issue: null, expiration: null, isUploaded: false });
                 }
                 return;
             }
             if (typeof cert !== 'object') return;
 
-            const name = String(cert.name || cert.certification_name || '').trim();
-            if (!name) return;
+            const name = this.normalizeCertificationName(cert.name || cert.certification_name);
+            if (!this.isUsableCertificationName(name)) return;
+            const key = this.normalizeCertKey(name);
 
             const issuer =
-                String(cert.issuer || cert.issuing_organization || cert.issuingOrganization || '').trim() ||
+                this.cleanText(cert.issuer || cert.issuing_organization || cert.issuingOrganization) ||
                 null;
             const issueDate = normalizeFlexibleDate(
                 cert.date_obtained || cert.issue_date || cert.issueDate,
@@ -395,9 +360,9 @@ export class CvService {
             );
             const isUploaded = Boolean(cert.is_uploaded ?? cert.isUploaded);
 
-            const existing = deduped.get(name);
+            const existing = deduped.get(key);
             if (!existing) {
-                deduped.set(name, { name, issuer, issue: issueDate, expiration: expirationDate, isUploaded });
+                deduped.set(key, { name, issuer, issue: issueDate, expiration: expirationDate, isUploaded });
                 return;
             }
             if (!existing.issuer && issuer) existing.issuer = issuer;
@@ -431,9 +396,121 @@ export class CvService {
     }
 
     /**
-     * Rania's Logic: Physical file storage management
+     * Core Logic: Physical file storage management
      * Consolidated: Saves file AND triggers parsing
      */
+    private extractWorkExperiencesFromMetadata(rawMeta: any) {
+        const structuredExperiences = rawMeta?.structured_data?.experience;
+        const topLevelExperiences = rawMeta?.experience;
+        const rawExperiences = [
+            ...(Array.isArray(structuredExperiences) ? structuredExperiences : []),
+            ...(Array.isArray(topLevelExperiences) ? topLevelExperiences : []),
+        ];
+
+        if (rawExperiences.length === 0) {
+            return [];
+        }
+
+        const formatDate = (value: Date | null) => (value ? value.toISOString().split('T')[0] : null);
+
+        return rawExperiences
+            .map((exp: any, index: number) => {
+                if (!exp || typeof exp !== 'object') {
+                    return null;
+                }
+
+                const rawStartDate = this.cleanText(exp.start_date || exp.period || exp.date_range || exp.date);
+                const rawEndDate = this.cleanText(exp.end_date);
+                const rawTitle = this.cleanText(exp.title || exp.job_title || exp.role);
+                const rawCompany = this.cleanText(exp.company || exp.company_name || exp.organisme);
+                const description = this.cleanText(exp.description);
+                if (!rawStartDate && !rawEndDate && !rawTitle && !rawCompany && !description) {
+                    return null;
+                }
+
+                const parsedRange = parseFlexibleDateRange(rawStartDate);
+                const explicitStartDate = normalizeFlexibleDate(rawStartDate, 'start');
+                const explicitEndDate = normalizeFlexibleDate(rawEndDate, 'end');
+                const isCurrent =
+                    Boolean(exp.is_current) ||
+                    parsedRange.isCurrent ||
+                    (/^(?:depuis|since)\b/i.test(rawStartDate) && !rawEndDate);
+
+                const startDate =
+                    formatDate(explicitStartDate) ||
+                    formatDate(parsedRange.startDate) ||
+                    rawStartDate ||
+                    null;
+                const endDate =
+                    isCurrent
+                        ? null
+                        : formatDate(explicitEndDate) ||
+                          formatDate(parsedRange.endDate) ||
+                          rawEndDate ||
+                          null;
+
+                if (!rawTitle && !rawCompany && !description) {
+                    return null;
+                }
+
+                return {
+                    id: `meta-exp-${index}`,
+                    jobTitle: rawTitle || 'Unknown Role',
+                    companyName: rawCompany || 'Unknown Company',
+                    startDate,
+                    endDate,
+                    isCurrent,
+                    description,
+                };
+            })
+            .filter(Boolean);
+    }
+
+    private extractEducationsFromMetadata(rawMeta: any) {
+        const structuredEducation = rawMeta?.structured_data?.education;
+        const topLevelEducation = rawMeta?.education;
+        const rawEducation = [
+            ...(Array.isArray(structuredEducation) ? structuredEducation : []),
+            ...(Array.isArray(topLevelEducation) ? topLevelEducation : []),
+        ];
+
+        if (rawEducation.length === 0) {
+            return [];
+        }
+
+        return rawEducation
+            .map((edu: any, index: number) => {
+                if (!edu || typeof edu !== 'object') {
+                    return null;
+                }
+
+                const rawEndDate = this.cleanText(edu.end_date || edu.graduation_date || edu.date);
+                const parsedRange = parseFlexibleDateRange(rawEndDate);
+                const normalized = this.normalizeEducationEntry({
+                    degree: edu.degree,
+                    fieldOfStudy: edu.field_of_study || edu.fieldOfStudy || edu.major || edu.specialization || null,
+                    institution: edu.institution || edu.school || edu.establishment,
+                    endDate:
+                        normalizeFlexibleDate(rawEndDate, 'end') ||
+                        parsedRange.endDate ||
+                        parsedRange.startDate,
+                });
+
+                if (!normalized) {
+                    return null;
+                }
+
+                return {
+                    id: `meta-edu-${index}`,
+                    degree: normalized.degree,
+                    fieldOfStudy: normalized.fieldOfStudy,
+                    institution: normalized.institution,
+                    endDate: this.formatMetadataDate(normalized.endDate, rawEndDate),
+                };
+            })
+            .filter(Boolean);
+    }
+
     async saveEmployeeCv(userId: string, file: Express.Multer.File) {
         let updatedUser = null;
 
@@ -453,7 +530,7 @@ export class CvService {
             });
 
             if (aiResponse.ok) {
-                const parsingResult = await aiResponse.json();
+                const parsingResult = this.normalizeParsedPayload(await aiResponse.json());
                 this.logger.log(`AI parsing successful for user ${userId}`);
 
                 // 2. Update user names in DB BEFORE creating folder
@@ -509,11 +586,11 @@ export class CvService {
 
         let updated = false;
         if (data.structured_data?.first_name) {
-            user.firstName = data.structured_data.first_name;
+            user.firstName = this.cleanText(data.structured_data.first_name);
             updated = true;
         }
         if (data.structured_data?.last_name) {
-            user.lastName = data.structured_data.last_name;
+            user.lastName = this.cleanText(data.structured_data.last_name);
             updated = true;
         }
 
@@ -528,6 +605,7 @@ export class CvService {
      */
     async processCvData(userId: string, data: any) {
         this.logger.log(`Processing CV data for user ${userId}`);
+        const normalizedData = this.normalizeParsedPayload(data);
 
         // 1. Find User
         const user = await this.userRepository.findOne({ where: { user_id: userId } });
@@ -560,37 +638,39 @@ export class CvService {
 
         const snapshot = this.metadataRepository.create({
             profile: profile,
-            metadataJson: data,
+            metadataJson: normalizedData,
             isCurrent: true,
         });
         await this.metadataRepository.save(snapshot);
 
 
         // 4. Populate Work Experience
-        if (data.structured_data?.experience) {
+        if (normalizedData.structured_data?.experience) {
             await this.experienceRepository.delete({ profile: { profile_id: profile.profile_id } });
 
-            const experiences = data.structured_data.experience.map((exp: any) => {
-                const newExp = new WorkExperience();
-                const rawRange =
-                    exp.date_range ||
-                    exp.period ||
-                    exp.date ||
-                    exp.start_date ||
-                    '';
-                const parsedRange = parseFlexibleDateRange(rawRange);
-                const explicitStart = normalizeFlexibleDate(exp.start_date, 'start');
-                const explicitEnd = normalizeFlexibleDate(exp.end_date, 'end');
+            const experiences = normalizedData.structured_data.experience
+                .map((exp: any) => {
+                    const newExp = new WorkExperience();
+                    const rawRange =
+                        exp.date_range ||
+                        exp.period ||
+                        exp.date ||
+                        exp.start_date ||
+                        '';
+                    const parsedRange = parseFlexibleDateRange(rawRange);
+                    const explicitStart = normalizeFlexibleDate(exp.start_date, 'start');
+                    const explicitEnd = normalizeFlexibleDate(exp.end_date, 'end');
 
-                newExp.profile = profile;
-                newExp.jobTitle = exp.title || 'Unknown Role';
-                newExp.companyName = exp.company || 'Unknown Company';
-                newExp.startDate = parsedRange.startDate || explicitStart;
-                newExp.endDate = explicitEnd || parsedRange.endDate;
-                newExp.isCurrent = Boolean(exp.is_current) || parsedRange.isCurrent;
-                newExp.description = exp.description || '';
-                return newExp;
-            });
+                    newExp.profile = profile;
+                    newExp.jobTitle = this.cleanText(exp.title) || 'Unknown Role';
+                    newExp.companyName = this.cleanText(exp.company) || 'Unknown Company';
+                    newExp.startDate = parsedRange.startDate || explicitStart;
+                    newExp.endDate = explicitEnd || parsedRange.endDate;
+                    newExp.isCurrent = Boolean(exp.is_current) || parsedRange.isCurrent;
+                    newExp.description = this.cleanText(exp.description);
+                    return newExp;
+                })
+                .filter((exp: WorkExperience) => Boolean(exp.jobTitle || exp.companyName));
 
             this.applyLatestNextStepAsCurrent(experiences);
             await this.experienceRepository.save(experiences);
@@ -600,24 +680,39 @@ export class CvService {
         }
 
         // 5. Populate Education
-        if (data.structured_data?.education) {
+        if (normalizedData.structured_data?.education) {
             await this.educationRepository.delete({ profile: { profile_id: profile.profile_id } });
 
-            const educations = data.structured_data.education.map((edu: any) => {
-                const newEdu = new Education();
-                const rawEducationDate = edu.end_date || edu.graduation_date || edu.date || '';
-                const parsedEducationRange = parseFlexibleDateRange(rawEducationDate);
-                newEdu.profile = profile;
-                newEdu.degree = edu.degree || 'Unknown Degree';
-                newEdu.institution = edu.institution || 'Unknown Institution';
-                // For education ranges (e.g. 2011-2014), keep the largest date as graduation date.
-                newEdu.endDate =
-                    parsedEducationRange.endDate ||
-                    normalizeFlexibleDate(rawEducationDate, 'end') ||
-                    parsedEducationRange.startDate;
-                return newEdu;
-            });
-            await this.educationRepository.save(educations);
+            const educations = normalizedData.structured_data.education
+                .map((edu: any) => {
+                    const rawEducationDate = edu.end_date || edu.graduation_date || edu.date || '';
+                    const parsedEducationRange = parseFlexibleDateRange(rawEducationDate);
+                    const normalized = this.normalizeEducationEntry({
+                        degree: edu.degree,
+                        fieldOfStudy: edu.field_of_study || edu.major || edu.specialization || null,
+                        institution: edu.institution,
+                        endDate:
+                            parsedEducationRange.endDate ||
+                            normalizeFlexibleDate(rawEducationDate, 'end') ||
+                            parsedEducationRange.startDate,
+                    });
+
+                    if (!normalized) {
+                        return null;
+                    }
+
+                    const newEdu = new Education();
+                    newEdu.profile = profile;
+                    newEdu.degree = normalized.degree;
+                    newEdu.fieldOfStudy = normalized.fieldOfStudy;
+                    newEdu.institution = normalized.institution || null;
+                    newEdu.endDate = normalized.endDate || null;
+                    return newEdu;
+                })
+                .filter(Boolean) as Education[];
+            if (educations.length > 0) {
+                await this.educationRepository.save(educations);
+            }
         }
 
         // 6. Populate Certifications
@@ -630,7 +725,7 @@ export class CvService {
             .execute();
 
         const normalizeCertName = (value: string) =>
-            (value || '')
+            this.cleanText(value)
                 .normalize('NFD')
                 .replace(/[\u0300-\u036f]/g, '')
                 .replace(/[^a-zA-Z0-9]+/g, ' ')
@@ -644,17 +739,21 @@ export class CvService {
             uploadedCerts.map((cert) => normalizeCertName(cert.certificationName || ''))
         );
 
-        if (Array.isArray(data.structured_data?.certifications)) {
-            const certifications = data.structured_data.certifications
+        if (Array.isArray(normalizedData.structured_data?.certifications)) {
+            const certifications = normalizedData.structured_data.certifications
                 .map((cert: any) => {
-                    const name = cert?.name || 'Unknown Certification';
+                    const name = this.normalizeCertificationName(cert?.name || 'Unknown Certification');
+                    if (!this.isUsableCertificationName(name)) {
+                        return null;
+                    }
                     if (uploadedNames.has(normalizeCertName(name))) {
                         return null;
                     }
                     const newCert = new Certification();
                     newCert.profile = profile;
                     newCert.certificationName = name;
-                    newCert.issuingOrganization = cert.issuer || cert.issuing_organization || null;
+                    newCert.issuingOrganization =
+                        this.cleanText(cert.issuer || cert.issuing_organization) || null;
                     newCert.issueDate = normalizeFlexibleDate(
                         cert.date_obtained || cert.issue_date || cert.issueDate,
                         'start',
@@ -674,15 +773,20 @@ export class CvService {
         }
 
         // 7. Populate Projects
-        if (data.structured_data?.projects) {
+        if (normalizedData.structured_data?.projects) {
             await this.participantRepository.delete({ profile: { profile_id: profile.profile_id } });
 
             const processedProjectIds = new Set<string>();
 
-            for (const projectData of data.structured_data.projects) {
-                const projectName = projectData.name || 'Unknown Project';
-                const projectDesc = projectData.description || '';
-                const clientName = projectData.client || null;
+            for (const projectData of normalizedData.structured_data.projects) {
+                const projectName = this.cleanText(projectData.name) || 'Unknown Project';
+                const rawClientName = this.cleanText(projectData.client);
+                const projectDesc = this.normalizeProjectDescription(projectData.description, rawClientName);
+                const clientName = this.normalizeProjectClientName(rawClientName);
+
+                if (projectName.toLowerCase() === 'unknown project' && !projectDesc && !clientName) {
+                    continue;
+                }
 
                 let project = await this.projectRepository.findOne({
                     where: {
@@ -730,6 +834,7 @@ export class CvService {
                     profile: profile,
                     project: project,
                     description: projectDesc,
+                    role: this.normalizeProjectRole(projectData.role) || 'Contributor'
                 });
                 await this.participantRepository.save(participant);
                 processedProjectIds.add(project.project_id);
@@ -746,13 +851,759 @@ export class CvService {
         };
     }
 
+    private normalizeParsedPayload(data: any): any {
+        const source = data && typeof data === 'object' ? { ...data } : {};
+        const structuredSource =
+            source.structured_data && typeof source.structured_data === 'object'
+                ? { ...source.structured_data }
+                : {};
+
+        structuredSource.first_name = this.cleanText(structuredSource.first_name);
+        structuredSource.last_name = this.cleanText(structuredSource.last_name);
+        structuredSource.email = this.cleanText(structuredSource.email);
+        structuredSource.phone = this.cleanText(structuredSource.phone);
+        structuredSource.address = this.stripAtFirstSectionMarker(this.cleanText(structuredSource.address));
+
+        const experiencesRaw = this.pickFirstArray(
+            structuredSource.experience,
+            source.experience,
+            structuredSource.experiences,
+            source.experiences,
+            structuredSource.work_experience,
+            source.work_experience,
+        );
+        structuredSource.experience = experiencesRaw
+            .map((exp: any) => ({
+                ...exp,
+                start_date: this.cleanText(exp?.start_date || exp?.period || exp?.date_range || exp?.date),
+                end_date: this.cleanText(exp?.end_date),
+                company: this.cleanText(exp?.company),
+                title: this.cleanText(exp?.title),
+                description: this.cleanText(exp?.description),
+            }))
+            .filter((exp: any) => exp.company || exp.title || exp.description);
+
+        const certificationsRaw = this.pickFirstArray(
+            structuredSource.certifications,
+            source.certifications,
+            structuredSource.certification,
+            source.certification,
+            structuredSource.certifs,
+            source.certifs,
+        );
+        const normalizedCerts = this.normalizeCertificationRows(certificationsRaw);
+
+        const certByKey = new Map<string, { name: string; date_obtained?: string }>();
+        for (const cert of normalizedCerts) {
+            const key = this.normalizeCertKey(cert.name);
+            if (!key) {
+                continue;
+            }
+            const existing = certByKey.get(key);
+            if (!existing) {
+                certByKey.set(key, { ...cert });
+                continue;
+            }
+            if (!existing.date_obtained && cert.date_obtained) {
+                existing.date_obtained = cert.date_obtained;
+            }
+        }
+
+        const cleanedCertifications = Array.from(certByKey.values());
+        structuredSource.certifications = cleanedCertifications;
+        source.certifications = cleanedCertifications.map((cert) => ({
+            name: cert.name,
+            date_obtained: cert.date_obtained || '',
+            is_uploaded: false,
+        }));
+
+        const educationNarratives: string[] = [];
+        const educationRaw = this.pickFirstArray(
+            structuredSource.education,
+            source.education,
+            structuredSource.formations,
+            source.formations,
+            structuredSource.academic_education,
+            source.academic_education,
+            structuredSource.formation_academique,
+            source.formation_academique,
+        );
+        structuredSource.education = educationRaw
+            .map((edu: any) => {
+                const rawEndDate = this.cleanText(edu?.end_date || edu?.graduation_date || edu?.date);
+                const normalized = this.normalizeEducationEntry({
+                    degree: edu?.degree,
+                    fieldOfStudy: edu?.field_of_study || edu?.major || edu?.specialization || null,
+                    institution: edu?.institution,
+                    endDate:
+                        normalizeFlexibleDate(rawEndDate, 'end') ||
+                        parseFlexibleDateRange(rawEndDate).endDate ||
+                        parseFlexibleDateRange(rawEndDate).startDate,
+                });
+
+                if (!normalized) {
+                    const noisyInstitution = this.cleanText(edu?.institution);
+                    if (noisyInstitution) {
+                        educationNarratives.push(noisyInstitution);
+                    }
+                    return null;
+                }
+
+                const normalizedEducation: Record<string, string> = {
+                    degree: normalized.degree,
+                    institution: normalized.institution || '',
+                    end_date: this.formatMetadataDate(normalized.endDate, rawEndDate),
+                };
+                if (normalized.fieldOfStudy) {
+                    normalizedEducation.field_of_study = normalized.fieldOfStudy;
+                }
+                return normalizedEducation;
+            })
+            .filter(Boolean);
+
+        const projectsRaw = this.pickFirstArray(
+            structuredSource.projects,
+            source.projects,
+            structuredSource.project_experience,
+            source.project_experience,
+            structuredSource.realisations,
+            source.realisations,
+        );
+        const normalizedProjects = projectsRaw
+            .map((project: any) => {
+                const name = this.cleanText(project?.name);
+                const date = this.cleanText(project?.date || project?.dates);
+                const rawClient = this.cleanText(project?.client);
+                const description = this.normalizeProjectDescription(project?.description, rawClient);
+                const client = this.normalizeProjectClientName(rawClient) || '';
+
+                if ((name || 'Unknown Project').toLowerCase() === 'unknown project' && !description && !client) {
+                    return null;
+                }
+
+                return {
+                    name: name || 'Unknown Project',
+                    date,
+                    client,
+                    description,
+                };
+            })
+            .filter(Boolean) as Array<{ name: string; date: string; client: string; description: string }>;
+
+        if (educationNarratives.length > 0) {
+            const narrative = this.cleanText(educationNarratives.join(' '));
+            if (narrative) {
+                if (normalizedProjects.length > 0) {
+                    normalizedProjects[0].description = this.normalizeProjectDescription(
+                        normalizedProjects[0].description,
+                        narrative,
+                    );
+                } else {
+                    normalizedProjects.push({
+                        name: 'Unknown Project',
+                        date: '',
+                        client: '',
+                        description: this.normalizeProjectDescription('', narrative),
+                    });
+                }
+            }
+        }
+        structuredSource.projects = normalizedProjects;
+
+        const skillsRaw = this.pickFirstArray(
+            structuredSource.skills,
+            source.skills,
+            structuredSource.technical_skills,
+            source.technical_skills,
+            structuredSource.competences,
+            source.competences,
+        );
+        structuredSource.skills = Array.from(
+            new Set(
+                skillsRaw
+                    .map((skill: any) => this.cleanText(skill))
+                    .filter(Boolean),
+            ),
+        );
+        source.skills = structuredSource.skills;
+
+        source.structured_data = structuredSource;
+        return source;
+    }
+
     private normalizeCompanyName(value: string): string {
-        return (value || '')
+        return this.cleanText(value)
             .normalize('NFD')
             .replace(/[\u0300-\u036f]/g, '')
             .replace(/[^a-zA-Z0-9]+/g, ' ')
             .trim()
             .toLowerCase();
+    }
+
+    private cleanText(value: unknown): string {
+        if (value == null) {
+            return '';
+        }
+
+        const raw = String(value);
+        const normalizedEncoding = this.fixMojibake(raw);
+        return normalizedEncoding
+            .replace(/\u00A0/g, ' ')
+            .replace(/[\u200B-\u200D\uFEFF]/g, '')
+            .replace(/[\r\n\t]+/g, ' ')
+            .replace(/\s{2,}/g, ' ')
+            .trim();
+    }
+
+    private pickFirstArray(...candidates: unknown[]): any[] {
+        for (const candidate of candidates) {
+            if (Array.isArray(candidate)) {
+                return candidate;
+            }
+        }
+        return [];
+    }
+
+    private fixMojibake(value: string): string {
+        const input = value || '';
+        if (!/(?:Ã.|Â|â[\u0080-\u00BF]{1,3}|ï¿½)/.test(input)) {
+            return input;
+        }
+
+        try {
+            const decoded = Buffer.from(input, 'latin1').toString('utf8');
+            if (!decoded) {
+                return input;
+            }
+            return this.encodingNoiseScore(decoded) < this.encodingNoiseScore(input) ? decoded : input;
+        } catch {
+            return input;
+        }
+    }
+
+    private encodingNoiseScore(value: string): number {
+        return (value.match(/(?:Ã.|Â|â[\u0080-\u00BF]{1,3}|ï¿½)/g) || []).length;
+    }
+
+    private stripAtFirstSectionMarker(value: string, keepLeadingMarker: boolean = false): string {
+        const text = this.cleanText(value);
+        if (!text) {
+            return '';
+        }
+
+        const folded = text
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '');
+        const marker = folded.match(
+            /\b(?:experience|formation|certif|certification|competence|competences|skills?|education|projects?|projets?)\b/i,
+        );
+        if (!marker || marker.index == null) {
+            return text.trim();
+        }
+        if (keepLeadingMarker && marker.index === 0) {
+            return text.trim();
+        }
+
+        return text.slice(0, marker.index).trim();
+    }
+
+    private normalizeCertificationName(value: unknown): string {
+        let text = this.cleanText(value);
+        if (!text) {
+            return '';
+        }
+
+        text = text.replace(/^date\s*d['’]?\s*obtention\s*[:\-]?\s*/i, '');
+        text = text.replace(/^date\s*obtention\s*[:\-]?\s*/i, '');
+        text = text.replace(/^certifications?\s*[:\-]?\s*/i, '');
+        return text.trim();
+    }
+
+    private isUsableCertificationName(value: string): boolean {
+        const text = this.cleanText(value);
+        if (!text) {
+            return false;
+        }
+        if (!/[A-Za-z\u00C0-\u024F]/.test(text)) {
+            return false;
+        }
+
+        const compact = text
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/\./g, '')
+            .trim()
+            .toLowerCase();
+        if (
+            /^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\s+\d{1,2}$/.test(compact) ||
+            /^(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)$/.test(compact) ||
+            /^(janv|fev|mars|avr|mai|juin|juil|aout|sept|oct|nov|dec)\s+\d{1,2}$/.test(compact)
+        ) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private isCertificationDateLabel(value: string): boolean {
+        const text = this.cleanText(value)
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/\./g, '')
+            .trim()
+            .toLowerCase();
+        if (!text) {
+            return false;
+        }
+
+        return (
+            /^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\s+\d{1,2}(,\s*\d{4})?$/.test(text) ||
+            /^(janv|fev|mars|avr|mai|juin|juil|aout|sept|oct|nov|dec)\s+\d{1,2}(,\s*\d{4})?$/.test(text) ||
+            /^\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)(\s+\d{4})?$/.test(text)
+        );
+    }
+
+    private mergeCertificationDate(dateLabel: string, dateHint: string): string {
+        const label = this.cleanText(dateLabel);
+        const hint = this.cleanText(dateHint);
+        if (!label) {
+            return hint;
+        }
+        if (/\d{4}/.test(label)) {
+            return label;
+        }
+
+        const yearMatch = hint.match(/(19|20)\d{2}/);
+        if (yearMatch) {
+            return `${label}, ${yearMatch[0]}`;
+        }
+
+        return label;
+    }
+
+    private normalizeCertificationRows(certificationsRaw: any[]): Array<{ name: string; date_obtained?: string }> {
+        const tokens: Array<{
+            name: string;
+            dateHint: string;
+            leadingDay: string | null;
+            fromSplitTail: boolean;
+            dateHintConsumedByPrevious?: boolean;
+        }> = [];
+
+        for (const cert of certificationsRaw ?? []) {
+            const rawName = this.cleanText(
+                typeof cert === 'string'
+                    ? cert
+                    : cert?.name || cert?.certification_name || cert?.title || cert?.certification || cert?.label || '',
+            );
+            const rawDate = this.cleanText(
+                typeof cert === 'string'
+                    ? ''
+                    : cert?.date_obtained || cert?.issue_date || cert?.issueDate || cert?.date || cert?.obtained_on || '',
+            );
+
+            let name = this.normalizeCertificationName(rawName);
+            let dateHint = rawDate;
+
+            if (this.isCertificationDateLabel(name) && this.isUsableCertificationName(dateHint)) {
+                const swappedName = this.normalizeCertificationName(dateHint);
+                if (swappedName) {
+                    dateHint = name;
+                    name = swappedName;
+                }
+            }
+
+            if (!name) {
+                continue;
+            }
+
+            const split = this.splitEmbeddedCertificationNames(name);
+            if (split) {
+                tokens.push({
+                    name: split.first,
+                    dateHint,
+                    leadingDay: split.dayForFirst,
+                    fromSplitTail: false,
+                });
+                tokens.push({
+                    name: split.second,
+                    dateHint: '',
+                    leadingDay: null,
+                    fromSplitTail: true,
+                });
+                continue;
+            }
+
+            const leadingDayMatch = name.match(/^(\d{1,2})\s*\/\s*(.+)$/);
+            if (leadingDayMatch) {
+                const remainder = this.normalizeCertificationName(leadingDayMatch[2]);
+                if (remainder) {
+                    tokens.push({
+                        name: remainder,
+                        dateHint,
+                        leadingDay: leadingDayMatch[1].padStart(2, '0'),
+                        fromSplitTail: false,
+                    });
+                    continue;
+                }
+            }
+
+            tokens.push({
+                name,
+                dateHint,
+                leadingDay: null,
+                fromSplitTail: false,
+            });
+        }
+
+        const normalized: Array<{ name: string; date_obtained?: string }> = [];
+        for (let i = 0; i < tokens.length; i += 1) {
+            const token = tokens[i];
+            const name = this.normalizeCertificationName(token.name);
+            if (!this.isUsableCertificationName(name)) {
+                continue;
+            }
+
+            let dateHint = this.cleanText(token.dateHint);
+            let day = token.leadingDay;
+
+            // When one row leaks into the next cert name, recover date/day from the next row.
+            if (token.fromSplitTail) {
+                const next = tokens[i + 1];
+                if (next) {
+                    const nextDateHint = this.cleanText(next.dateHint);
+                    if (!dateHint && nextDateHint) {
+                        dateHint = nextDateHint;
+                    }
+                    if (!day && next.leadingDay) {
+                        day = next.leadingDay;
+                        next.leadingDay = null;
+                    }
+                }
+            }
+
+            // Handle shifted days like "... 23/ CyberOps" where day belongs to previous cert.
+            if (!day && dateHint) {
+                const next = tokens[i + 1];
+                if (next?.leadingDay && this.sameMonthYearHint(dateHint, next.dateHint)) {
+                    day = next.leadingDay;
+                    next.leadingDay = null;
+                    next.dateHintConsumedByPrevious = true;
+                }
+            }
+
+            let dateObtained = dateHint;
+            if (day) {
+                dateObtained = this.mergeDayWithDateHint(day, dateHint);
+            }
+            if (token.dateHintConsumedByPrevious && !token.leadingDay && this.hasMonthYearHint(dateHint)) {
+                dateObtained = '';
+            }
+
+            if (dateObtained) {
+                normalized.push({ name, date_obtained: dateObtained });
+            } else {
+                normalized.push({ name });
+            }
+        }
+
+        return normalized;
+    }
+
+    private splitEmbeddedCertificationNames(value: string): { first: string; second: string; dayForFirst: string } | null {
+        const text = this.cleanText(value);
+        if (!text) {
+            return null;
+        }
+
+        const match = text.match(/^(.+?)(\d{1,2})\s*\/\s*([A-Za-z\u00C0-\u024F].+)$/);
+        if (!match) {
+            return null;
+        }
+
+        const first = this.normalizeCertificationName(match[1]);
+        const second = this.normalizeCertificationName(match[3]);
+        if (!this.isUsableCertificationName(first) || !this.isUsableCertificationName(second)) {
+            return null;
+        }
+
+        return {
+            first,
+            second,
+            dayForFirst: match[2].padStart(2, '0'),
+        };
+    }
+
+    private hasFullCertificationDate(value: string): boolean {
+        const text = this.cleanText(value).replace(/\s+/g, '');
+        if (!text) {
+            return false;
+        }
+
+        return (
+            /^\d{1,2}[\/-]\d{1,2}[\/-](19|20)\d{2}$/.test(text) ||
+            /^(19|20)\d{2}[\/-]\d{1,2}[\/-]\d{1,2}$/.test(text)
+        );
+    }
+
+    private hasMonthYearHint(value: string): boolean {
+        const text = this.cleanText(value).replace(/\s+/g, '');
+        if (!text) {
+            return false;
+        }
+
+        return /^(\d{1,2}[\/-](19|20)\d{2}|(19|20)\d{2}[\/-]\d{1,2})$/.test(text);
+    }
+
+    private sameMonthYearHint(left: string, right: string): boolean {
+        if (!this.hasMonthYearHint(left) || !this.hasMonthYearHint(right)) {
+            return false;
+        }
+
+        const leftDate = normalizeFlexibleDate(left, 'start');
+        const rightDate = normalizeFlexibleDate(right, 'start');
+        if (!leftDate || !rightDate) {
+            return false;
+        }
+
+        return (
+            leftDate.getUTCFullYear() === rightDate.getUTCFullYear() &&
+            leftDate.getUTCMonth() === rightDate.getUTCMonth()
+        );
+    }
+
+    private mergeDayWithDateHint(day: string, dateHint: string): string {
+        const cleanDay = this.cleanText(day).match(/\d{1,2}/)?.[0]?.padStart(2, '0');
+        const hint = this.cleanText(dateHint);
+
+        if (!hint) {
+            return '';
+        }
+        if (!cleanDay) {
+            return hint;
+        }
+        if (this.hasFullCertificationDate(hint)) {
+            return hint;
+        }
+
+        const monthYear = hint.match(/^(\d{1,2})[\/-](\d{4})$/);
+        if (monthYear) {
+            return `${cleanDay}/${monthYear[1].padStart(2, '0')}/${monthYear[2]}`;
+        }
+
+        const yearMonth = hint.match(/^(\d{4})[\/-](\d{1,2})$/);
+        if (yearMonth) {
+            return `${cleanDay}/${yearMonth[2].padStart(2, '0')}/${yearMonth[1]}`;
+        }
+
+        const textualMonthYear = hint.match(/^([A-Za-z\u00C0-\u024F]+)\s+(\d{4})$/);
+        if (textualMonthYear) {
+            return `${cleanDay} ${textualMonthYear[1]} ${textualMonthYear[2]}`;
+        }
+
+        return this.mergeCertificationDate(cleanDay, hint);
+    }
+
+    private formatMetadataDate(value: Date | null, rawValue: string): string {
+        const raw = this.cleanText(rawValue);
+        if (raw && /^(19|20)\d{2}$/.test(raw)) {
+            return raw;
+        }
+        if (value instanceof Date && !isNaN(value.getTime())) {
+            return value.toISOString().split('T')[0];
+        }
+        return raw;
+    }
+
+    private normalizeCertKey(value: string): string {
+        return this.cleanText(value)
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-zA-Z0-9]+/g, ' ')
+            .trim()
+            .toLowerCase();
+    }
+
+    private normalizeProjectClientName(value: unknown): string | null {
+        const text = this.cleanText(value);
+        if (!text) {
+            return null;
+        }
+
+        if (this.isNarrativeProjectText(text)) {
+            return null;
+        }
+
+        return text;
+    }
+
+    private normalizeProjectDescription(description: unknown, maybeNarrativeClient?: unknown): string {
+        const descriptionText = this.cleanText(description);
+        const clientText = this.cleanText(maybeNarrativeClient);
+        const clauses: string[] = [];
+
+        if (clientText && this.isNarrativeProjectText(clientText)) {
+            clauses.push(...this.splitProjectNarrativeIntoClauses(clientText));
+        }
+        if (descriptionText) {
+            clauses.push(...this.splitProjectNarrativeIntoClauses(descriptionText));
+        }
+
+        if (clauses.length === 0) {
+            return '';
+        }
+
+        const merged: string[] = [];
+        for (const chunk of clauses) {
+            const cleanedChunk = this.cleanText(chunk);
+            if (!cleanedChunk) {
+                continue;
+            }
+
+            if (merged.length > 0 && /^[a-z]/.test(cleanedChunk)) {
+                let targetIndex = merged.length - 1;
+                if (/^des\s+proc/i.test(cleanedChunk)) {
+                    const suivantsIndex = merged.findIndex((value) => /suivants?\.?$/i.test(value.trim()));
+                    if (suivantsIndex >= 0) {
+                        targetIndex = suivantsIndex;
+                    }
+                } else if (/^fonctionnement du/i.test(cleanedChunk)) {
+                    const leBonIndex = merged.findIndex((value) => /\ble bon\b/i.test(value));
+                    if (leBonIndex >= 0) {
+                        targetIndex = leBonIndex;
+                    }
+                }
+
+                if (
+                    /^fonctionnement du/i.test(cleanedChunk) &&
+                    /\ble bon\s+Maintenance informatique\b/i.test(merged[targetIndex])
+                ) {
+                    const clause = cleanedChunk.replace(/[.!?]+$/, '');
+                    merged[targetIndex] = merged[targetIndex].replace(
+                        /\ble bon\s+Maintenance informatique\b/i,
+                        `le bon ${clause} et la maintenance informatique`,
+                    );
+                    continue;
+                }
+
+                const previous = merged[targetIndex].replace(/[.!?]+$/, '');
+                merged[targetIndex] = `${previous} ${cleanedChunk}`;
+            } else {
+                merged.push(cleanedChunk);
+            }
+        }
+
+        const seen = new Set<string>();
+        const unique: string[] = [];
+        for (const sentence of merged) {
+            const normalizedSentence = sentence
+                .replace(/\ble bon\s+Maintenance informatique\b/gi, 'le bon fonctionnement du réseau et la maintenance informatique')
+                .replace(/\bfonctionnement du r[ée]seaux\b/gi, 'fonctionnement du réseau')
+                .replace(/\bconseils technique\b/gi, 'conseils techniques')
+                .trim();
+
+            if (!normalizedSentence) {
+                continue;
+            }
+
+            const key = normalizedSentence
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .replace(/[^a-zA-Z0-9]+/g, ' ')
+                .trim()
+                .toLowerCase();
+
+            if (!key || seen.has(key)) {
+                continue;
+            }
+
+            seen.add(key);
+            unique.push(/[.!?]$/.test(normalizedSentence) ? normalizedSentence : `${normalizedSentence}.`);
+        }
+
+        return unique.join(' ').trim();
+    }
+
+    private splitProjectNarrativeIntoClauses(value: string): string[] {
+        if (!value) {
+            return [];
+        }
+
+        let text = this.cleanText(value);
+        text = text
+            .replace(/\.\.+/g, '.')
+            .replace(/\s*;\s*/g, '. ')
+            .replace(/\s{2,}/g, ' ')
+            .replace(/\b(Effectuer|Assister|Participer|Analyser|Analyse|Reporting|C[âa]blage|Configuration)\b/g, '||$1')
+            .trim();
+
+        return text
+            .split('||')
+            .flatMap((part) => part.split(/(?<=[.!?])\s+/))
+            .map((chunk) => this.cleanText(chunk.replace(/^[•\-–]\s*/, '')))
+            .filter(Boolean);
+    }
+
+    private isNarrativeProjectText(value: string): boolean {
+        const text = this.cleanText(value);
+        if (!text) {
+            return false;
+        }
+
+        const words = text.split(/\s+/).filter(Boolean);
+        return (
+            words.length > 8 ||
+            /[.!?]/.test(text) ||
+            /^(participer|effectuer|assister|analyse|analyser|maintenance|reporting|configuration|cablage|fonctionnement|mise)/i.test(text)
+        );
+    }
+
+    private normalizeProjectRole(value: unknown): string | null {
+        const text = this.cleanText(value);
+        if (!text) {
+            return null;
+        }
+
+        if (text.split(/\s+/).length > 6 && /[.!?]/.test(text)) {
+            return null;
+        }
+
+        return text;
+    }
+
+    private normalizeEducationEntry(input: {
+        degree?: unknown;
+        fieldOfStudy?: unknown;
+        institution?: unknown;
+        endDate?: Date | null;
+    }): { degree: string; fieldOfStudy: string | null; institution: string | null; endDate: Date | null } | null {
+        const degreeRaw = this.cleanText(input.degree);
+        const fieldRaw = this.cleanText(input.fieldOfStudy);
+        const institutionRaw = this.cleanText(input.institution);
+
+        const degree = this.stripAtFirstSectionMarker(degreeRaw, true) || 'Unknown Degree';
+        const fieldOfStudy = this.stripAtFirstSectionMarker(fieldRaw, true) || null;
+        const institution = this.stripAtFirstSectionMarker(institutionRaw, true) || null;
+
+        const degreeUnknown = /^unknown degree$/i.test(degree);
+        const institutionLooksNarrative =
+            !!institution &&
+            (institution.length > 180 ||
+                (institution.split(/\s+/).length > 18 &&
+                    /(?:incident|maintenance|sur site|distance|reporting|analyse|diagnostique|r[ée]seaux)/i.test(
+                        institution,
+                    )));
+
+        if ((degreeUnknown && !institution) || (degreeUnknown && institutionLooksNarrative)) {
+            return null;
+        }
+
+        return {
+            degree,
+            fieldOfStudy,
+            institution,
+            endDate: input.endDate || null,
+        };
     }
 
     private isNextStepCompany(value: string): boolean {
@@ -865,6 +1716,129 @@ export class CvService {
         this.logger.log(`Backfill complete: ${updated} updated, ${skipped} skipped`);
         return { updated, skipped };
     }
+    /**
+     * Generate a CV from an uploaded template and employee profile data.
+     * `engine` selects the default primary engine or the fallback engine.
+     */
+    async generateCv(
+        employeeId: string,
+        templateFile: Express.Multer.File,
+        outputFormat: 'docx' | 'pdf' = 'docx',
+        engine: 'primary' | 'fallback' = 'primary',
+    ): Promise<{ buffer: Buffer; filename: string; mimeType: string; engine: string }> {
+        const profileData = await this.getMyProfile(employeeId);
+
+        if (!profileData.name || profileData.name.trim().length < 2) {
+            throw new NotFoundException(
+                `Employee ${employeeId} has no usable name in their profile. ` +
+                    'Please ensure the employee has a first and last name set.',
+            );
+        }
+
+        const formData = new FormData();
+        const blob = new Blob([templateFile.buffer as any], { type: templateFile.mimetype });
+        formData.append('template', blob, templateFile.originalname);
+        formData.append('employee_data', JSON.stringify(profileData));
+        formData.append('output_format', outputFormat);
+        formData.append('engine', engine);
+
+        const aiUrl = `${this.aiServiceBaseUrl}/api/v1/generation/cv`;
+        this.logger.log(
+            `Calling AI generation service: ${aiUrl} (format: ${outputFormat}, engine: ${engine})`,
+        );
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 180_000);
+
+        let aiResponse: globalThis.Response;
+        try {
+            aiResponse = await fetch(aiUrl, {
+                method: 'POST',
+                body: formData,
+                signal: controller.signal,
+            });
+        } catch (err: any) {
+            if (err.name === 'AbortError') {
+                throw new Error('CV generation timed out (180s). The template may be too complex.');
+            }
+            throw new Error(`AI service unreachable: ${err.message}`);
+        } finally {
+            clearTimeout(timeout);
+        }
+
+        if (!aiResponse.ok) {
+            const errorText = await aiResponse.text().catch(() => 'Unknown error');
+            this.logger.error(`AI generation failed (${aiResponse.status}): ${errorText}`);
+            if (aiResponse.status === 400) {
+                throw new Error(`Invalid input: ${errorText}`);
+            }
+            throw new Error(`CV generation failed: ${errorText}`);
+        }
+
+        const arrayBuffer = await aiResponse.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+
+        const contentDisposition = aiResponse.headers.get('content-disposition') || '';
+        const ext = effectiveFormat === 'pdf' ? '.pdf' : '.docx';
+        let filename = `${profileData.name.replace(/\s+/g, '_')}_CV${ext}`;
+        const filenameMatch = contentDisposition.match(/filename="?([^";\n]+)"?/);
+        if (filenameMatch) {
+            filename = filenameMatch[1];
+        }
+
+        const mimeType =
+            effectiveFormat === 'pdf'
+                ? 'application/pdf'
+                : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        const usedEngine = aiResponse.headers.get('x-cv-engine') || engine;
+
+        return { buffer, filename, mimeType, engine: usedEngine };
+    }
+
+    /**
+     * Generate a CV using another employee's stored CV as template.
+     */
+    async generateCvFromStoredTemplate(
+        templateEmployeeId: string,
+        targetEmployeeId: string,
+        outputFormat: 'docx' | 'pdf' = 'docx',
+        engine: 'primary' | 'fallback' = 'primary',
+    ): Promise<{ buffer: Buffer; filename: string; mimeType: string; engine: string }> {
+        const baseDir = await this.fileStorageService.findBaseDirByOwner(templateEmployeeId);
+        if (!baseDir) {
+            throw new NotFoundException(`No stored CV found for employee ${templateEmployeeId}`);
+        }
+
+        const possibleFiles = ['CV.docx'];
+        let cvFilePath: string | null = null;
+        for (const fname of possibleFiles) {
+            const fullPath = path.join(baseDir, fname);
+            if (fs.existsSync(fullPath)) {
+                cvFilePath = fullPath;
+                break;
+            }
+        }
+
+        if (!cvFilePath) {
+            throw new NotFoundException(`No DOCX CV file found for employee ${templateEmployeeId}`);
+        }
+
+        const fileBuffer = await fsPromises.readFile(cvFilePath);
+        const mockFile: Express.Multer.File = {
+            fieldname: 'template',
+            originalname: path.basename(cvFilePath),
+            encoding: '7bit',
+            mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            buffer: fileBuffer,
+            size: fileBuffer.length,
+            stream: null as any,
+            destination: '',
+            filename: '',
+            path: '',
+        };
+
+        return this.generateCv(targetEmployeeId, mockFile, outputFormat, engine);
+    }
 
     private calculateTotalExperienceYears(experiences: WorkExperience[]): number | null {
         if (!experiences?.length) {
@@ -914,277 +1888,12 @@ export class CvService {
         }
 
         const totalMs = merged.reduce((sum, interval) => sum + (interval.end - interval.start), 0);
-        const years = Math.floor(totalMs / (1000 * 60 * 60 * 24 * 365.25));
+        const yearsFloat = totalMs / (1000 * 60 * 60 * 24 * 365.25);
+        // Floor-to-int makes sub-1y experience appear as 0 years, which is misleading for multiple internships.
+        // Round instead so ~0.5y+ becomes 1 year.
+        const years = yearsFloat < 0.5 ? 0 : Math.round(yearsFloat);
         return Math.max(0, years);
     }
-
-    /**
-     * Generate a CV from a template file and employee profile data.
-     * Sends the template + employee data to the AI service which replaces
-     * personal fields while preserving the original template formatting.
-     */
-    async generateCv(
-        employeeId: string,
-        templateFile: Express.Multer.File,
-        outputFormat: 'docx' | 'pdf' = 'docx',
-        language: 'en' | 'fr' | 'original' | string = 'original',
-        engine: 'primary' | 'fallback' = 'primary',
-        options: { requestingUserId?: string | null; recordHistory?: boolean } = {},
-    ): Promise<{ buffer: Buffer; filename: string; mimeType: string; warnings?: string }> {
-        // 1. Load employee profile data
-        const profileData = await this.getMyProfile(employeeId);
-
-        if (!profileData.name || profileData.name.trim().length < 2) {
-            throw new NotFoundException(
-                `Employee ${employeeId} has no usable name in their profile. ` +
-                'Please ensure the employee has a first and last name set.',
-            );
-        }
-
-        // 2. Build structured employee payload expected by the AI service (both engines)
-        const employeePayload = {
-            name: profileData.name,
-            title: profileData.currentPosition || '',
-            email: profileData.email || '',
-            phone: profileData.phone || '',
-            address: profileData.address || '',
-            summary: profileData.professionalSummary || '',
-            skills: profileData.skills || [],
-            work_experiences: (profileData.workExperiences || [])
-                .filter((exp: any) => exp.jobTitle && exp.companyName)
-                .map((exp: any) => ({
-                    jobTitle: exp.jobTitle,
-                    companyName: exp.companyName,
-                    startDate: exp.startDate || '',
-                    endDate: exp.isCurrent ? 'Present' : (exp.endDate || ''),
-                    description: exp.description || '',
-                })),
-            educations: (profileData.educations || []).map((edu: any) => ({
-                degree: edu.degree,
-                institution: edu.institution,
-                fieldOfStudy: edu.fieldOfStudy || '',
-                startDate: edu.startDate || '',
-                endDate: edu.endDate || '',
-            })),
-            languages: [],
-            certifications: (profileData.certifications || []).map((c: any) => ({
-                name: c.name || '',
-                issuingOrganization: c.issuingOrganization || '',
-                issueDate: c.issueDate || '',
-                expirationDate: c.expirationDate || '',
-            })),
-            projects: (profileData.projects || []).map((p: any) => {
-                const rawName = (p.name || '').trim();
-                const isUnknown = !rawName || rawName.toLowerCase() === 'unknown project' || rawName.toLowerCase() === 'n/a';
-                const finalName = isUnknown ? (p.generatedTitle || 'Project') : rawName;
-                return {
-                    name: finalName,
-                    displayTitle: finalName,
-                    description: p.description || '',
-                    role: p.role || '',
-                    skills: p.skills || [],
-                    client: p.client || '',
-                    startDate: p.startDate || '',
-                    endDate: p.endDate || '',
-                };
-            }),
-        };
-
-        // 3. Call AI service /generation/cv
-        const formData = new FormData();
-        const blob = new Blob([templateFile.buffer as any], { type: templateFile.mimetype });
-        formData.append('template', blob, templateFile.originalname);
-        formData.append('employee_data', JSON.stringify(employeePayload));
-        formData.append('output_format', outputFormat);
-        formData.append('language', language);
-        formData.append('engine', engine);
-
-        const aiUrl = `${this.aiServiceBaseUrl}/api/v1/generation/cv`;
-        this.logger.log(`Calling AI generation service: ${aiUrl} (format: ${outputFormat})`);
-
-        // 180s timeout: complex templates with Groq calls can take up to ~30s,
-        // but LibreOffice PDF conversion can take longer on cold start.
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 180_000);
-
-        let aiResponse: globalThis.Response;
-        try {
-            aiResponse = await fetch(aiUrl, {
-                method: 'POST',
-                body: formData,
-                signal: controller.signal,
-            });
-        } catch (err: any) {
-            if (err.name === 'AbortError') {
-                throw new Error('CV generation timed out (180s). The template may be too complex.');
-            }
-            throw new Error(`AI service unreachable: ${err.message}`);
-        } finally {
-            clearTimeout(timeout);
-        }
-
-        if (!aiResponse.ok) {
-            const errorText = await aiResponse.text().catch(() => 'Unknown error');
-            this.logger.error(`AI generation failed (${aiResponse.status}): ${errorText}`);
-            if (aiResponse.status === 400) {
-                throw new Error(`Invalid input: ${errorText}`);
-            }
-            throw new Error(`CV generation failed: ${errorText}`);
-        }
-
-        const arrayBuffer = await aiResponse.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
-
-        // Detect actual output format from AI service response headers.
-        // The AI service sets X-CV-Format to the actual format returned (which
-        // may differ from the requested format when PDF conversion fails and it
-        // falls back to DOCX).
-        const actualFormat = (aiResponse.headers.get('x-cv-format') || outputFormat).toLowerCase();
-        const isPdfFailed = aiResponse.headers.get('x-pdf-failed') === 'true';
-        const effectiveFormat = isPdfFailed ? 'docx' : actualFormat;
-
-        // Derive filename from Content-Disposition or build one
-        const contentDisposition = aiResponse.headers.get('content-disposition') || '';
-        const ext = effectiveFormat === 'pdf' ? '.pdf' : '.docx';
-        let filename = `${profileData.name.replace(/\s+/g, '_')}_CV${ext}`;
-        const filenameMatch = contentDisposition.match(/filename="?([^";\n]+)"?/);
-        if (filenameMatch) {
-            filename = filenameMatch[1];
-        }
-
-        const mimeType =
-            effectiveFormat === 'pdf'
-                ? 'application/pdf'
-                : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-
-        if (isPdfFailed) {
-            this.logger.warn(`PDF conversion failed in AI service — returning DOCX instead (format requested: ${outputFormat})`);
-        }
-
-        // Forward the AI service's warning header (best-effort, opaque JSON) so
-        // the controller can surface it back to the client untouched.
-        const warnings = aiResponse.headers.get('x-cv-warnings') || undefined;
-
-        // Auto-save the template to the user's history once generation has
-        // succeeded (re-uploads of the same bytes bump usage stats instead of
-        // duplicating). Best-effort — a save failure must not block the
-        // response.
-        const shouldRecord = options.recordHistory !== false;
-        if (shouldRecord && options.requestingUserId) {
-            try {
-                await this.cvTemplatesService.recordGenerationUsage({
-                    userId: options.requestingUserId,
-                    file: templateFile,
-                    language,
-                });
-            } catch (exc) {
-                this.logger.warn(
-                    `Auto-saving template to history failed (non-fatal): ${(exc as Error)?.message || exc}`,
-                );
-            }
-        }
-
-        return { buffer, filename, mimeType, warnings };
-    }
-
-    /**
-     * Re-generate a CV using a template the bid manager has already used
-     * before (i.e. a row from cv-templates owned by them). Avoids the need
-     * to re-upload the same file.
-     */
-    async generateCvFromHistory(
-        userId: string,
-        templateId: string,
-        employeeId: string,
-        outputFormat: 'docx' | 'pdf' = 'docx',
-        language: 'en' | 'fr' | 'original' | string = 'original',
-        engine: 'primary' | 'fallback' = 'primary',
-    ): Promise<{ buffer: Buffer; filename: string; mimeType: string; warnings?: string }> {
-        const template = await this.cvTemplatesService.getOwnedTemplate(templateId, userId);
-        const { buffer: fileBuffer, mimetype, filename } =
-            await this.cvTemplatesService.loadTemplateBuffer(template);
-
-        const mockFile: Express.Multer.File = {
-            fieldname: 'template',
-            originalname: filename,
-            encoding: '7bit',
-            mimetype,
-            buffer: fileBuffer,
-            size: fileBuffer.length,
-            stream: null as any,
-            destination: '',
-            filename: '',
-            path: '',
-        };
-
-        const result = await this.generateCv(
-            employeeId,
-            mockFile,
-            outputFormat,
-            language,
-            engine,
-            // The template is already in history — just bump its usage row.
-            { requestingUserId: userId, recordHistory: false },
-        );
-
-        try {
-            await this.cvTemplatesService.bumpUsage(template.template_id);
-        } catch (exc) {
-            this.logger.warn(
-                `Bumping template usage failed (non-fatal): ${(exc as Error)?.message || exc}`,
-            );
-        }
-
-        return result;
-    }
-
-    /**
-     * Generate a CV using the employee's own uploaded CV as the template.
-     * Finds the stored CV file and uses it as the template.
-     */
-    async generateCvFromStoredTemplate(
-        employeeId: string,
-        targetEmployeeId: string,
-        outputFormat: 'docx' | 'pdf' = 'docx',
-        language: string = 'en',
-    ): Promise<{ buffer: Buffer; filename: string; mimeType: string }> {
-        // Find the template employee's stored CV
-        const baseDir = await this.fileStorageService.findBaseDirByOwner(employeeId);
-        if (!baseDir) {
-            throw new NotFoundException(`No stored CV found for employee ${employeeId}`);
-        }
-
-        // Look for CV file - only .docx is supported for reliable processing
-        const possibleFiles = ['CV.docx'];
-        let cvFilePath: string | null = null;
-        for (const fname of possibleFiles) {
-            const fullPath = require('path').join(baseDir, fname);
-            if (require('fs').existsSync(fullPath)) {
-                cvFilePath = fullPath;
-                break;
-            }
-        }
-
-        if (!cvFilePath) {
-            throw new NotFoundException(`No DOCX CV file found for employee ${employeeId}`);
-        }
-
-        // Read the file into a buffer and create a mock Multer file
-        const fileBuffer = await require('fs/promises').readFile(cvFilePath);
-
-        const mockFile: Express.Multer.File = {
-            fieldname: 'template',
-            originalname: require('path').basename(cvFilePath),
-            encoding: '7bit',
-            mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            buffer: fileBuffer,
-            size: fileBuffer.length,
-            stream: null as any,
-            destination: '',
-            filename: '',
-            path: '',
-        };
-
-        return this.generateCv(targetEmployeeId, mockFile, outputFormat, language);
-    }
 }
+
+

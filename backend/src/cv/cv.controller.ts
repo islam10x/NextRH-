@@ -48,21 +48,6 @@ export class CvController {
 
     /**
      * One-time backfill: populate project dates from stored metadata.json files
-     */
-    @Post('backfill-project-dates')
-    async backfillProjectDates() {
-        return this.cvService.backfillProjectDates();
-    }
-
-    /**
-     * Rania's Logic: Endpoint for employees to upload CV files
-     */
-    @Post('upload')
-    @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.EMPLOYEE, UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
-    @UseInterceptors(
-        FileInterceptor('file', {
-            limits: { fileSize: MAX_UPLOAD_BYTES },
             fileFilter: (_req, file, cb) => {
                 if (!ALLOWED_UPLOAD_MIME_TYPES.includes((file.mimetype || '').toLowerCase())) {
                     return cb(new BadRequestException('Unsupported file type'), false);
@@ -129,9 +114,7 @@ export class CvController {
         @UploadedFile() template: Express.Multer.File,
         @Body('employeeId') employeeId: string,
         @Query('format') format: string,
-        @Query('language') language: string,
         @Query('engine') engine: string,
-        @CurrentUser() user: any,
         @Res() res: Response,
     ) {
         console.error('====================================================');
@@ -152,95 +135,20 @@ export class CvController {
         }
 
         const outputFormat = format === 'pdf' ? 'pdf' : 'docx';
-        const normalizedLang = (language || '').toLowerCase();
-        // Allow 'original' (no translation), 'fr', or 'en'. Anything else → 'en'.
-        const targetLang =
-            normalizedLang === 'original' || normalizedLang === 'fr' || normalizedLang === 'en'
-                ? normalizedLang
-                : 'en';
-        const cvEngine = engine === 'fallback' ? 'fallback' : 'primary';
-        const requestingUserId = user?.user_id || user?.id || null;
+        const selectedEngine = engine === 'fallback' ? 'fallback' : 'primary';
         const result = await this.cvService.generateCv(
             employeeId,
             template,
             outputFormat,
-            targetLang,
-            cvEngine,
-            { requestingUserId },
+            selectedEngine,
         );
 
         const headers: Record<string, string | number> = {
             'Content-Type': result.mimeType,
             'Content-Disposition': `attachment; filename="${encodeURIComponent(result.filename)}"`,
             'Content-Length': result.buffer.length,
-            // Lets the browser read the custom warnings header from the
-            // CORS-restricted blob response on the frontend.
-            'Access-Control-Expose-Headers': 'X-CV-Warnings',
-        };
-        if (result.warnings) {
-            headers['X-CV-Warnings'] = result.warnings;
-        }
-        res.set(headers);
-        res.send(result.buffer);
-    }
-
-    /**
-     * Generate a CV using a template the bid manager has previously used,
-     * picked from their history (no file re-upload needed).
-     */
-    @Post('generate-from-history')
-    @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.BID_MANAGER, UserRole.TEAM_MANAGER)
-    async generateFromHistory(
-        @Body() body: { templateId: string; employeeId: string },
-        @Query('format') format: string,
-        @Query('language') language: string,
-        @Query('engine') engine: string,
-        @CurrentUser() user: any,
-        @Res() res: Response,
-    ) {
-        console.error('====================================================');
-        console.error(`[HEARTBEAT] GENERATING FROM HISTORY FOR EMPLOYEE: ${body?.employeeId}`);
-        console.error('====================================================');
-        if (!body?.templateId || !body?.employeeId) {
-            throw new BadRequestException('templateId and employeeId are required');
-        }
-        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-        if (!uuidRegex.test(body.templateId) || !uuidRegex.test(body.employeeId)) {
-            throw new BadRequestException('templateId and employeeId must be valid UUIDs');
-        }
-
-        const outputFormat = format === 'pdf' ? 'pdf' : 'docx';
-        const normalizedLang = (language || '').toLowerCase();
-        const targetLang =
-            normalizedLang === 'original' || normalizedLang === 'fr' || normalizedLang === 'en'
-                ? normalizedLang
-                : 'en';
-        const cvEngine = engine === 'fallback' ? 'fallback' : 'primary';
-        const requestingUserId = user?.user_id || user?.id;
-        if (!requestingUserId) {
-            throw new BadRequestException('Authenticated user required');
-        }
-
-        const result = await this.cvService.generateCvFromHistory(
-            requestingUserId,
-            body.templateId,
-            body.employeeId,
-            outputFormat,
-            targetLang,
-            cvEngine,
-        );
-
-        const headers: Record<string, string | number> = {
-            'Content-Type': result.mimeType,
-            'Content-Disposition': `attachment; filename="${encodeURIComponent(result.filename)}"`,
-            'Content-Length': result.buffer.length,
-            'Access-Control-Expose-Headers': 'X-CV-Warnings',
-        };
-        if (result.warnings) {
-            headers['X-CV-Warnings'] = result.warnings;
-        }
-        res.set(headers);
+            'X-CV-Engine': result.engine,
+        });
         res.send(result.buffer);
     }
 
@@ -255,7 +163,7 @@ export class CvController {
     async generateFromStored(
         @Body() body: { templateEmployeeId: string; targetEmployeeId: string },
         @Query('format') format: string,
-        @Query('language') language: string,
+        @Query('engine') engine: string,
         @Res() res: Response,
     ) {
         if (!body.templateEmployeeId || !body.targetEmployeeId) {
@@ -268,20 +176,19 @@ export class CvController {
         }
 
         const outputFormat = format === 'pdf' ? 'pdf' : 'docx';
-        const targetLang = ['fr'].includes((language || '').toLowerCase())
-            ? language.toLowerCase()
-            : 'en';
+        const selectedEngine = engine === 'fallback' ? 'fallback' : 'primary';
         const result = await this.cvService.generateCvFromStoredTemplate(
             body.templateEmployeeId,
             body.targetEmployeeId,
             outputFormat,
-            targetLang,
+            selectedEngine,
         );
 
         res.set({
             'Content-Type': result.mimeType,
             'Content-Disposition': `attachment; filename="${encodeURIComponent(result.filename)}"`,
             'Content-Length': result.buffer.length,
+            'X-CV-Engine': result.engine,
         });
         res.send(result.buffer);
     }

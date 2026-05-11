@@ -1,4 +1,4 @@
-﻿"""
+"""
 CV Generation Service (Production-Ready)
 =========================================
 Handles DOCX templates with complex layouts including textboxes, shapes, tables.
@@ -16,8 +16,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-import textwrap
-import unicodedata
 import zipfile
 from contextlib import contextmanager
 from datetime import datetime
@@ -26,17 +24,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from lxml import etree
 from docx import Document
+from docx.text.paragraph import Paragraph as DocxParagraph
 from docxtpl import DocxTemplate
-from jinja2.exceptions import TemplateError
 from PIL import Image
 from groq import Groq
 
 from app.config import settings
-from app.services.translation_service import translate_cv_best_effort
 from app.services.cv_validation import validate_employee_data, ValidationReport
 from app.services.cv_generation_context import GenerationContext
-from app.services.field_mapping_service import build_replacement_map as build_apilayer_replacement_map, get_template_summary
-from app.services.resume_parser_service import parse_resume_from_file
 from app.services.cv_errors import (
     CVGenerationError, CVValidationError, CVTemplateError,
     CVIOError, CVRenderError, CVExportError, CVExternalError,
@@ -47,97 +42,6 @@ from app.services.cv_io import (
 )
 
 logger = logging.getLogger("ai_service.cv_generator")
-
-_GROQ_RATE_LIMIT_COOLDOWN_UNTIL = 0.0
-_GROQ_RATE_LIMIT_REASON = ""
-
-
-def _groq_retry_after_seconds(message: str) -> float:
-    """Extract a server-provided Groq retry delay when available."""
-    msg = (message or "").lower()
-    match = re.search(r'try again in\s*(?:(\d+)m)?\s*([\d.]+)s', msg)
-    if not match:
-        return 0.0
-    minutes = int(match.group(1) or 0)
-    seconds = float(match.group(2) or 0.0)
-    return minutes * 60 + seconds
-
-
-def _is_groq_rate_limit_error(exc: Exception) -> bool:
-    """Return True when the Groq failure is quota/rate-limit related."""
-    msg = str(exc).lower()
-    return any(
-        marker in msg
-        for marker in (
-            "rate_limit",
-            "rate limit",
-            "429",
-            "tokens per day",
-            "rate_limit_exceeded",
-            "please try again in",
-            "quota",
-            "cooldown active",
-        )
-    )
-
-
-def _is_groq_soft_fallback_error(exc: Exception) -> bool:
-    """Return True when Groq failure should degrade quietly to deterministic fallback."""
-    return _is_groq_rate_limit_error(exc)
-
-
-def _distribute_entries_across_boxes(entries: List[List[Dict[str, Any]]], n_boxes: int) -> List[List[Dict[str, Any]]]:
-    """Spread logical section entries across available boxes without collapsing into one."""
-    if n_boxes <= 0:
-        return []
-    if not entries:
-        return [[] for _ in range(n_boxes)]
-    if len(entries) <= n_boxes:
-        return [entries[i] if i < len(entries) else [] for i in range(n_boxes)]
-
-    base = len(entries) // n_boxes
-    extra = len(entries) % n_boxes
-    grouped: List[List[Dict[str, Any]]] = []
-    entry_idx = 0
-
-    for box_idx in range(n_boxes):
-        take = base + (1 if box_idx < extra else 0)
-        flattened: List[Dict[str, Any]] = []
-        for _ in range(take):
-            flattened.extend(entries[entry_idx])
-            entry_idx += 1
-        grouped.append(flattened)
-
-    return grouped
-
-
-def _build_apilayer_template_pairs(
-    template_path: str,
-    employee: Dict[str, Any],
-) -> List[Tuple[str, str]]:
-    """Best-effort APILayer-based replacement pairs for template values.
-
-    This supplements the deterministic detector with structured template parsing
-    when an APILayer key is configured. It does not affect layout or styling,
-    only the old→new text pairs applied by the existing replacement engine.
-    """
-    if not settings.APILAYER_API_KEY:
-        return []
-    if not template_path.lower().endswith((".docx", ".pdf")):
-        return []
-
-    parsed_template = parse_resume_from_file(template_path)
-    pairs = list(build_apilayer_replacement_map(parsed_template, employee))
-
-    template_summary = get_template_summary(parsed_template)
-    employee_summary = str(employee.get("summary") or "").strip()
-    if template_summary and template_summary != employee_summary:
-        existing_olds = {old for old, _new in pairs}
-        if template_summary not in existing_olds:
-            pairs.append((template_summary, employee_summary))
-
-    pairs.sort(key=lambda item: len(item[0]), reverse=True)
-    return pairs
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -155,8 +59,6 @@ def _xml_safe_text(text: str) -> str:
         return text
     # Strip characters that are illegal in XML 1.0
     return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text)
-
-
 
 
 @contextmanager
@@ -357,9 +259,9 @@ def _is_layout_table(tbl: Any, body: Any) -> bool:
     if body_paras_with_text > 2:
         return False
 
-    # Heuristic 2: table should have 2+ grid columns (sidebar + main area is common 2-col layout)
+    # Heuristic 2: table should have 3+ grid columns
     grid_cols = tbl.findall(f'{{{W}}}tblGrid/{{{W}}}gridCol')
-    if len(grid_cols) < 2:
+    if len(grid_cols) < 3:
         return False
 
     # Heuristic 3: cells contain section-heading-like text
@@ -414,7 +316,7 @@ def _identify_section_from_text(text: str) -> Optional[str]:
 
 
 def _replace_sections_in_layout_table(
-    tbl: Any, body: Any, employee: Dict[str, Any], preferred_language: Optional[str] = None,
+    tbl: Any, body: Any, employee: Dict[str, Any],
 ) -> int:
     """Replace CV section content inside a layout-table's cells.
 
@@ -456,28 +358,35 @@ def _replace_sections_in_layout_table(
 
             content_paras = cell_paras[sec_idx + 1: next_sec_idx]
 
-            new_content = _build_section_content(section_name, employee, preferred_language)
+            new_content = _build_section_content(section_name, employee)
             if new_content is None:
-                # No employee data — remove existing content
+                # No employee data — remove existing and insert "N/A"
                 for elem in content_paras:
                     try:
                         tc.remove(elem)
                     except ValueError:
                         pass
+                
+                # Insert "N/A" after heading to maintain structure
+                na_p = _make_para_elem(
+                    "N/A",
+                    ref_spacing=_get_ref_ppr_spacing([heading_el])
+                )
+                heading_el.addnext(na_p)
+
                 logger.info(
-                    "  [layout-table] section='%s' heading=%r: removed %d content paragraph(s) because employee data is empty",
-                    section_name,
-                    _paragraph_plain_text(heading_el),
-                    len(content_paras),
+                    f"  layout-table '{section_name}': substituted content with 'N/A' (no data)"
                 )
                 replaced += 1
                 continue
 
-            rendered_paras = _render_section_paragraphs(
-                new_content,
-                content_paras,
-                heading_elem=heading_el,
-            )
+            # Gather reference formatting from existing content
+            ref_rpr = _get_ref_rpr(content_paras)
+            ref_spacing = _get_ref_ppr_spacing(content_paras)
+            if ref_spacing is None:
+                ref_spacing = _get_ref_ppr_spacing([heading_el])
+
+            content_styles = _extract_content_styles(content_paras)
 
             # Remove old content paragraphs
             for elem in content_paras:
@@ -488,16 +397,28 @@ def _replace_sections_in_layout_table(
 
             # Insert new content after heading
             insert_after = heading_el
-            for new_p in rendered_paras:
+            for item in new_content:
+                sid = None
+                if item.get('compact') and not item.get('bullet'):
+                    sid = content_styles.get('compact')
+                else:
+                    sid = content_styles.get('normal')
+                new_p = _make_para_elem(
+                    item['text'],
+                    bold=item.get('bold', False),
+                    bullet=item.get('bullet', False),
+                    ref_rpr=ref_rpr,
+                    ref_spacing=ref_spacing,
+                    compact=item.get('compact', False),
+                    style_id=sid,
+                )
                 insert_after.addnext(new_p)
                 insert_after = new_p
 
             replaced += 1
             logger.info(
-                "  [layout-table] section='%s' heading=%r: inserted %d item(s)",
-                section_name,
-                _paragraph_plain_text(heading_el),
-                len(rendered_paras),
+                f"  layout-table '{section_name}': replaced with "
+                f"{len(new_content)} items"
             )
 
     return replaced
@@ -955,22 +876,6 @@ def _detect_personal_info(
     logger.info(f"Contact block ({len(contact_block)} chars): {contact_block[:120]}...")
 
     # ── Step 2: Extract phone, linkedin, address from contact block ───
-    def _looks_like_address_candidate(value: str) -> bool:
-        candidate = (value or '').strip()
-        if not candidate:
-            return False
-        if ':' in candidate:
-            return False
-        if candidate.count(',') > 2:
-            return False
-        if re.search(
-            r'\b(sql|python|react|docker|hadoop|spark|mongodb|mongo|linux|api|apis|javascript|java|node|android|scikit|fastapi)\b',
-            candidate,
-            re.I,
-        ):
-            return False
-        return True
-
     phone_pats = [
         r'\+\d{1,3}(?:[-.\s]?\(?\d{1,4}\)?){2,8}',
         r'\d{3}[-.\s]\d{3}[-.\s]\d{4}',
@@ -1006,7 +911,7 @@ def _detect_personal_info(
         if m:
             addr = m.group().strip()
             city_part = addr.split(',')[0].strip()
-            if len(city_part.split()) <= 2 and '\n' not in addr and _looks_like_address_candidate(addr):
+            if len(city_part.split()) <= 2 and '\n' not in addr:
                 detected['address'] = addr
 
         # Priority 3: US/international "City, ST ZIP" or "City, ST" spanning one paragraph
@@ -1024,7 +929,7 @@ def _detect_personal_info(
                 line_end = _addr_zone.find('\n', match_start)
                 line_end = len(_addr_zone) if line_end == -1 else line_end
                 full_line = _addr_zone[line_start:line_end].strip()
-                if full_line and len(full_line) < 100 and _looks_like_address_candidate(full_line):
+                if full_line and len(full_line) < 100:
                     detected['address'] = full_line
                     # Also record the preceding line (street) for clearing
                     if line_start > 0:
@@ -1034,57 +939,6 @@ def _detect_personal_info(
                         prev_line = _addr_zone[prev_start:prev_end].strip()
                         if prev_line and len(prev_line) < 80:
                             detected['address_preceding_line'] = prev_line
-
-    short_paragraphs = [p.strip() for p in paragraphs if 0 < len(p.strip()) <= 120]
-
-    if 'phone' not in detected:
-        for para in short_paragraphs:
-            for pat in phone_pats:
-                m = re.search(pat, para)
-                if m and len(re.sub(r'\D', '', m.group())) >= 7:
-                    detected['phone'] = m.group().strip()
-                    break
-            if 'phone' in detected:
-                break
-
-    if 'linkedin' not in detected:
-        for para in short_paragraphs:
-            m = re.search(r'(?:https?://)?(?:www\.)?linkedin\.com/[\w/.\-]+', para, re.I)
-            if m:
-                detected['linkedin'] = m.group().rstrip('/')
-                break
-
-    if 'address' not in detected:
-        for para in short_paragraphs:
-            _street_m = re.search(
-                r'\d+[,\s]+(?:rue|avenue|av\.|boulevard|blvd|chemin|allée|place|impasse|'
-                r'passage|cours|quai|route|street|st\.|road|rd\.|drive|dr\.)\b[^\n@]{3,80}',
-                para,
-                re.I,
-            )
-            if _street_m:
-                detected['address'] = _street_m.group().strip()
-                break
-
-            city_country = re.search(
-                r'^[A-ZÀ-Ú][a-zà-ú]+(?:\s[A-ZÀ-Ú][a-zà-ú]+)?, *[A-ZÀ-Ú][a-zà-ú]+(?:\s[A-ZÀ-Ú][a-zà-ú]+)*$',
-                para,
-            )
-            if city_country and len(city_country.group().split(',')[0].split()) <= 2 and _looks_like_address_candidate(city_country.group()):
-                detected['address'] = city_country.group().strip()
-                break
-
-            us_m = re.search(
-                r'(?<!\d)([A-Za-zÀ-ÿ][\w\s\-\']{2,30}),\s*([A-Z]{2,3})\b(?:\s*\d{4,6})?',
-                para,
-            )
-            if us_m and _looks_like_address_candidate(para):
-                detected['address'] = para
-                break
-
-    for key in ('phone', 'linkedin', 'address'):
-        if detected.get(key):
-            logger.info("Detected [%s]: %s", key, detected[key])
 
     # ── Step 3: Extract name + title from contact block ───────────────
     block = contact_block
@@ -1134,23 +988,6 @@ def _detect_personal_info(
         )
         return upper_count >= 2 and bad_lower == 0
 
-    _JOB_TITLE_WORDS = frozenset({
-        'chargé', 'chargée', 'chef', 'directeur', 'directrice',
-        'manager', 'ingénieur', 'ingénieure', 'développeur', 'développeuse',
-        'consultant', 'consultante', 'analyste', 'assistant', 'assistante',
-        'responsable', 'coordinateur', 'coordinatrice', 'technicien',
-        'technicienne', 'architecte', 'designer', 'project', 'senior',
-        'junior', 'lead', 'head', 'vp', 'cto', 'ceo', 'cfo',
-        'administrateur', 'administratrice', 'spécialiste', 'expert',
-        'gestionnaire', 'contrôleur', 'comptable', 'auditeur', 'developer',
-        'engineer', 'scientist', 'officer', 'coordinator', 'specialist',
-    })
-
-    def _candidate_looks_like_job_title(words: List[str]) -> bool:
-        lower_words = [w.lower() for w in words]
-        meaningful_words = [w for w in lower_words if w not in _NAME_PARTICLES]
-        return any(w in _JOB_TITLE_WORDS for w in meaningful_words)
-
     def _is_section_heading_text(text: str) -> bool:
         """Return True if text matches a known section heading keyword."""
         t = text.lower().strip()
@@ -1187,15 +1024,9 @@ def _detect_personal_info(
                 continue
             if _is_section_heading_text(seg_s):
                 continue
-            if _candidate_looks_like_job_title(words):
-                continue
             if _candidate_looks_like_name(words):
-                display_name = ' '.join(words)
-                detected['name'] = display_name
-                if seg_s != display_name:
-                    detected['_name_raw'] = seg_s
-                else:
-                    detected.pop('_name_raw', None)
+                detected['name'] = ' '.join(words)
+                detected['_name_raw'] = seg_s  # original (may have no spaces)
                 detected['first_name_text'] = words[0]
                 detected['last_name_text'] = ' '.join(words[1:])
                 logger.info(f"Detected [name] (contact segment): {' '.join(words)}")
@@ -1218,7 +1049,7 @@ def _detect_personal_info(
     # when it finds an ALL-CAPS candidate closer to the email (Step 3a
     # may have picked a job title or school name from the contact block).
     _step3a_name = detected.get('name')
-    _name_cands: List[Tuple[Tuple[int, int], str, List[str], str]] = []
+    _name_cands: List[Tuple[Tuple[int, int], str, List[str]]] = []
     for i, p in enumerate(paragraphs):
         ps = p.strip()
         if not ps or len(ps) > 55:
@@ -1254,8 +1085,6 @@ def _detect_personal_info(
             'candidature', 'sous-titre', 'subtitle',
         )):
             continue
-        if _candidate_looks_like_job_title(words):
-            continue
         # Apply name-particle heuristic
         if not _candidate_looks_like_name(words):
             continue
@@ -1264,18 +1093,14 @@ def _detect_personal_info(
         all_caps_bonus = 0 if all(w.isupper() for w in words) else 1
         # Use spaced version when CamelCase split was applied
         display_name = ' '.join(words) if ' '.join(words) != ps else ps
-        _name_cands.append(((all_caps_bonus, dist), display_name, words, ps))
+        _name_cands.append(((all_caps_bonus, dist), display_name, words))
 
     if _name_cands:
         _name_cands.sort(key=lambda x: x[0])
-        _, best_name, best_words, best_raw_name = _name_cands[0]
+        _, best_name, best_words = _name_cands[0]
         # Override Step 3a if Step 5 found a better candidate
         if not _step3a_name or best_name != _step3a_name:
             detected['name'] = best_name
-            if best_raw_name != best_name:
-                detected['_name_raw'] = best_raw_name
-            else:
-                detected.pop('_name_raw', None)
             detected['first_name_text'] = best_words[0]
             detected['last_name_text'] = ' '.join(best_words[1:])
             logger.info(f"Detected [name] (wide scan): {best_name}")
@@ -1299,6 +1124,18 @@ def _detect_personal_info(
     # area that contains common job-title words (chargé, ingénieur, chef,
     # développeur…).  This fills the 'title' field which is needed so that
     # experience-company extraction can match TITLE + COMPANY patterns.
+    _JOB_TITLE_WORDS = frozenset({
+        'chargé', 'chargée', 'chef', 'directeur', 'directrice',
+        'manager', 'ingénieur', 'ingénieure', 'développeur', 'développeuse',
+        'consultant', 'consultante', 'analyste', 'assistant', 'assistante',
+        'responsable', 'coordinateur', 'coordinatrice', 'technicien',
+        'technicienne', 'architecte', 'designer', 'project', 'senior',
+        'junior', 'lead', 'head', 'vp', 'cto', 'ceo', 'cfo',
+        'administrateur', 'administratrice', 'spécialiste', 'expert',
+        'gestionnaire', 'contrôleur', 'comptable', 'auditeur', 'developer',
+        'engineer', 'scientist', 'officer', 'coordinator', 'specialist',
+    })
+
     if 'title' not in detected and detected.get('name') and email_idx is not None:
         det_name_val = detected['name']
         _title_cands: List[Tuple[Tuple[int, int], str]] = []
@@ -1426,20 +1263,14 @@ def _build_replacements(
     emp_parts = emp_name.split() if emp_name else []
     emp_first = emp_parts[0] if emp_parts else ''
     emp_last = ' '.join(emp_parts[1:]) if len(emp_parts) > 1 else ''
-    use_header_title = not bool(employee.get('_title_derived'))
 
     # Full name replacement (for contact block paragraphs)
     if detected.get('name') and emp_name:
         pairs.append((detected['name'], emp_name))
         # Also add no-space concatenated variant (handles templates where
         # first/last name runs join without space, e.g. "JeanneGarnier")
-        raw_name = (detected.get('_name_raw') or '').strip()
+        raw_name = detected.get('_name_raw', '')
         if raw_name and raw_name != detected['name']:
-            normalized_raw = re.sub(r"[\s'\-\u2019]+", '', raw_name).casefold()
-            normalized_name = re.sub(r"[\s'\-\u2019]+", '', detected['name']).casefold()
-            if normalized_raw != normalized_name:
-                raw_name = ''
-        if raw_name:
             pairs.append((raw_name, emp_name))
 
     # Placeholder-only name (e.g. "PRÉNOM NOM") — no real name was detected
@@ -1470,46 +1301,52 @@ def _build_replacements(
             pairs.append((detected['last_name_text'], emp_last))
 
     # Title / position — cover all placeholder variants (body + header may differ)
-    if use_header_title and employee.get('title'):
-        added_titles: set = set()
-        if detected.get('title'):
-            pairs.append((detected['title'], employee['title']))
-            added_titles.add(detected['title'])
-        for variant in detected.get('_all_ph_titles', []):
-            if variant not in added_titles:
-                pairs.append((variant, employee['title']))
-                added_titles.add(variant)
+    added_titles: set = set()
+    emp_title = (employee.get('title') or '').strip()
+    new_title = emp_title if emp_title else "N/A"
+    
+    if detected.get('title'):
+        pairs.append((detected['title'], new_title))
+        added_titles.add(detected['title'])
+    for variant in detected.get('_all_ph_titles', []):
+        if variant not in added_titles:
+            pairs.append((variant, new_title))
+            added_titles.add(variant)
 
     # Email (may contain space before @, need to replace exactly as detected)
-    if detected.get('email') and employee.get('email'):
+    if detected.get('email'):
         det_email = detected['email']
-        emp_email = employee['email']
-        pairs.append((det_email, emp_email))
+        emp_email = (employee.get('email') or '').strip()
+        new_email = emp_email if emp_email else "N/A"
+        pairs.append((det_email, new_email))
 
-        # Fragment pairs: infographic templates split email across TXBX
-        # paragraphs (e.g. "lucas.leblanc" and "@courriel.ca" in separate <w:p>).
-        # Add local-part and domain pairs so both fragments get replaced.
-        det_local, det_domain = '', ''
-        emp_local, emp_domain = '', ''
-        if '@' in det_email:
-            # Handle space before @ (e.g. "lucas.leblanc @courriel.ca")
-            clean = det_email.replace(' ', '')
-            det_local = clean.split('@')[0]
-            det_domain = '@' + clean.split('@')[1]
-        if '@' in emp_email:
-            emp_local = emp_email.split('@')[0]
-            emp_domain = '@' + emp_email.split('@')[1]
-        if det_local and emp_local and det_local != emp_local:
-            pairs.append((det_local, emp_local))
-        if det_domain and emp_domain and det_domain != emp_domain:
-            pairs.append((det_domain, emp_domain))
+        if emp_email:
+            # Fragment pairs: infographic templates split email across TXBX
+            # paragraphs (e.g. "lucas.leblanc" and "@courriel.ca" in separate <w:p>).
+            # Add local-part and domain pairs so both fragments get replaced.
+            det_local, det_domain = '', ''
+            emp_local, emp_domain = '', ''
+            if '@' in det_email:
+                # Handle space before @ (e.g. "lucas.leblanc @courriel.ca")
+                clean = det_email.replace(' ', '')
+                det_local = clean.split('@')[0]
+                det_domain = '@' + clean.split('@')[1]
+            if '@' in emp_email:
+                emp_local = emp_email.split('@')[0]
+                emp_domain = '@' + emp_email.split('@')[1]
+            if det_local and emp_local and det_local != emp_local:
+                pairs.append((det_local, emp_local))
+            if det_domain and emp_domain and det_domain != emp_domain:
+                pairs.append((det_domain, emp_domain))
 
-    # Phone — replace with employee's, or clear if employee has none
+    # Phone
     if detected.get('phone'):
-        if employee.get('phone'):
-            pairs.append((detected['phone'], employee['phone']))
+        det_phone = detected['phone']
+        emp_phone = (employee.get('phone') or '').strip()
+        new_phone = emp_phone if emp_phone else "N/A"
+        pairs.append((det_phone, new_phone))
 
-            # Fragment pairs: TXBX templates split phone digits across paragraphs.
+        # Fragment pairs: TXBX templates split phone digits across paragraphs.
         # The last digit group (≥4 chars, usually unique) is safe to replace.
         # Shorter groups (area code etc.) risk false matches so we skip them.
         det_phone = detected['phone']
@@ -1528,17 +1365,6 @@ def _build_replacements(
                     emp_last = emp_groups[-1] if emp_groups else ''
                     if last_g != emp_last:
                         pairs.append((last_g, emp_last))
-        else:
-            # Employee has no phone — erase the template's phone so it
-            # doesn't appear in the generated CV as someone else's number.
-            det_phone = detected['phone']
-            pairs.append((det_phone, ''))
-            logger.debug("Clearing template phone (employee has none): %r", det_phone)
-            # Also clear common inline separators that precede the phone
-            # (e.g. "email • phone" → "email " when phone is cleared).
-            # The replacement engine silently skips pairs not found in text.
-            for _sep in (' • ', ' | ', ' · ', ' / ', '• ', '| '):
-                pairs.append((_sep + det_phone, ''))
 
     # Placeholder phone label (e.g. 'Telephone', 'Téléphone') — no real number detected
     if detected.get('_ph_phone') and not detected.get('phone') and employee.get('phone'):
@@ -1588,81 +1414,37 @@ def _build_replacements(
         if not detected.get('linkedin'):  # only if real URL not already handled
             pairs.append((ph_li, new_li))
 
-    def _split_emp_address_for_two_lines(addr: str) -> Optional[Tuple[str, str]]:
-        parts = [p.strip() for p in addr.split(',') if p and p.strip()]
-        if len(parts) < 2:
-            return None
-        if len(parts) >= 3 and re.fullmatch(r'\d+[A-Za-z]?', parts[0]):
-            first = f"{parts[0]}, {parts[1]}".strip()
-            second = ', '.join(parts[2:]).strip()
-            return (first, second) if first and second else None
-        first = parts[0]
-        second = ', '.join(parts[1:]).strip()
-        return (first, second) if first and second else None
-
-    # Address / location — replace with employee's, or clear if employee has none
+    # Address / location — keep full address (no smart shortening)
     if detected.get('address'):
         det_addr = detected['address']
         emp_addr = (employee.get('address') or '').strip()
-        prec_line = (detected.get('address_preceding_line') or '').strip()
-        if emp_addr:
-            addr_for_det = emp_addr
-            if prec_line:
-                split_addr = _split_emp_address_for_two_lines(emp_addr)
-                if split_addr:
-                    first_line, second_line = split_addr
-                    pairs.append((prec_line, first_line))
-                    addr_for_det = second_line
-                else:
-                    # Keep previous behavior when we can't split cleanly:
-                    # erase stale template street line.
-                    pairs.append((prec_line, ''))
-            pairs.append((det_addr, addr_for_det))
+        new_addr = emp_addr if emp_addr else "N/A"
+        pairs.append((det_addr, new_addr))
 
-            # Fragment pairs: TXBX templates split "City, Country" into
-            # "City" and ", Country" paragraphs.
-            # SAFETY: only generate fragments when BOTH addresses follow a simple
-            # 2-part "City, Country" pattern.  Skip when the employee address is
-            # a complex multi-part street address (3+ commas) or when the mapped
-            # city-part is not a recognisable place name (e.g. just a number).
-            det_comma_count = det_addr.count(',')
-            emp_comma_count = addr_for_det.count(',')
-            _simple_addr = (det_comma_count == 1 and emp_comma_count <= 1)
-            if _simple_addr and ',' in det_addr:
-                det_parts = [p.strip() for p in det_addr.split(',', 1)]
-                emp_parts_addr = [p.strip() for p in addr_for_det.split(',', 1)] if ',' in addr_for_det else [addr_for_det.strip(), '']
-                # Only create city fragment if the employee city looks like a name (has letters)
-                emp_city_has_alpha = bool(re.search(r'[A-Za-zÀ-ÿ]{2,}', emp_parts_addr[0]))
-                if det_parts[0] and emp_parts_addr[0] and det_parts[0] != emp_parts_addr[0] and emp_city_has_alpha:
-                    pairs.append((det_parts[0], emp_parts_addr[0]))
-                if len(det_parts) > 1 and len(emp_parts_addr) > 1 and emp_parts_addr[1]:
-                    det_suffix = ', ' + det_parts[1]
-                    emp_suffix = ', ' + emp_parts_addr[1]
-                    if det_suffix != emp_suffix:
-                        pairs.append((det_suffix, emp_suffix))
-                    # Also handle " Country" alone (no comma prefix in paragraph)
-                    if det_parts[1] != emp_parts_addr[1]:
-                        pairs.append((det_parts[1], emp_parts_addr[1]))
-        else:
-            # Employee has no address — erase every address fragment so
-            # the previous employee's address does not bleed through.
-            pairs.append((det_addr, ''))
-            logger.debug("Clearing template address (employee has none): %r", det_addr)
-            if prec_line:
-                pairs.append((prec_line, ''))
-            # Also clear fragment parts if simple City, Country format
-            if det_addr.count(',') == 1:
-                det_parts = [p.strip() for p in det_addr.split(',', 1)]
-                if det_parts[0]:
-                    pairs.append((det_parts[0], ''))
-                if det_parts[1]:
-                    pairs.append((', ' + det_parts[1], ''))
-                    pairs.append((det_parts[1], ''))
-            else:
-                # Clear comma-separated fragments for complex addresses too.
-                for frag in [f.strip() for f in det_addr.split(',') if f.strip()]:
-                    if len(frag) >= 3:
-                        pairs.append((frag, ''))
+        # Fragment pairs: TXBX templates split "City, Country" into
+        # "City" and ", Country" paragraphs.
+        # SAFETY: only generate fragments when BOTH addresses follow a simple
+        # 2-part "City, Country" pattern.  Skip when the employee address is
+        # a complex multi-part street address (3+ commas) or when the mapped
+        # city-part is not a recognisable place name (e.g. just a number).
+        det_comma_count = det_addr.count(',')
+        emp_comma_count = emp_addr.count(',')
+        _simple_addr = (det_comma_count == 1 and emp_comma_count <= 1)
+        if _simple_addr and ',' in det_addr:
+            det_parts = [p.strip() for p in det_addr.split(',', 1)]
+            emp_parts_addr = [p.strip() for p in emp_addr.split(',', 1)] if ',' in emp_addr else [emp_addr.strip(), '']
+            # Only create city fragment if the employee city looks like a name (has letters)
+            emp_city_has_alpha = bool(re.search(r'[A-Za-zÀ-ÿ]{2,}', emp_parts_addr[0]))
+            if det_parts[0] and emp_parts_addr[0] and det_parts[0] != emp_parts_addr[0] and emp_city_has_alpha:
+                pairs.append((det_parts[0], emp_parts_addr[0]))
+            if len(det_parts) > 1 and len(emp_parts_addr) > 1 and emp_parts_addr[1]:
+                det_suffix = ', ' + det_parts[1]
+                emp_suffix = ', ' + emp_parts_addr[1]
+                if det_suffix != emp_suffix:
+                    pairs.append((det_suffix, emp_suffix))
+                # Also handle " Country" alone (no comma prefix in paragraph)
+                if det_parts[1] != emp_parts_addr[1]:
+                    pairs.append((det_parts[1], emp_parts_addr[1]))
 
     # Clear preceding street line (e.g. "234 5th Ave,") when the address
     # was detected from a US-format "City, ST ZIP" on the next paragraph.
@@ -2302,7 +2084,6 @@ def _apply_paragraph_replacements(
     A         = NS_A
     WP        = f'{{{W}}}p'
     WR        = f'{{{W}}}r'
-    WR_PR     = f'{{{W}}}rPr'
     WT        = f'{{{W}}}t'
     AP        = f'{{{A}}}p'
     AR        = f'{{{A}}}r'
@@ -2328,16 +2109,6 @@ def _apply_paragraph_replacements(
                 else:
                     yield from _walk(child)
         yield from _walk(para)
-
-    def _runs_have_mixed_styles(runs):
-        style_keys = set()
-        for run in runs:
-            text_elem = run.find(WT)
-            if text_elem is None or not (text_elem.text or '').strip():
-                continue
-            rpr = run.find(WR_PR)
-            style_keys.add(etree.tostring(rpr, encoding='unicode') if rpr is not None else '')
-        return len(style_keys) > 1
 
     try:
         with zipfile.ZipFile(docx_path, 'r') as zf:
@@ -2450,17 +2221,10 @@ def _apply_paragraph_replacements(
 
                     # Gather per-run text
                     run_texts = []
-                    paragraph_parts = []
                     for r in runs:
                         t = r.find(WT)
                         run_texts.append(t.text or '' if t is not None else '')
-                        for child in r:
-                            if child.tag == WT:
-                                paragraph_parts.append(child.text or '')
-                            elif child.tag == f'{{{W}}}br':
-                                paragraph_parts.append('\n')
                     full_text = ''.join(run_texts)
-                    paragraph_text = ''.join(paragraph_parts)
                     if not full_text.strip():
                         continue
 
@@ -2477,16 +2241,6 @@ def _apply_paragraph_replacements(
                         if not any(old in rt for rt in run_texts):
                             all_fit_in_runs = False
                             break
-
-                    if all_fit_in_runs and _runs_have_mixed_styles(runs):
-                        paragraph_len = len((paragraph_text or full_text).strip())
-                        has_long_generated_text = any(
-                            len(str(new or '').strip()) >= 40 for _old, new in active_repls
-                        )
-                        if paragraph_len >= 60 and (len(active_repls) > 1 or has_long_generated_text):
-                            # Long generated prose should inherit a single body style,
-                            # not preserve arbitrary template run-level font changes.
-                            all_fit_in_runs = False
 
                     if all_fit_in_runs:
                         # Per-run replacement — preserves formatting of each run
@@ -2510,33 +2264,20 @@ def _apply_paragraph_replacements(
                             file_changed = True
                     else:
                         # Full-text collapse fallback for cross-run replacements
-                        modified = paragraph_text or full_text
+                        modified = full_text
                         for old, new in replacements:
                             if old and old in modified:
                                 safe_new = _xml_safe_text(str(new)) if new is not None else ''
                                 modified = modified.replace(old, safe_new)
-                        if modified != (paragraph_text or full_text):
-                            first_run = runs[0]
-                            first_rpr = first_run.find(WR_PR)
-                            for child in list(first_run):
-                                if child is not first_rpr:
-                                    first_run.remove(child)
-
-                            segments = re.split(r'\r\n|\r|\n', modified)
-                            if not segments:
-                                segments = ['']
-                            for idx, segment in enumerate(segments):
-                                if idx > 0:
-                                    etree.SubElement(first_run, f'{{{W}}}br')
-                                t_elem = etree.SubElement(first_run, WT)
-                                t_elem.text = segment
-                                t_elem.set(XML_SPACE, 'preserve')
-
+                        if modified != full_text:
+                            first_t = runs[0].find(WT)
+                            if first_t is not None:
+                                first_t.text = modified
+                                first_t.set(XML_SPACE, 'preserve')
                             for r in runs[1:]:
-                                rpr = r.find(WR_PR)
-                                for child in list(r):
-                                    if child is not rpr:
-                                        r.remove(child)
+                                t_elem = r.find(WT)
+                                if t_elem is not None:
+                                    t_elem.text = ''
                             file_count += 1
                             file_changed = True
 
@@ -2590,169 +2331,186 @@ def _apply_paragraph_replacements(
 #  the employee's structured data — preserving the heading's own formatting.
 # ═══════════════════════════════════════════════════════════════════════════
 
-# ─── Section keyword catalog ─────────────────────────────────────────────
-# This dict used to duplicate the section synonyms already maintained in
-# cv_section_taxonomy.SECTION_KEYWORDS.  We now derive it from that single
-# source of truth so a synonym added in one place applies everywhere.
-#
-# The previous dict mixed certifications + awards under one key; the
-# taxonomy keeps them separate.  Callers that scan ``_SECTION_MAP.values()``
-# still see all keywords, so behaviour is preserved.  Callers that switch
-# on ``section`` get a more accurate label (e.g. an "Awards" heading no
-# longer falsely classifies as a certifications block).
-from app.services.cv_section_taxonomy import (
-    SECTION_KEYWORDS as _CANONICAL_SECTION_KEYWORDS,
-    classify_heading as _classify_taxonomy_heading,
-    normalize_text as _normalize_taxonomy_heading,
-)
-
 _SECTION_MAP: Dict[str, List[str]] = {
-    section: sorted(_CANONICAL_SECTION_KEYWORDS[section])
-    for section in _CANONICAL_SECTION_KEYWORDS
-    if section in {
-        'summary', 'experience', 'education', 'skills', 'projects',
-        'certifications', 'awards', 'languages', 'interests',
-        'references', 'volunteer',
-    }
+    'summary': [
+        # EN
+        'professional summary', 'summary', 'professional profile', 'profile',
+        'objective', 'career objective', 'about me', 'professional statement',
+        # FR
+        'profil', 'objectif', 'résumé professionnel', 'résumé',
+        # ES
+        'perfil profesional', 'perfil', 'resumen', 'objetivo profesional', 'objetivo',
+        # DE
+        'zusammenfassung', 'über mich', 'kurzprofil', 'berufliches profil',
+        # IT
+        'profilo professionale', 'profilo', 'sommario', 'obiettivo',
+        # PT
+        'resumo profissional', 'resumo', 'perfil profissional',
+    ],
+    'experience': [
+        # EN
+        'experience', 'professional experience', 'work experience',
+        'professional history', 'employment history', 'career history',
+        'work history',
+        # FR
+        'expérience', 'expériences', 'expérience professionnelle',
+        # ES
+        'experiencia', 'experiencia laboral', 'experiencia profesional',
+        'experiencia de trabajo', 'trayectoria profesional',
+        # DE
+        'berufserfahrung', 'berufliche erfahrung', 'arbeitserfahrung',
+        'tätigkeiten', 'werdegang', 'beruflicher werdegang',
+        # IT
+        'esperienza', 'esperienza lavorativa', 'esperienza professionale',
+        # PT
+        'experiência', 'experiência profissional', 'experiência de trabalho',
+    ],
+    'education': [
+        # EN
+        'education', 'academic background', 'educational background',
+        'academic qualifications', 'qualifications', 'academic history',
+        # FR
+        'formation', 'études', 'diplômes', 'parcours académique', 'éducation',
+        # ES
+        'educación', 'formación', 'formación académica', 'estudios',
+        'titulación',
+        # DE
+        'ausbildung', 'bildung', 'studium', 'schulbildung',
+        'akademischer hintergrund', 'qualifikationen',
+        # IT
+        'istruzione', 'formazione', 'studi', 'percorso formativo',
+        # PT
+        'educação', 'formação acadêmica', 'formação',
+    ],
+    'skills': [
+        # EN
+        'skills', 'technical skills', 'core competencies', 'competencies',
+        'key skills', 'areas of expertise', 'expertise', 'technical expertise',
+        # FR
+        'compétences', 'compétences techniques', 'compétences clés',
+        # ES
+        'habilidades', 'habilidades técnicas', 'competencias', 'aptitudes',
+        'conocimientos técnicos', 'conocimientos',
+        # DE
+        'kenntnisse', 'fähigkeiten', 'kompetenzen', 'technische kenntnisse',
+        'schlüsselkompetenzen',
+        # IT
+        'competenze', 'competenze tecniche', 'abilità', 'conoscenze',
+        # PT
+        'habilidades', 'competências', 'aptidões', 'conhecimentos técnicos',
+    ],
+    'projects': [
+        # EN
+        'projects', 'key projects', 'selected projects', 'notable projects',
+        'project experience', 'key projects & contributions',
+        'personal projects', 'academic projects',
+        # FR
+        'projets', 'projets clés', 'projets sélectionnés',
+        # ES
+        'proyectos', 'proyectos clave', 'proyectos destacados',
+        'proyectos personales', 'proyectos académicos',
+        # DE
+        'projekte', 'projekterfahrung', 'schlüsselprojekte',
+        # IT
+        'progetti', 'progetti chiave', 'progetti personali',
+        # PT
+        'projetos', 'projetos principais', 'projetos pessoais',
+    ],
+    'certifications': [
+        # EN
+        'certifications', 'certification',
+        'certifications & hackathons',
+        'certifications and hackathons', 'awards & certifications',
+        'certifications and achievements', 'achievements', 'awards',
+        'licenses & certifications', 'licenses and certifications',
+        # FR
+        'certifications et récompenses', 'récompenses',
+        # ES
+        'certificaciones', 'certificados', 'logros', 'premios',
+        'licencias y certificaciones',
+        # DE
+        'zertifikate', 'zertifizierungen', 'auszeichnungen', 'lizenzen',
+        # IT
+        'certificazioni', 'premi', 'riconoscimenti', 'licenze',
+        # PT
+        'certificações', 'certificados', 'conquistas', 'prêmios',
+    ],
+    'languages': [
+        # EN
+        'languages', 'spoken languages', 'language skills', 'language proficiency',
+        # FR
+        'langues', 'langue', 'compétences linguistiques',
+        # ES
+        'idiomas', 'lenguas', 'idiomas hablados',
+        # DE
+        'sprachen', 'sprachkenntnisse', 'sprachliche kenntnisse',
+        # IT
+        'lingue', 'competenze linguistiche', 'conoscenze linguistiche',
+        # PT
+        'idiomas', 'línguas', 'competências linguísticas',
+    ],
+    'interests': [
+        # EN
+        "centres d'intérêt", "centres d'interet", 'interests', 'hobbies',
+        'loisirs', 'activités', 'activities', 'personal interests',
+        # ES
+        'intereses', 'aficiones', 'pasatiempos', 'actividades extracurriculares',
+        # DE
+        'interessen', 'hobbys', 'freizeit', 'freizeitaktivitäten',
+        # IT
+        'interessi', 'hobby', 'attività', 'attività extracurriculari',
+        # PT
+        'interesses', 'hobbies', 'atividades', 'atividades extracurriculares',
+    ],
 }
 
 
-_EMPLOYEE_SECTION_FIELD_ALIASES: Dict[str, Tuple[str, ...]] = {
-    'summary': ('summary', 'professional_summary', 'profile', 'objective', 'about'),
-    'experience': ('experience', 'work_experiences', 'workExperiences', 'employment', 'experiences'),
-    'education': ('education', 'educations', 'academic_history', 'academicHistory'),
-    'skills': ('skills', 'competencies', 'competences', 'technicalSkills', 'technical_skills'),
-    'projects': ('projects', 'key_projects', 'keyProjects', 'portfolio'),
-    'certifications': ('certifications', 'licenses', 'licences', 'credentials'),
-    'languages': ('languages', 'langues', 'languageSkills', 'language_skills'),
-    'awards': ('awards', 'honors', 'honours', 'achievements'),
-    'interests': ('interests', 'hobbies', 'activities', 'personal_interests'),
-    'references': ('references', 'referees'),
-    'volunteer': ('volunteer', 'volunteering', 'volunteer_experience', 'community_service'),
-    'contact': ('contact', 'name', 'email', 'phone', 'address', 'linkedin'),
-}
-
-
-def _canonicalize_section_label(text: str, *, allow_partial: bool = True) -> Optional[str]:
-    """Return the canonical section name for a visible heading label."""
-    canonical = _classify_taxonomy_heading(
-        text,
-        allow_partial=allow_partial,
-        max_extra_words=2 if allow_partial else 0,
-    )
-    if canonical is not None:
-        return canonical
-
-    normalized_text = _normalize_heading_label(text)
-    for optional_canonical, keywords in _AUTO_CLEAR_SECTION_KEYWORDS.items():
-        if allow_partial:
-            matched = any(_is_heading_label_match(text, kw) for kw in keywords)
-        else:
-            matched = any(normalized_text == _normalize_heading_label(kw) for kw in keywords)
-        if matched:
-            return optional_canonical
-    return None
-
-
-def _canonicalize_section_label_for_clearing(text: str) -> Optional[str]:
-    """Return a conservative section label safe to use for content removal."""
-    canonical = _classify_taxonomy_heading(
-        text,
-        allow_partial=False,
-        max_extra_words=0,
-    )
-    if canonical is not None:
-        return canonical
-
-    normalized_text = _normalize_heading_label(text)
-    for optional_canonical, keywords in _AUTO_CLEAR_SECTION_KEYWORDS.items():
-        matched = any(normalized_text == _normalize_heading_label(kw) for kw in keywords)
-        if matched:
-            return optional_canonical
-    return None
-
-
-def _employee_has_section_content(employee: Dict[str, Any], canonical: Optional[str]) -> bool:
-    """Return True when the employee payload can fill the canonical section."""
-    if not canonical:
-        return False
-    if canonical in _NEVER_CLEAR_SECTIONS:
-        return True
-    if canonical in _AUTO_CLEAR_SECTION_KEYWORDS:
-        return _has_optional_section_data(employee, canonical)
-
-    keys = _EMPLOYEE_SECTION_FIELD_ALIASES.get(canonical, ())
-    for key in keys:
-        value = employee.get(key)
-        if isinstance(value, str) and value.strip():
-            return True
-        if isinstance(value, (list, tuple, dict)) and len(value) > 0:
-            return True
-        if value not in (None, '', [], {}, ()):  # bool/int fallbacks
-            return True
-
-    if canonical == 'summary':
-        return bool(employee.get('experience') or employee.get('work_experiences') or employee.get('title'))
-    return False
-
-
-def _section_label_matches_text(text: str, label: str) -> bool:
-    """Compare two heading labels using the shared canonical classifier first."""
-    text_canonical = _canonicalize_section_label(text, allow_partial=False)
-    label_canonical = _canonicalize_section_label(label, allow_partial=False)
-    if text_canonical and label_canonical:
-        return text_canonical == label_canonical
-
-    t = _normalize_heading_label(text)
-    l = _normalize_heading_label(label)
-    if not t or not l:
-        return False
-    return t == l
-
-
-def _looks_like_label_value_content_row(
-    run_parts: List[Tuple[str, bool]],
-    strong_heading_signal: bool,
-) -> bool:
-    """Return True for inline content rows such as 'Languages: French...'.
-
-    Direct CV templates often format sub-items as a bold label in the first run
-    followed by a normal-text value in later runs. Those rows are content, not
-    section headings, even if the bold label starts with a known section keyword.
+def _identify_section(para: DocxParagraph) -> Optional[str]:
     """
-    if strong_heading_signal:
-        return False
+    Return the section name if this paragraph looks like a CV section heading.
+    Checks: bold run, Heading style, or ALL-CAPS short text.
+    """
+    text = para.text.strip()
+    if not text or len(text) > 65:
+        return None
 
-    non_empty_parts = [(text, is_bold) for text, is_bold in run_parts if text.strip()]
-    if len(non_empty_parts) < 2:
-        return False
-
-    first_text, first_bold = non_empty_parts[0]
-    if not first_bold or not first_text.rstrip().endswith(':'):
-        return False
-
-    if not any(not is_bold for _text, is_bold in non_empty_parts[1:]):
-        return False
-
-    suffix = ''.join(text for text, _is_bold in non_empty_parts[1:]).strip()
-    if not suffix:
-        return False
-
-    return (
-        len(suffix) >= 12
-        or len(suffix.split()) >= 2
-        or any(token in suffix for token in (',', ';', '(', ')', '/', '•'))
-        or bool(re.search(r'\d', suffix))
+    is_bold = any(run.bold for run in para.runs if run.text.strip())
+    _style_lower = (para.style.name or '').lower()
+    has_heading_style = (
+        'heading' in _style_lower
+        or 'titre' in _style_lower        # FR: Titre1, Titre2
+        or 'überschrift' in _style_lower  # DE: Überschrift1
+        or 'titolo' in _style_lower        # IT: Titolo1
+        or 'título' in _style_lower        # ES: Título1
+        or re.match(r'^(heading|titre|titolo|título|überschrift)\s*\d', _style_lower)
     )
+    is_caps = (text.upper() == text and len(text.split()) <= 6 and text.replace(' ', '').isalpha())
+    is_underlined = any(run.underline for run in para.runs if run.text.strip())
+
+    has_any_formatting = is_bold or has_heading_style or is_caps or is_underlined
+
+    t = text.lower().strip().replace('\u2019', "'").replace('\u2018', "'").replace('\u00a0', ' ')
+
+    if has_any_formatting:
+        # Formatted heading: broad match (startswith) is safe
+        for section, keywords in _SECTION_MAP.items():
+            for kw in keywords:
+                if t == kw or t.startswith(kw):
+                    return section
+    elif len(text.split()) <= 4:
+        # No formatting but short paragraph: exact keyword match only
+        # (prevents false positives like "Formation continue" → education)
+        for section, keywords in _SECTION_MAP.items():
+            for kw in keywords:
+                if t == kw:
+                    return section
+    return None
 
 
 def _identify_section_lxml(p_elem: Any) -> Optional[str]:
-    """Return the section name if this <w:p> looks like a CV section heading.
-
-    Detects heading paragraphs from formatting signals (bold run, heading
-    style, ALL-CAPS short text, large font, underline) and matches the
-    trimmed text against ``_SECTION_MAP``.
-
+    """
+    lxml-only version of _identify_section.
+    Return the section name if this <w:p> element looks like a CV section heading.
 
     IMPORTANT: paragraphs that ARE CONTAINERS for <wps:txbx> shapes (sidebar
     label paragraphs in infographic templates) are explicitly excluded.  Those
@@ -2851,271 +2609,63 @@ def _identify_section_lxml(p_elem: Any) -> Optional[str]:
 
     has_any_formatting = is_bold or has_heading_style or is_caps or is_large_font or is_underlined
 
-    run_parts = [
-        (_run_plain_text(r), _run_is_bold(r))
-        for r in _direct_paragraph_runs(p_elem)
-    ]
-    if _looks_like_label_value_content_row(
-        run_parts,
-        strong_heading_signal=has_heading_style or is_caps or is_large_font or is_underlined,
-    ):
+    # Sub-headings inside sections end with ":" — not a section heading
+    if text.rstrip().endswith(':'):
         return None
 
     t_lower = text.lower().strip().replace('\u2019', "'").replace('\u2018', "'").replace('\u00a0', ' ')
 
-    # Separators that are valid between keyword and rest of heading text,
-    # e.g. "EXPÉRIENCE PROFESSIONNELLE", "Skills – Technical", "Formation :"
-    _KW_SEP = frozenset(' \t:-–—/|•·()[]{}')
-
     if has_any_formatting:
-        canonical = _canonicalize_section_label(text, allow_partial=False)
-        if canonical is not None:
-            return canonical
+        # Formatted heading: broad match (startswith) is safe — e.g. bold
+        # "EXPÉRIENCE PROFESSIONNELLE" starts with keyword "expérience".
+        for section, keywords in _SECTION_MAP.items():
+            for kw in keywords:
+                if t_lower == kw or t_lower.startswith(kw):
+                    return section
     elif len(text.split()) <= 4:
-        # No formatting signal but short standalone paragraph: exact canonical
-        # heading match only. This still accepts punctuation-only suffixes such
-        # as "Skills:" because the shared taxonomy strips trailing punctuation.
-        canonical = _canonicalize_section_label(text, allow_partial=False)
-        if canonical is not None:
-            return canonical
+        # No formatting signal but short standalone paragraph: exact keyword
+        # match only.  Prevents false positives like "Formation continue en
+        # interne" matching education.  Catches colored-only, custom-styled,
+        # or decoration-only headings (e.g. "Compétences", "Formation").
+        for section, keywords in _SECTION_MAP.items():
+            for kw in keywords:
+                if t_lower == kw:
+                    return section
     return None
 
 
-def _normalize_language_code(language: Optional[str]) -> str:
-    """Normalize a language hint to 'fr', 'en', or 'original'."""
-    lang = (language or "original").strip().lower()
-    if lang in {"fr", "fr-fr", "french", "francais", "français"}:
-        return "fr"
-    if lang in {"en", "en-us", "en-gb", "english"}:
-        return "en"
-    return "original"
-
-
-def _infer_template_language(template_path: str) -> str:
-    """Infer a French/English template language from visible template text."""
-    try:
-        full_text, paragraphs = _extract_all_text(template_path)
-    except Exception as exc:
-        logger.warning("Template language inference failed for %s: %s", template_path, exc)
-        return "original"
-
-    sample_parts = [p.strip() for p in paragraphs if p and p.strip()]
-    if not sample_parts and full_text:
-        sample_parts = [full_text]
-    if not sample_parts:
-        return "original"
-
-    sample = ' '.join(sample_parts[:120])
-    normalized = unicodedata.normalize('NFKD', sample)
-    normalized = normalized.encode('ascii', 'ignore').decode('ascii').lower()
-
-    marker_map = {
-        'fr': {
-            'profil', 'resume', 'competences', 'experience professionnelle',
-            'formation', 'formations', 'langues', 'centre d interet',
-            'centres d interet', 'telephone', 'courriel', 'adresse',
-        },
-        'en': {
-            'profile', 'summary', 'skills', 'experience', 'education',
-            'languages', 'interests', 'phone', 'email', 'address', 'objective',
-        },
-    }
-
-    scores = {'fr': 0, 'en': 0}
-    for lang, markers in marker_map.items():
-        for marker in markers:
-            pattern = r'(?<![a-z])' + re.escape(marker) + r'(?![a-z])'
-            if re.search(pattern, normalized):
-                scores[lang] += 1
-
-    if scores['fr'] > scores['en']:
-        return 'fr'
-    if scores['en'] > scores['fr']:
-        return 'en'
-    return 'original'
-
-
-def _resolve_generation_language(template_path: str, requested_language: Optional[str]) -> str:
-    """Resolve the effective generation language from the request and template."""
-    normalized = _normalize_language_code(requested_language)
-    if normalized != 'original':
-        return normalized
-
-    inferred = _infer_template_language(template_path)
-    return inferred if inferred in {'fr', 'en'} else 'original'
-
-
-def _language_instruction(language: Optional[str]) -> str:
-    """Return a strict language instruction for LLM prompts."""
-    lang = _normalize_language_code(language)
-    if lang == "fr":
-        return "Write strictly in French. Do not output English."
-    if lang == "en":
-        return "Write strictly in English. Do not output French."
-    return "Write in the same language as the profile/template data."
-
-
-def _normalize_employee_language_for_generation(
-    employee_data: Dict[str, Any],
-    preferred_language: Optional[str],
-) -> Dict[str, Any]:
-    """Return employee data normalized to the requested output language.
-
-    This keeps summary, experience, education, projects, and other visible text
-    in the same target language before either placeholder-mode or fallback
-    replacement-mode rendering starts.
-    """
-    lang = _normalize_language_code(preferred_language)
-    if lang not in {"fr", "en"}:
-        return employee_data
-
-    try:
-        translated = translate_cv_best_effort(employee_data, lang)
-        if isinstance(translated, dict) and translated:
-            logger.info("Normalized employee content to target language: %s", lang)
-            return translated
-    except Exception as exc:
-        logger.warning("Employee language normalization failed for %s: %s", lang, exc)
-
-    return employee_data
-
-
-def _groq_with_retry(fn, max_attempts: int = 3, base_delay: float = 2.0):
-    """Call fn() with exponential back-off on Groq transient errors.
-
-    Retries on rate-limit (429), gateway (502/503), and connection errors.
-    Raises immediately for auth errors (401) and invalid-request (400).
-    """
-    import time
-    global _GROQ_RATE_LIMIT_COOLDOWN_UNTIL, _GROQ_RATE_LIMIT_REASON
-
-    now = time.monotonic()
-    if now < _GROQ_RATE_LIMIT_COOLDOWN_UNTIL:
-        remaining = max(0.0, _GROQ_RATE_LIMIT_COOLDOWN_UNTIL - now)
-        raise RuntimeError(
-            f"Groq rate-limit cooldown active for {remaining:.1f}s: {_GROQ_RATE_LIMIT_REASON}"
-        )
-
-    last_exc: Exception = RuntimeError("no attempts made")
-    for attempt in range(max_attempts):
-        try:
-            return fn()
-        except Exception as exc:
-            last_exc = exc
-            msg = str(exc).lower()
-            if _is_groq_rate_limit_error(exc):
-                retry_after = max(_groq_retry_after_seconds(str(exc)), 60.0)
-                _GROQ_RATE_LIMIT_COOLDOWN_UNTIL = time.monotonic() + retry_after
-                _GROQ_RATE_LIMIT_REASON = str(exc)
-                logger.warning(
-                    "Groq quota/rate limit reached; using deterministic fallback for %.1fs: %s",
-                    retry_after,
-                    exc,
-                )
-                raise
-            is_transient = any(
-                x in msg
-                for x in ("rate_limit", "rate limit", "429", "503", "502",
-                           "timeout", "timed out", "connection", "network")
-            )
-            if is_transient and attempt < max_attempts - 1:
-                delay = base_delay * (2 ** attempt)
-                logger.warning(
-                    "Groq transient error (attempt %d/%d): %s — retrying in %.1fs",
-                    attempt + 1, max_attempts, exc, delay,
-                )
-                time.sleep(delay)
-            else:
-                raise
-    raise last_exc
-
-
-def _trim_employee_for_groq(
-    employee: Dict[str, Any],
-    max_exp: int = 5,
-    max_edu: int = 3,
-    max_skills: int = 20,
-) -> Dict[str, Any]:
-    """Return a size-capped copy of employee for Groq prompts.
-
-    Strips binary photo data and caps list fields so the serialised JSON
-    stays well within Groq's context limit on every request.
-    """
-    trimmed = dict(employee)
-    if isinstance(trimmed.get("experience"), list):
-        trimmed["experience"] = trimmed["experience"][:max_exp]
-    if isinstance(trimmed.get("education"), list):
-        trimmed["education"] = trimmed["education"][:max_edu]
-    if isinstance(trimmed.get("skills"), list):
-        trimmed["skills"] = trimmed["skills"][:max_skills]
-    if isinstance(trimmed.get("certifications"), list):
-        trimmed["certifications"] = trimmed["certifications"][:10]
-    if isinstance(trimmed.get("projects"), list):
-        trimmed["projects"] = trimmed["projects"][:5]
-    if trimmed.get('_title_derived'):
-        trimmed['title'] = ''
-    trimmed.pop("photo", None)
-    return trimmed
-
-
-def _groq_generate_skills(
-    employee: Dict[str, Any],
-    api_key: str,
-    preferred_language: Optional[str] = None,
-) -> Optional[str]:
+def _groq_generate_skills(employee: Dict[str, Any], api_key: str) -> Optional[str]:
     """
     Ask Groq to synthesize a concise skills paragraph from the employee's
     full profile (skills array, certifications, education, projects).
     Returns a single comma-separated string, or None on failure.
     """
-    def _as_list(value: Any) -> List[Any]:
-        if value is None:
-            return []
-        if isinstance(value, list):
-            return value
-        if isinstance(value, tuple):
-            return list(value)
-        return [value]
-
-    def _extract_text(value: Any, *keys: str) -> str:
-        if isinstance(value, dict):
-            for key in keys:
-                text = str(value.get(key) or '').strip()
-                if text:
-                    return text
-            return ''
-        return str(value).strip() if value is not None else ''
-
-    skills = [
-        _extract_text(skill, 'name', 'label', 'skill', 'skillName')
-        for skill in _as_list(employee.get('skills'))
+    skills  = employee.get('skills') or []
+    certs   = [
+        (c if isinstance(c, str) else (c.get('name') or ''))
+        for c in (employee.get('certifications') or [])
     ]
-    certs = [
-        _extract_text(cert, 'name', 'title', 'label')
-        for cert in _as_list(employee.get('certifications'))
+    edus    = [
+        (e.get('degree') or e.get('institution') or '')
+        for e in (employee.get('education') or [])
     ]
-    edus = [
-        _extract_text(edu, 'degree', 'institution', 'school', 'university')
-        for edu in _as_list(employee.get('education'))
-    ]
-    projs = [
-        _extract_text(project, 'description', 'name', 'title', 'role')
-        for project in _as_list(employee.get('projects'))
+    projs   = [
+        (p.get('description') or p.get('name') or '')
+        for p in (employee.get('projects') or [])
     ]
 
     profile = {
-        'skills': [skill for skill in skills if skill][:30],
+        'skills': skills[:30],
         'certifications': [c for c in certs if c][:10],
         'education': [e for e in edus if e][:4],
         'projects_summary': [p for p in projs if p][:5],
     }
 
-    lang_rule = _language_instruction(preferred_language)
     prompt = (
         "Based on this employee profile, produce a single short paragraph "
         "(max 60 words) of technical skills and competencies, "
         "written as a comma-separated list suitable for a CV skills section. "
-        f"{lang_rule} "
+        "Use the language of the profile data. "
         "Do NOT include certifications verbatim — extract only skill keywords. "
         "Return ONLY the skills text, no commentary.\n\n"
         f"Profile:\n{json.dumps(profile, ensure_ascii=False)}"
@@ -3123,13 +2673,14 @@ def _groq_generate_skills(
 
     try:
         client = Groq(api_key=api_key, timeout=settings.GROQ_TIMEOUT_SECONDS)
-        resp = _groq_with_retry(lambda: client.chat.completions.create(
+        resp = client.chat.completions.create(
             model=settings.GROQ_CV_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=settings.GROQ_PAIRS_TEMPERATURE,
             max_tokens=200,
-        ))
+        )
         text = (resp.choices[0].message.content or '').strip()
+        # Strip any stray markdown
         text = re.sub(r'^```[^\n]*\n?', '', text)
         text = re.sub(r'\n?```$', '', text).strip()
         if text:
@@ -3140,11 +2691,7 @@ def _groq_generate_skills(
     return None
 
 
-def _groq_generate_summary(
-    employee: Dict[str, Any],
-    api_key: str,
-    preferred_language: Optional[str] = None,
-) -> Optional[str]:
+def _groq_generate_summary(employee: Dict[str, Any], api_key: str) -> Optional[str]:
     """
     Ask Groq to generate a professional summary paragraph for the employee.
 
@@ -3174,23 +2721,22 @@ def _groq_generate_summary(
         ],
     }
 
-    lang_rule = _language_instruction(preferred_language)
     prompt = (
         "Based on this employee profile, write a professional CV summary paragraph "
         "(3–4 sentences, max 80 words). Use a confident, professional tone. "
-        f"{lang_rule} "
+        "Write in the same language as the profile data. "
         "Return ONLY the summary text — no title, no labels, no commentary.\n\n"
         f"Profile:\n{json.dumps(profile, ensure_ascii=False)}"
     )
 
     try:
         client = Groq(api_key=api_key, timeout=settings.GROQ_TIMEOUT_SECONDS)
-        resp = _groq_with_retry(lambda: client.chat.completions.create(
+        resp = client.chat.completions.create(
             model=settings.GROQ_CV_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=settings.GROQ_SUMMARY_TEMPERATURE,
             max_tokens=200,
-        ))
+        )
         text = (resp.choices[0].message.content or '').strip()
         text = re.sub(r'^```[^\n]*\n?', '', text)
         text = re.sub(r'\n?```$', '', text).strip()
@@ -3199,8 +2745,7 @@ def _groq_generate_summary(
             return text
     except Exception as exc:
         logger.warning(f"Groq summary generation failed: {exc}")
-    # Deterministic fallback: build summary from structured data when Groq is unavailable.
-    # Language-aware: English when preferred_language starts with "en", French otherwise.
+    # Deterministic fallback: build summary from structured data when Groq is unavailable
     title     = (employee.get('title') or '').strip()
     exp       = employee.get('experience') or []
     companies = [
@@ -3209,21 +2754,12 @@ def _groq_generate_summary(
         if (e.get('company') or e.get('companyName') or '').strip()
     ]
     fb_parts: List[str] = []
-    is_english = preferred_language and preferred_language.lower().startswith("en")
-    if is_english:
-        if title:
-            fb_parts.append(f"Professional specialising in {title}")
-        if companies:
-            fb_parts.append(f"with experience at {', '.join(companies)}")
-        if len(exp) > 1:
-            fb_parts.append(f"across {len(exp)} roles")
-    else:
-        if title:
-            fb_parts.append(f"Professionnel spécialisé en {title}")
-        if companies:
-            fb_parts.append(f"avec une expérience chez {', '.join(companies)}")
-        if len(exp) > 1:
-            fb_parts.append(f"fort d'un parcours de {len(exp)} postes")
+    if title:
+        fb_parts.append(f"Professionnel spécialisé en {title}")
+    if companies:
+        fb_parts.append(f"avec une expérience chez {', '.join(companies)}")
+    if len(exp) > 1:
+        fb_parts.append(f"fort d'un parcours de {len(exp)} postes")
     fallback = (' '.join(fb_parts) + '.').strip() if fb_parts else ''
     if fallback:
         logger.info(f"[summary_fallback] Built from structured data: {fallback[:80]}")
@@ -3231,192 +2767,7 @@ def _groq_generate_summary(
     return None
 
 
-def build_structured_cv_sections_payload(employee: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Build a canonical, section-structured payload for CV rendering.
-
-    Output schema:
-      {
-        "sections": {
-          "summary": str,
-          "education": [{"degree": str, "institution": str, "dates": str}],
-          "experience": [{"title": str, "company": str, "dates": str}],
-          "skills": [str],
-          "certifications": [str],
-          "projects": [str]
-        }
-      }
-    """
-    _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
-    _PRESENT_RE = re.compile(
-        r"\b(present|current|ongoing|now|en cours|actuel|actuelle|pr[ée]sent)\b",
-        re.IGNORECASE,
-    )
-
-    def _strip(v: Any) -> str:
-        if v is None:
-            return ""
-        return str(v).strip()
-
-    def _is_current(value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, (int, float)):
-            return value != 0
-        if value is None:
-            return False
-        return str(value).strip().lower() in {"true", "1", "yes", "y"}
-
-    def _year_only(value: Any) -> str:
-        text = _strip(value)
-        if not text:
-            return ""
-        m = _YEAR_RE.search(text)
-        return m.group(0) if m else ""
-
-    def _normalize_dates(
-        dates: Any = None,
-        start_date: Any = None,
-        end_date: Any = None,
-        is_current: Any = None,
-    ) -> str:
-        start_year = _year_only(start_date)
-        end_year = _year_only(end_date)
-        raw = _strip(dates)
-
-        if raw and not start_year:
-            years = [m.group(0) for m in _YEAR_RE.finditer(raw)]
-            if years:
-                start_year = years[0]
-                if len(years) > 1 and not end_year:
-                    end_year = years[1]
-        if _is_current(is_current) or (raw and _PRESENT_RE.search(raw)):
-            end_year = "Present"
-
-        if start_year and end_year:
-            return f"{start_year} - {end_year}"
-        if start_year and _is_current(is_current):
-            return f"{start_year} - Present"
-        return start_year or end_year
-
-    # Accept both normalized fallback payload and raw backend payload shapes.
-    raw_experience = employee.get("experience")
-    if not isinstance(raw_experience, list):
-        raw_experience = employee.get("workExperiences")
-    if not isinstance(raw_experience, list):
-        raw_experience = []
-
-    experience: List[Dict[str, str]] = []
-    for exp in raw_experience:
-        if not isinstance(exp, dict):
-            continue
-        title = _strip(exp.get("title") or exp.get("jobTitle"))
-        company = _strip(exp.get("company") or exp.get("companyName"))
-        if not title or not company:
-            continue
-        dates = _normalize_dates(
-            dates=exp.get("dates") or exp.get("date_range") or exp.get("period"),
-            start_date=exp.get("startDate") or exp.get("start_date"),
-            end_date=exp.get("endDate") or exp.get("end_date"),
-            is_current=exp.get("isCurrent") or exp.get("is_current"),
-        )
-        experience.append({
-            "title": title,
-            "company": company,
-            "dates": dates,
-        })
-
-    raw_education = employee.get("education")
-    if not isinstance(raw_education, list):
-        raw_education = employee.get("educations")
-    if not isinstance(raw_education, list):
-        raw_education = []
-
-    education: List[Dict[str, str]] = []
-    for edu in raw_education:
-        if not isinstance(edu, dict):
-            continue
-        degree = _strip(
-            edu.get("degree") or edu.get("fieldOfStudy") or edu.get("field_of_study")
-        )
-        institution = _strip(
-            edu.get("institution") or edu.get("school") or edu.get("university")
-        )
-        # Keep entry if at least one of degree / institution is present
-        if not degree and not institution:
-            continue
-        dates = _normalize_dates(
-            dates=edu.get("dates") or edu.get("date") or edu.get("graduationDate"),
-            start_date=edu.get("startDate") or edu.get("start_date"),
-            end_date=edu.get("endDate") or edu.get("end_date"),
-        )
-        education.append({
-            "degree": degree,
-            "institution": institution,
-            "dates": dates,
-        })
-
-    raw_skills = employee.get("skills") or []
-    if isinstance(raw_skills, str):
-        raw_skills = [s.strip() for s in raw_skills.split(",") if s.strip()]
-    elif not isinstance(raw_skills, list):
-        raw_skills = []
-    skills: List[str] = []
-    for skill in raw_skills:
-        text = _strip(skill)
-        if text:
-            skills.append(text)
-
-    raw_certs = employee.get("certifications") or []
-    if not isinstance(raw_certs, list):
-        raw_certs = []
-    certifications: List[str] = []
-    for cert in raw_certs:
-        if isinstance(cert, dict):
-            name = _strip(cert.get("name"))
-        else:
-            name = _strip(cert)
-        if name:
-            certifications.append(name)
-
-    raw_projects = employee.get("projects") or []
-    if not isinstance(raw_projects, list):
-        raw_projects = []
-    projects: List[str] = []
-    for proj in raw_projects:
-        if isinstance(proj, dict):
-            name = _strip(proj.get("name") or proj.get("title"))
-            role = _strip(proj.get("role"))
-            desc = _strip(proj.get("description"))
-            text = name or role or desc
-        else:
-            text = _strip(proj)
-        if text:
-            projects.append(text)
-
-    summary_text = _strip(
-        employee.get("summary")
-        or employee.get("professionalSummary")
-        or employee.get("professional_summary")
-    )
-
-    return {
-        "sections": {
-            "summary": summary_text,
-            "education": education,
-            "experience": experience,
-            "skills": skills,
-            "certifications": certifications,
-            "projects": projects,
-        }
-    }
-
-
-def _build_section_content(
-    section: str,
-    employee: Dict[str, Any],
-    preferred_language: Optional[str] = None,
-) -> Optional[List[Dict]]:
+def _build_section_content(section: str, employee: Dict[str, Any]) -> Optional[List[Dict]]:
     """
     Return a list of {text, bold, bullet} dicts for a CV section,
     built from the employee's structured data.
@@ -3430,82 +2781,49 @@ def _build_section_content(
             return ''
         return str(v).strip()
 
-    def _as_list(value: Any) -> List[Any]:
-        if value is None:
-            return []
-        if isinstance(value, list):
-            return value
-        if isinstance(value, tuple):
-            return list(value)
-        return [value]
-
-    def _extract_named_text(value: Any, *keys: str) -> str:
-        if isinstance(value, dict):
-            for key in keys:
-                text = _strip(value.get(key))
-                if text:
-                    return text
-            return ''
-        return _strip(value)
-
-    def _entry_meta_line(*parts: Any) -> str:
-        values = [_strip(part) for part in parts if _strip(part)]
-        return '  —  '.join(values)
-
-    sections_payload = build_structured_cv_sections_payload(employee).get("sections", {})
-
     if section == 'summary':
-        text = _strip(sections_payload.get('summary'))
+        text = _strip(employee.get('summary'))
         if not text:
             # Attempt Groq generation when no pre-written summary is in the profile
             api_key = settings.GROQ_API_KEY
             if api_key:
-                generated = _groq_generate_summary(employee, api_key, preferred_language)
+                generated = _groq_generate_summary(employee, api_key)
                 if generated:
                     text = generated
                     logger.info("[_build_section_content] Groq summary injected")
         return [{'text': text, 'bold': False, 'bullet': False}] if text else None
 
     elif section == 'experience':
-        exps = sections_payload.get('experience') or []
+        exps = employee.get('experience') or []
+        if not isinstance(exps, list):
+            return None
         if not exps:
             return None
-
-        # Preserve optional descriptions from source entries when available.
-        source_desc: Dict[Tuple[str, str], str] = {}
-        for src in _as_list(employee.get('experience')):
-            if not isinstance(src, dict):
-                continue
-            src_title = _strip(src.get('title') or src.get('jobTitle'))
-            src_company = _strip(src.get('company') or src.get('companyName'))
-            if not src_title or not src_company:
-                continue
-            src_desc = _strip(
-                src.get('description') or
-                src.get('responsibilities') or
-                src.get('tasks') or
-                src.get('duties') or
-                src.get('achievements') or
-                src.get('role') or
-                ''
-            )
-            if src_desc:
-                source_desc[(src_title, src_company)] = src_desc
-
         lines: List[Dict] = []
         for exp in exps:
-            title = _strip(exp.get('title'))
+            if not isinstance(exp, dict):
+                continue
+            title   = _strip(exp.get('title'))
             company = _strip(exp.get('company'))
-            dates = _strip(exp.get('dates'))
-            desc = source_desc.get((title, company), '')
+            if not title and not company:
+                continue  # skip entries with no meaningful data
+            # Support both 'dates' (test data) and 'start_date' (metadata.json)
+            raw_dates = _strip(exp.get('dates') or exp.get('start_date'))
+            # ISO date (YYYY-MM-DD or YYYY-MM) → keep only the year (e.g. 2018-02-01 → 2018)
+            dates = re.sub(r'^(\d{4})-\d{2}.*$', r'\1', raw_dates) if raw_dates else raw_dates
+            desc    = _strip(exp.get('description') or exp.get('role') or '')
             # Cap description length to prevent textbox overflow
             if len(desc) > 1500:
                 desc = desc[:1500].rsplit(' ', 1)[0] + '…'
+            # Header: dates + company on one line, title on the next.
+            # 'compact' = True → tiny after-spacing so the date line stays
+            # visually glued to the job title below it.
+            if dates and company:
+                lines.append({'text': f"{dates}  —  {company}", 'bold': False, 'bullet': False, 'compact': True})
+            elif dates or company:
+                lines.append({'text': dates or company, 'bold': False, 'bullet': False, 'compact': True})
             if title:
-                lines.append({'text': title, 'bold': True, 'bullet': False})
-            meta = _entry_meta_line(company, dates)
-            if meta:
-                lines.append({'text': meta, 'bold': False, 'bullet': False, 'compact': True})
+                lines.append({'text': title, 'bold': False, 'bullet': False})
             for dl in desc.split('\n'):
                 dl = dl.strip().lstrip('•●-– ').strip()
                 if dl:
@@ -3513,42 +2831,44 @@ def _build_section_content(
         return lines or None
 
     elif section == 'education':
-        edus = sections_payload.get('education') or []
+        edus = employee.get('education') or []
+        if not isinstance(edus, list):
+            return None
         if not edus:
             return None
         lines = []
         for edu in edus:
+            if not isinstance(edu, dict):
+                continue
             degree      = _strip(edu.get('degree'))
             institution = _strip(edu.get('institution'))
-            dates = _strip(edu.get('dates'))
-            if degree:
-                lines.append({'text': degree, 'bold': True, 'bullet': False})
-            meta = _entry_meta_line(institution, dates)
-            if meta:
-                lines.append({'text': meta, 'bold': False, 'bullet': False, 'compact': True})
+            if not degree and not institution:
+                continue  # skip empty entries
+            # Support both 'dates' (test data) and 'end_date' (metadata.json)
+            raw_dates   = _strip(edu.get('dates') or edu.get('end_date'))
+            # ISO date (YYYY-MM-DD or YYYY-MM) → keep only the year
+            dates = re.sub(r'^(\d{4})-\d{2}.*$', r'\1', raw_dates) if raw_dates else raw_dates
+            parts = [p for p in [dates, degree, institution] if p]
+            lines.append({'text': ' | '.join(parts), 'bold': False, 'bullet': False})
         return lines or None
 
     elif section == 'skills':
         # Gather all skill-related data from the employee record
-        skills = _as_list(employee.get('skills'))
-        certs = _as_list(employee.get('certifications'))
-        projs = _as_list(employee.get('projects'))
+        skills = employee.get('skills') or []
+        certs  = employee.get('certifications') or []
+        projs  = employee.get('projects') or []
         if not skills and not certs and not projs:
             return None
         # Try Groq synthesis first; fall back to formatted list
         api_key = settings.GROQ_API_KEY
         if api_key and (certs or projs):
-            synthesized = _groq_generate_skills(employee, api_key, preferred_language)
+            synthesized = _groq_generate_skills(employee, api_key)
             if synthesized:
                 return [{'text': synthesized, 'bold': False, 'bullet': False}]
         # Fallback: build from skills array + tech keywords extracted from cert names
-        skill_list = []
-        for skill in skills:
-            text = _extract_named_text(skill, 'name', 'label', 'skill', 'skillName')
-            if text:
-                skill_list.append(text)
+        skill_list = [str(s) for s in skills if s]
         cert_names = [
-            _extract_named_text(c, 'name', 'title', 'label')
+            (c if isinstance(c, str) else _strip(c.get('name', '')))
             for c in certs
         ]
         cert_names = [c for c in cert_names if c]
@@ -3573,46 +2893,18 @@ def _build_section_content(
         return [{'text': text, 'bold': False, 'bullet': False}] if text else None
 
     elif section == 'projects':
-        projects = _as_list(employee.get('projects'))
+        projects = employee.get('projects') or []
         if not projects:
             return None
         lines = []
         for proj in projects:
-            if isinstance(proj, dict):
-                name = _strip(proj.get('name') or proj.get('title'))
-                client = _strip(proj.get('client') or proj.get('company') or proj.get('clientName'))
-                period = _strip(
-                    proj.get('year') or proj.get('dates') or proj.get('period')
-                    or proj.get('startDate') or proj.get('start_date')
-                )
-                project_skills = []
-                for skill in _as_list(proj.get('skills')):
-                    text = _extract_named_text(skill, 'name', 'label', 'skill', 'skillName')
-                    if text:
-                        project_skills.append(text)
-                skill_list = ', '.join(project_skills)
-                desc = _strip(proj.get('description'))
-                role = _strip(proj.get('role'))
-                header = name or role or skill_list
-                meta_parts = []
-                if client:
-                    meta_parts.append(client)
-                if skill_list and skill_list != header:
-                    meta_parts.append(skill_list)
-                if period:
-                    meta_parts.append(period)
-                meta = _entry_meta_line(*meta_parts)
-                body = desc or role
-            else:
-                header = _strip(proj)
-                meta = ''
-                body = ''
-            if not header and not body:
-                continue
-            if header:
-                lines.append({'text': header, 'bold': True, 'bullet': False})
-            if meta:
-                lines.append({'text': meta, 'bold': False, 'bullet': False, 'compact': True})
+            name = _strip(proj.get('name'))
+            skill_list = ', '.join(proj.get('skills') or [])
+            desc = _strip(proj.get('description'))
+            role = _strip(proj.get('role'))
+            header = f"{name}  |  {skill_list}" if skill_list else name
+            lines.append({'text': header, 'bold': False, 'bullet': False})
+            body = desc or role
             if body:
                 for dl in body.split('\n'):
                     dl = dl.strip().lstrip('•●-– ').strip()
@@ -3621,38 +2913,34 @@ def _build_section_content(
         return lines or None
 
     elif section == 'certifications':
-        certs = _as_list(employee.get('certifications'))
+        certs = employee.get('certifications') or []
         if not certs:
             return None
-        names = [_extract_named_text(c, 'name', 'title', 'label') for c in certs]
+        names = [c if isinstance(c, str) else _strip(c.get('name') if isinstance(c, dict) else c) for c in certs]
         names = [n for n in names if n]
         if not names:
             return None
         return [{'text': n, 'bold': False, 'bullet': True} for n in names]
 
     elif section == 'languages':
-        langs = _as_list(employee.get('languages'))
+        langs = employee.get('languages') or []
         if not langs:
             return None
-        lang_names = [
-            _extract_named_text(l, 'name', 'language', 'label', 'lang')
-            for l in langs
-        ]
-        lang_names = [name for name in lang_names if name]
-        if not lang_names:
-            return None
-        text = ', '.join(lang_names)
+        if isinstance(langs, list):
+            text = ', '.join(l if isinstance(l, str) else _strip(l.get('name') if isinstance(l, dict) else l) for l in langs)
+        else:
+            text = str(langs)
         return [{'text': text, 'bold': False, 'bullet': False}] if text else None
 
     elif section == 'interests':
-        interests = _as_list(employee.get('interests'))
+        interests = employee.get('interests') or []
         if not interests:
             return None
-        items_list = [
-            _extract_named_text(i, 'name', 'label', 'title')
-            for i in interests
-        ]
-        items_list = [i for i in items_list if i]
+        if isinstance(interests, list):
+            items_list = [i if isinstance(i, str) else _strip(i.get('name', '')) for i in interests]
+            items_list = [i for i in items_list if i]
+        else:
+            items_list = [str(interests)]
         return [{'text': i, 'bold': False, 'bullet': True} for i in items_list] if items_list else None
 
     return None
@@ -3667,64 +2955,17 @@ def _build_section_table_rows(
     Each row is a list of cell text strings.
     Returns None when no employee data is available for that section.
     """
-    _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
-    _PRESENT_RE = re.compile(
-        r"\b(present|current|ongoing|now|en cours|actuel|actuelle|pr[ée]sent)\b",
-        re.IGNORECASE,
-    )
-
     def _s(v: Any) -> str:
         return (v or '').strip() if v is not None else ''
 
-    def _is_current(value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, (int, float)):
-            return value != 0
-        if value is None:
-            return False
-        return str(value).strip().lower() in {"true", "1", "yes", "y"}
-
-    def _year_only(value: Any) -> str:
-        txt = _s(value)
-        if not txt:
-            return ''
-        m = _YEAR_RE.search(txt)
-        return m.group(0) if m else ''
-
-    def _norm_dates(
-        dates: Any = None,
-        start_date: Any = None,
-        end_date: Any = None,
-        is_current: Any = None,
-    ) -> str:
-        start_year = _year_only(start_date)
-        end_year = _year_only(end_date)
-        raw = _s(dates)
-        if raw and not start_year:
-            years = [m.group(0) for m in _YEAR_RE.finditer(raw)]
-            if years:
-                start_year = years[0]
-                if len(years) > 1 and not end_year:
-                    end_year = years[1]
-        if _is_current(is_current) or (raw and _PRESENT_RE.search(raw)):
-            end_year = "Present"
-
-        if start_year and end_year:
-            return f"{start_year} - {end_year}"
-        if start_year and _is_current(is_current):
-            return f"{start_year} - Present"
-        return start_year or end_year
-
-    sections_payload = build_structured_cv_sections_payload(employee).get("sections", {})
-
     if section == 'experience':
-        exps = sections_payload.get('experience') or []
+        exps = employee.get('experience') or []
         if not exps:
             return None
         rows = []
         for exp in exps:
-            dates = _s(exp.get('dates'))
+            raw_dates = _s(exp.get('dates') or exp.get('start_date'))
+            dates = re.sub(r'^(\d{4})-\d{2}.*$', r'\1', raw_dates) if raw_dates else raw_dates
             company = _s(exp.get('company'))
             title = _s(exp.get('title'))
             rows.append([dates, company, title])
@@ -3746,12 +2987,13 @@ def _build_section_table_rows(
         return rows or None
 
     elif section == 'education':
-        edus = sections_payload.get('education') or []
+        edus = employee.get('education') or []
         if not edus:
             return None
         rows = []
         for edu in edus:
-            dates = _s(edu.get('dates'))
+            raw_dates = _s(edu.get('dates') or edu.get('end_date'))
+            dates = re.sub(r'^(\d{4})-\d{2}.*$', r'\1', raw_dates) if raw_dates else raw_dates
             institution = _s(edu.get('institution'))
             degree = _s(edu.get('degree'))
             rows.append([dates, institution, degree])
@@ -3764,12 +3006,16 @@ def _build_section_table_rows(
         rows = []
         for proj in projects:
             # Year/dates: try explicit 'year', then 'dates', then build from startDate/endDate
-            year = _norm_dates(
-                dates=proj.get('year') or proj.get('dates'),
-                start_date=proj.get('startDate') or proj.get('start_date'),
-                end_date=proj.get('endDate') or proj.get('end_date'),
-                is_current=proj.get('isCurrent') or proj.get('is_current'),
-            )
+            year = _s(proj.get('year') or proj.get('dates'))
+            if not year:
+                sd = _s(proj.get('startDate'))
+                ed = _s(proj.get('endDate'))
+                if sd and ed:
+                    year = f"{sd} - {ed}"
+                elif sd:
+                    year = sd
+                elif ed:
+                    year = ed
             client = _s(proj.get('client') or proj.get('company') or proj.get('clientName'))
             name = _s(proj.get('name') or proj.get('title'))
             desc = _s(proj.get('description'))
@@ -3820,10 +3066,6 @@ def _fill_table_section(
                 rpr_el = runs[0].find(f'{{{W}}}rPr')
                 if rpr_el is not None:
                     ref_rPr = copy.deepcopy(rpr_el)
-                    for _bold_tag in (f'{{{W}}}b', f'{{{W}}}bCs'):
-                        _b = ref_rPr.find(_bold_tag)
-                        if _b is not None:
-                            ref_rPr.remove(_b)
                 for r in runs:
                     target_p.remove(r)
             new_r = etree.SubElement(target_p, f'{{{W}}}r')
@@ -3839,60 +3081,15 @@ def _fill_table_section(
     return len(rows_data)
 
 
-def _is_docxtpl_scaffold_table(tbl_elem: Any) -> bool:
-    """Return True when a table is only a docxtpl row-loop scaffold."""
-    W = NS_W
-    rows = tbl_elem.findall(f'{{{W}}}tr')
-    if not rows:
-        return False
-
-    max_cols = 0
-    for row in rows:
-        max_cols = max(max_cols, len(row.findall(f'./{{{W}}}tc')))
-
-    raw = etree.tostring(tbl_elem)
-    return max_cols <= 1 and (b'{%' in raw or b'{{' in raw)
-
-
 def _get_ref_rpr(content_elems: list) -> Optional[Any]:
-    """Extract <w:rPr> from content paragraphs, preferring body-text runs.
-
-    Skips runs that are bold AND have a large font size (>14pt / sz>28) so
-    that heading-style formatting from template skill-chips or section titles
-    is not accidentally inherited by inserted body content.  Falls back to
-    the first run found if no body-text run exists.
-    """
+    """Extract <w:rPr> formatting from the first run in content paragraphs."""
     W = NS_W
-    first_found = None
     for p_elem in content_elems:
         for r in p_elem.iter(f'{{{W}}}r'):
             rprs = r.findall(f'{{{W}}}rPr')
-            if not rprs:
-                continue
-            rpr = rprs[0]
-            if first_found is None:
-                first_found = rpr
-            is_bold = rpr.find(f'{{{W}}}b') is not None
-            sz_elem = rpr.find(f'{{{W}}}sz')
-            sz_val = int(sz_elem.get(f'{{{W}}}val', '0')) if sz_elem is not None else 0
-            if not is_bold and sz_val <= 28:  # 28 half-points = 14pt
-                return copy.deepcopy(rpr)
-    if first_found is None:
-        return None
-    result = copy.deepcopy(first_found)
-    # Fallback path: strip oversized font so body text doesn't inherit
-    # heading/chip sizing. Keep font face and colour; only drop size.
-    sz_el = result.find(f'{{{W}}}sz')
-    if sz_el is not None:
-        try:
-            if int(sz_el.get(f'{{{W}}}val', '0')) > 24:  # > 12pt
-                result.remove(sz_el)
-                szcs = result.find(f'{{{W}}}szCs')
-                if szcs is not None:
-                    result.remove(szcs)
-        except (ValueError, TypeError):
-            pass
-    return result
+            if rprs:
+                return copy.deepcopy(rprs[0])
+    return None
 
 
 def _get_ref_ppr_spacing(content_elems: list) -> Optional[Any]:
@@ -3912,28 +3109,6 @@ def _get_ref_ppr_spacing(content_elems: list) -> Optional[Any]:
         if sp is not None:
             return copy.deepcopy(sp)
     return None
-
-
-def _spacing_line_only(spacing_elem: Any) -> Optional[Any]:
-    """Return a new <w:spacing> element that keeps only w:line/w:lineRule.
-
-    Used for paragraphs that sit *inside* an entry (immediately after a
-    compact date/company line).  Dropping w:before prevents the large
-    entry-separation gap from appearing between the date line and the
-    job-title line that belongs to the same entry.
-    """
-    if spacing_elem is None:
-        return None
-    W = NS_W
-    line = spacing_elem.get(f'{{{W}}}line')
-    line_rule = spacing_elem.get(f'{{{W}}}lineRule')
-    if not line:
-        return None
-    sp = etree.Element(f'{{{W}}}spacing')
-    sp.set(f'{{{W}}}line', line)
-    if line_rule:
-        sp.set(f'{{{W}}}lineRule', line_rule)
-    return sp
 
 
 def _para_has_drawing_or_textbox(p_elem: Any) -> bool:
@@ -4049,234 +3224,6 @@ def _extract_content_styles(removable_elems: list) -> Dict[str, Optional[str]]:
     return styles
 
 
-def _content_item_reference_key(item: Dict[str, Any]) -> str:
-    if item.get('compact') and not item.get('bullet'):
-        return 'compact'
-    if item.get('bullet'):
-        return 'bullet'
-    if item.get('bold'):
-        return 'bold'
-    return 'normal'
-
-
-def _paragraph_has_numbering(p_elem: Any) -> bool:
-    W = NS_W
-    ppr = p_elem.find(f'{{{W}}}pPr')
-    return ppr is not None and ppr.find(f'{{{W}}}numPr') is not None
-
-
-def _paragraph_is_bullet_like(p_elem: Any) -> bool:
-    text = _paragraph_plain_text(p_elem)
-    return _paragraph_has_numbering(p_elem) or text.startswith(('•', '●', '-', '–'))
-
-
-def _paragraph_has_bold_content(p_elem: Any) -> bool:
-    return any(
-        _run_is_bold(run)
-        for run in _direct_paragraph_runs(p_elem)
-        if _run_plain_text(run).strip()
-    )
-
-
-def _reference_paragraph_kind(p_elem: Any) -> str:
-    text = _paragraph_plain_text(p_elem)
-    if _paragraph_is_bullet_like(p_elem):
-        return 'bullet'
-    if re.search(r'\d{4}', text) and len(text) < 40:
-        return 'compact'
-    if _paragraph_has_bold_prefix_pattern(p_elem) or _paragraph_has_bold_content(p_elem):
-        return 'bold'
-    return 'normal'
-
-
-def _build_reference_paragraph_map(reference_paras: List[Any]) -> Dict[str, Any]:
-    reference_map: Dict[str, Any] = {}
-    for para in reference_paras:
-        if para.tag != f'{{{NS_W}}}p' or not _paragraph_plain_text(para):
-            continue
-        reference_map.setdefault('first', para)
-        reference_map.setdefault(_reference_paragraph_kind(para), para)
-    return reference_map
-
-
-def _clone_paragraph_properties(
-    ref_para: Any,
-    *,
-    spacing_override: Optional[Any] = None,
-    keep_bullet: bool = True,
-) -> Optional[Any]:
-    W = NS_W
-    ppr = ref_para.find(f'{{{W}}}pPr')
-    if ppr is None and spacing_override is None:
-        return None
-
-    cloned = copy.deepcopy(ppr) if ppr is not None else etree.Element(f'{{{W}}}pPr')
-    if not keep_bullet:
-        num_pr = cloned.find(f'{{{W}}}numPr')
-        if num_pr is not None:
-            cloned.remove(num_pr)
-    if spacing_override is not None:
-        existing = cloned.find(f'{{{W}}}spacing')
-        if existing is not None:
-            cloned.remove(existing)
-        cloned.append(copy.deepcopy(spacing_override))
-    return cloned if len(cloned) > 0 else None
-
-
-def _reference_run_properties(ref_para: Any, *, prefer_bold: Optional[bool]) -> Optional[Any]:
-    W = NS_W
-    fallback = None
-    for run in _direct_paragraph_runs(ref_para):
-        if not _run_plain_text(run).strip():
-            continue
-        rpr = run.find(f'{{{W}}}rPr')
-        if rpr is None:
-            continue
-        is_bold = _run_is_bold(run)
-        if prefer_bold is None or is_bold == prefer_bold:
-            return copy.deepcopy(rpr)
-        if fallback is None:
-            fallback = copy.deepcopy(rpr)
-    return fallback
-
-
-def _make_para_from_reference(
-    ref_para: Any,
-    text: str,
-    *,
-    bold: bool = False,
-    bullet: bool = False,
-    spacing_override: Optional[Any] = None,
-) -> Any:
-    W = NS_W
-    XML_SPACE = '{http://www.w3.org/XML/1998/namespace}space'
-
-    paragraph = etree.Element(f'{{{W}}}p')
-    ppr = _clone_paragraph_properties(
-        ref_para,
-        spacing_override=spacing_override,
-        keep_bullet=bullet,
-    )
-    if ppr is not None:
-        paragraph.append(ppr)
-
-    run = etree.SubElement(paragraph, f'{{{W}}}r')
-    rpr = _reference_run_properties(ref_para, prefer_bold=bold if not bullet else None)
-    if rpr is None and bold:
-        rpr = etree.Element(f'{{{W}}}rPr')
-        etree.SubElement(rpr, f'{{{W}}}b')
-        etree.SubElement(rpr, f'{{{W}}}bCs')
-    if rpr is not None and not bold:
-        for tag in (f'{{{W}}}b', f'{{{W}}}bCs'):
-            bold_elem = rpr.find(tag)
-            if bold_elem is not None:
-                rpr.remove(bold_elem)
-    if rpr is not None:
-        run.append(rpr)
-
-    display_text = text if bullet and _paragraph_has_numbering(ref_para) else (f'\u2022 {text}' if bullet else text)
-    parts = display_text.split('\n')
-    for idx, part in enumerate(parts):
-        text_elem = etree.SubElement(run, f'{{{W}}}t')
-        text_elem.text = part
-        if part != part.strip() or part == '':
-            text_elem.set(XML_SPACE, 'preserve')
-        if idx < len(parts) - 1:
-            etree.SubElement(run, f'{{{W}}}br')
-
-    return paragraph
-
-
-def _render_section_paragraphs(
-    items: List[Dict[str, Any]],
-    reference_paras: List[Any],
-    *,
-    heading_elem: Optional[Any] = None,
-    txbx_target: Optional[Any] = None,
-) -> List[Any]:
-    paragraphs = [
-        para for para in reference_paras
-        if para.tag == f'{{{NS_W}}}p' and _paragraph_plain_text(para)
-    ]
-    reference_map = _build_reference_paragraph_map(paragraphs)
-    fallback_ref = reference_map.get('first')
-    if fallback_ref is None:
-        fallback_ref = heading_elem
-
-    fallback_rpr = _get_ref_rpr(paragraphs)
-    if fallback_rpr is None and heading_elem is not None:
-        fallback_rpr = _get_ref_rpr([heading_elem])
-    fallback_spacing = _get_ref_ppr_spacing(paragraphs)
-    if fallback_spacing is None and heading_elem is not None:
-        fallback_spacing = _get_ref_ppr_spacing([heading_elem])
-    fallback_styles = _extract_content_styles(paragraphs)
-
-    rendered_items = items
-    if txbx_target is not None:
-        rendered_items = _reflow_textbox_section_items(rendered_items, txbx_target, ref_rpr=fallback_rpr)
-
-    rendered: List[Any] = []
-    prev_was_compact = False
-    for item in rendered_items:
-        is_compact = bool(item.get('compact'))
-        eff_spacing = (
-            _spacing_line_only(fallback_spacing)
-            if not is_compact and prev_was_compact
-            else fallback_spacing
-        )
-        ref_para = reference_map.get(_content_item_reference_key(item))
-        if ref_para is None and item.get('bullet'):
-            ref_para = reference_map.get('normal')
-            if ref_para is None:
-                ref_para = reference_map.get('first')
-        if ref_para is None and item.get('bold'):
-            ref_para = reference_map.get('normal')
-            if ref_para is None:
-                ref_para = reference_map.get('first')
-
-        if ref_para is not None and (not item.get('bullet') or _paragraph_is_bullet_like(ref_para)):
-            rendered.append(
-                _make_para_from_reference(
-                    ref_para,
-                    item['text'],
-                    bold=item.get('bold', False),
-                    bullet=item.get('bullet', False),
-                    spacing_override=eff_spacing,
-                )
-            )
-        elif fallback_ref is not None:
-            style_id = None
-            if is_compact and not item.get('bullet'):
-                style_id = fallback_styles.get('compact')
-            elif item.get('bold'):
-                style_id = fallback_styles.get('bold')
-            else:
-                style_id = fallback_styles.get('normal')
-            rendered.append(
-                _make_para_elem(
-                    item['text'],
-                    bold=item.get('bold', False),
-                    bullet=item.get('bullet', False),
-                    ref_rpr=fallback_rpr,
-                    ref_spacing=eff_spacing,
-                    compact=is_compact,
-                    style_id=style_id,
-                )
-            )
-        else:
-            rendered.append(
-                _make_para_elem(
-                    item['text'],
-                    bold=item.get('bold', False),
-                    bullet=item.get('bullet', False),
-                    compact=is_compact,
-                )
-            )
-        prev_was_compact = is_compact
-
-    return rendered
-
-
 def _make_para_elem(
     text: str,
     bold: bool = False,
@@ -4347,369 +3294,16 @@ def _make_para_elem(
         rpr = etree.Element(f'{{{W}}}rPr')
         etree.SubElement(rpr, f'{{{W}}}b')
         etree.SubElement(rpr, f'{{{W}}}bCs')
-    if rpr is not None and not bold:
-        # Safety net: strip bold markers so heading-style ref_rpr doesn't make
-        # body-text content (skills, summary, descriptions) appear title-sized.
-        for _bold_tag in (f'{{{W}}}b', f'{{{W}}}bCs'):
-            _b = rpr.find(_bold_tag)
-            if _b is not None:
-                rpr.remove(_b)
     if rpr is not None:
         r.insert(0, rpr)
 
+    t = etree.SubElement(r, f'{{{W}}}t')
     display_text = f'\u2022 {text}' if bullet else text
-    parts = display_text.split('\n')
-    for idx, part in enumerate(parts):
-        t = etree.SubElement(r, f'{{{W}}}t')
-        t.text = part
-        if part != part.strip() or part == '':
-            t.set(XML_SPACE, 'preserve')
-        if idx < len(parts) - 1:
-            etree.SubElement(r, f'{{{W}}}br')
+    t.text = display_text
+    if display_text != display_text.strip():
+        t.set(XML_SPACE, 'preserve')
 
     return p
-
-
-def _reflow_text_to_width(text: str, chars_per_line: int) -> str:
-    """Insert soft line breaks for narrow containers without changing styling."""
-    raw = (text or '').strip()
-    if not raw or chars_per_line <= 0 or len(raw) <= chars_per_line:
-        return text
-
-    comma_parts = [part.strip() for part in raw.split(',') if part.strip()]
-    if 2 <= len(comma_parts) <= 4 and all(
-        re.fullmatch(r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ '\-]{0,24}", part)
-        for part in comma_parts
-    ):
-        return text
-
-    lines: List[str] = []
-    for source_line in raw.splitlines() or [raw]:
-        line = source_line.strip()
-        if len(line) <= chars_per_line:
-            lines.append(line)
-            continue
-
-        chunks: Optional[List[str]] = None
-        for sep in ('  |  ', ' | ', '  —  ', ' — ', ', ', ' / ', ' - '):
-            if sep not in line:
-                continue
-            parts = [part.strip() for part in line.split(sep) if part.strip()]
-            if len(parts) < 2:
-                continue
-            built: List[str] = []
-            current = parts[0]
-            for part in parts[1:]:
-                candidate = f"{current}{sep}{part}"
-                if len(candidate) <= chars_per_line or len(current) < max(12, int(chars_per_line * 0.55)):
-                    current = candidate
-                else:
-                    built.append(current)
-                    current = part
-            if current:
-                built.append(current)
-            if len(built) > 1:
-                chunks = built
-                break
-
-        if chunks is None:
-            chunks = textwrap.wrap(
-                line,
-                width=max(8, chars_per_line),
-                break_long_words=False,
-                break_on_hyphens=False,
-            ) or [line]
-        lines.extend(chunks)
-
-    return '\n'.join(lines)
-
-
-def _textbox_chars_per_line(txbx_or_content: Any, ref_rpr: Any = None) -> int:
-    """Estimate chars per line for a textbox from its width and font size."""
-    target = txbx_or_content
-    if getattr(target, 'tag', None) != _WPS_TXBX and getattr(target, 'getparent', None):
-        parent = target.getparent()
-        if getattr(parent, 'tag', None) == _WPS_TXBX:
-            target = parent
-
-    curr_cx = _get_shape_cx(target)
-    if curr_cx <= 0:
-        return 0
-
-    font_pt = 11.0
-    if ref_rpr is not None:
-        sz = ref_rpr.find(f'{{{NS_W}}}sz')
-        if sz is not None:
-            try:
-                half_pts = int(sz.get(f'{{{NS_W}}}val', '0'))
-                if half_pts > 0:
-                    font_pt = half_pts / 2.0
-            except (TypeError, ValueError):
-                pass
-
-    width_inches = curr_cx / 914_400
-    chars_per_line = max(10, int(width_inches * 12))
-    return max(8, int(chars_per_line * (11.0 / max(font_pt, 7.0))))
-
-
-def _reflow_textbox_section_items(
-    items: List[Dict],
-    txbx_or_content: Any,
-    ref_rpr: Any = None,
-) -> List[Dict]:
-    """Apply width-aware soft reflow to items that will be injected in a textbox."""
-    chars_per_line = _textbox_chars_per_line(txbx_or_content, ref_rpr=ref_rpr)
-    if chars_per_line <= 0:
-        return items
-
-    reflowed: List[Dict] = []
-    for item in items:
-        text = str(item.get('text') or '')
-        adjusted = text
-        if not item.get('bullet'):
-            adjusted = _reflow_text_to_width(text, chars_per_line)
-        elif len(text) > int(chars_per_line * 1.35):
-            adjusted = _reflow_text_to_width(text, int(chars_per_line * 1.15))
-
-        if adjusted != text:
-            clone = dict(item)
-            clone['text'] = adjusted
-            reflowed.append(clone)
-        else:
-            reflowed.append(item)
-    return reflowed
-
-
-def _direct_paragraph_runs(p_elem: Any) -> List[Any]:
-    W = NS_W
-    return [child for child in list(p_elem) if child.tag == f'{{{W}}}r']
-
-
-def _run_plain_text(run_elem: Any) -> str:
-    W = NS_W
-    return ''.join(t.text or '' for t in run_elem.iter(f'{{{W}}}t'))
-
-
-def _paragraph_plain_text(p_elem: Any) -> str:
-    W = NS_W
-    return ''.join(t.text or '' for t in p_elem.iter(f'{{{W}}}t')).strip()
-
-
-def _run_is_bold(run_elem: Any) -> bool:
-    W = NS_W
-    rpr = run_elem.find(f'{{{W}}}rPr')
-    if rpr is None:
-        return False
-    for tag in (f'{{{W}}}b', f'{{{W}}}bCs'):
-        bold_elem = rpr.find(tag)
-        if bold_elem is None:
-            continue
-        val = (bold_elem.get(f'{{{W}}}val') or '').strip().lower()
-        if val in {'0', 'false', 'off'}:
-            return False
-        return True
-    return False
-
-
-def _paragraph_has_bold_prefix_pattern(p_elem: Any) -> bool:
-    runs = [r for r in _direct_paragraph_runs(p_elem) if _run_plain_text(r).strip()]
-    if len(runs) < 2:
-        return False
-    if not _run_is_bold(runs[0]):
-        return False
-    return any(not _run_is_bold(r) for r in runs[1:])
-
-
-def _reference_tail_prefix(p_elem: Any, default: str) -> str:
-    runs = [r for r in _direct_paragraph_runs(p_elem) if _run_plain_text(r)]
-    if len(runs) < 2:
-        return default
-    tail_text = ''.join(_run_plain_text(r) for r in runs[1:])
-    if not tail_text:
-        return default
-    match = re.match(r'^[^A-Za-zÀ-ÿ0-9]+', tail_text)
-    return match.group(0) if match else default
-
-
-def _make_para_from_reference_parts(ref_para: Any, parts: List[str]) -> Any:
-    W = NS_W
-    XML_SPACE = '{http://www.w3.org/XML/1998/namespace}space'
-
-    paragraph = etree.Element(f'{{{W}}}p')
-    ppr = ref_para.find(f'{{{W}}}pPr')
-    if ppr is not None:
-        paragraph.append(copy.deepcopy(ppr))
-
-    ref_runs = [r for r in _direct_paragraph_runs(ref_para) if _run_plain_text(r)]
-    if not ref_runs:
-        return _make_para_elem(''.join(parts))
-
-    normalized_parts = parts or ['']
-    for idx, part in enumerate(normalized_parts):
-        ref_run = ref_runs[min(idx, len(ref_runs) - 1)]
-        new_run = etree.Element(f'{{{W}}}r')
-        rpr = ref_run.find(f'{{{W}}}rPr')
-        if rpr is not None:
-            new_run.append(copy.deepcopy(rpr))
-        text_elem = etree.SubElement(new_run, f'{{{W}}}t')
-        text_elem.text = part
-        if part != part.strip():
-            text_elem.set(XML_SPACE, 'preserve')
-        new_run.append(text_elem)
-        paragraph.append(new_run)
-
-    return paragraph
-
-
-def _section_supports_textbox_extra_pairs(section_name: str) -> bool:
-    """Return True only for short singleton sections safe to mirror globally."""
-    return section_name in {'summary', 'profile', 'objective'}
-
-
-def _build_template_preserving_section_paragraphs(
-    section: str,
-    employee: Dict[str, Any],
-    style_source_paras: List[Any],
-) -> Optional[List[Any]]:
-    """Render section paragraphs from the template's own paragraph pattern.
-
-    Some direct-mode templates encode their visible style primarily in inline
-    run formatting instead of distinct paragraph styles. When that happens,
-    rebuilding sections with generic paragraphs flattens bold prefixes,
-    indentation, and spacing. This helper clones the section's own paragraph
-    skeletons and swaps only the textual parts.
-    """
-    W = NS_W
-
-    def _strip(value: Any) -> str:
-        if value is None:
-            return ''
-        return str(value).strip()
-
-    def _as_list(value: Any) -> List[Any]:
-        if value is None:
-            return []
-        if isinstance(value, list):
-            return value
-        if isinstance(value, tuple):
-            return list(value)
-        return [value]
-
-    paragraphs = [
-        para for para in style_source_paras
-        if para.tag == f'{{{W}}}p' and _paragraph_plain_text(para)
-    ]
-    if not paragraphs:
-        return None
-
-    sections_payload = build_structured_cv_sections_payload(employee).get('sections', {})
-
-    if section == 'experience':
-        entries = sections_payload.get('experience') or []
-        if not entries:
-            return None
-
-        header_ref = next((p for p in paragraphs if _paragraph_has_bold_prefix_pattern(p)), None)
-        if header_ref is None:
-            return None
-
-        body_ref = next(
-            (
-                p for p in paragraphs
-                if p is not header_ref
-                and not _paragraph_has_bold_prefix_pattern(p)
-                and _paragraph_plain_text(p)
-            ),
-            None,
-        )
-
-        source_desc: Dict[Tuple[str, str], str] = {}
-        for src in _as_list(employee.get('experience')):
-            if not isinstance(src, dict):
-                continue
-            src_title = _strip(src.get('title') or src.get('jobTitle'))
-            src_company = _strip(src.get('company') or src.get('companyName'))
-            if not src_title or not src_company:
-                continue
-            src_desc = _strip(
-                src.get('description') or
-                src.get('responsibilities') or
-                src.get('tasks') or
-                src.get('duties') or
-                src.get('achievements') or
-                src.get('role') or
-                ''
-            )
-            if src_desc:
-                source_desc[(src_title, src_company)] = src_desc
-
-        company_prefix = _reference_tail_prefix(header_ref, ', ')
-        rendered: List[Any] = []
-        for exp in entries:
-            title = _strip(exp.get('title'))
-            company = _strip(exp.get('company'))
-            dates = _strip(exp.get('dates'))
-            if not (title or company or dates):
-                continue
-
-            head = title or company or dates
-            tail = ''
-            if title and company:
-                tail = f"{company_prefix}{company}"
-            elif not title and company:
-                tail = company
-            if dates:
-                tail = f"{tail}  {dates}" if tail else f"  {dates}"
-
-            parts = [head]
-            if tail:
-                parts.append(tail)
-            rendered.append(_make_para_from_reference_parts(header_ref, parts))
-
-            desc = source_desc.get((title, company), '')
-            if body_ref is not None and desc:
-                for line in desc.split('\n'):
-                    clean_line = line.strip().lstrip('•●-– ').strip()
-                    if clean_line:
-                        rendered.append(_make_para_from_reference_parts(body_ref, [clean_line]))
-
-        return rendered or None
-
-    if section == 'education':
-        entries = sections_payload.get('education') or []
-        if not entries:
-            return None
-
-        header_ref = next((p for p in paragraphs if _paragraph_has_bold_prefix_pattern(p)), None)
-        if header_ref is None:
-            return None
-
-        institution_prefix = _reference_tail_prefix(header_ref, ' | ')
-        rendered: List[Any] = []
-        for edu in entries:
-            degree = _strip(edu.get('degree'))
-            institution = _strip(edu.get('institution'))
-            dates = _strip(edu.get('dates'))
-            if not (degree or institution or dates):
-                continue
-
-            head = degree or institution or dates
-            tail = ''
-            if degree and institution:
-                tail = f"{institution_prefix}{institution}"
-            elif not degree and institution:
-                tail = institution
-            if dates:
-                tail = f"{tail}  {dates}" if tail else f"  {dates}"
-
-            parts = [head]
-            if tail:
-                parts.append(tail)
-            rendered.append(_make_para_from_reference_parts(header_ref, parts))
-
-        return rendered or None
-
-    return None
 
 
 def _extract_template_structured_data(
@@ -4738,7 +3332,7 @@ def _extract_template_structured_data(
     entries via the template's job title.
     """
     result: Dict[str, Any] = {
-        'experience': [], 'education': [], 'summary_paras': []
+        'experience': [], 'education': [], 'summary_paras': [], 'all_paragraphs': []
     }
     W = NS_W
     try:
@@ -4816,6 +3410,11 @@ def _extract_template_structured_data(
     # (e.g. "Certificat", "Année", "Diplôme") being treated as real data.
     all_paras: List[Tuple[str, bool]] = []   # (text, is_txbx)
     for p in tree.iter(f'{{{W}}}p'):
+        ps = ''.join(t.text or '' for t in p.iter(f'{{{W}}}t'))
+        # Collect for global placeholder/dots cleanup later, regardless of structure
+        if ps.strip():
+            result['all_paragraphs'].append(ps)
+
         if _is_in_fallback(p):
             continue                  # Skip VML fallback copies
         if _is_in_table_cell(p):
@@ -4934,7 +3533,6 @@ def _extract_template_structured_data(
             and text.strip() not in _contact_fields
             and not _addr_line_re.match(text.strip())
             and not _contact_label_re.match(text.strip())
-            and '{{' not in text  # skip Jinja2 placeholder paragraphs (contact/header fields)
         ]
 
     # ── Experience: pattern-based company extraction ──────────────────
@@ -5143,12 +3741,6 @@ def _build_full_replacement_map(
         pairs.append((old_s, new_s))
         existing_olds.add(old_s)
 
-    # Precompute normalised dates from the structured payload so we can look up
-    # employee dates by index without re-normalising on every iteration.
-    _structured = build_structured_cv_sections_payload(employee).get("sections", {})
-    _emp_exp_payload = _structured.get("experience") or []
-    _emp_edu_payload = _structured.get("education") or []
-
     # ── Experience positional mapping ─────────────────────────────────
     tmpl_exps = template_data.get('experience') or []
     emp_exps  = employee.get('experience') or []
@@ -5169,21 +3761,9 @@ def _build_full_replacement_map(
             ).strip()
             if tmpl_title and emp_title:
                 _add(tmpl_title, emp_title)
-
-            # Date replacement: map template dates to employee dates so that
-            # old date ranges don't survive when section-level replacement is
-            # skipped (e.g. when the template has no detectable section headings).
-            tmpl_dates = (tmpl_exp.get('dates') or tmpl_exp.get('date_range') or '').strip()
-            emp_dates = ''
-            if i < len(_emp_exp_payload):
-                emp_dates = (_emp_exp_payload[i].get('dates') or '').strip()
-            if not emp_dates:
-                emp_dates = (emp_exp.get('dates') or emp_exp.get('date_range') or '').strip()
-            if tmpl_dates and emp_dates and tmpl_dates != emp_dates:
-                _add(tmpl_dates, emp_dates)
         else:
             # Employee has fewer entries — clear leftover template text
-            for field in ('company', 'title', 'dates', 'date_range'):
+            for field in ('company', 'title'):
                 val = (tmpl_exp.get(field) or '').strip()
                 if val:
                     _add(val, '')
@@ -5196,18 +3776,12 @@ def _build_full_replacement_map(
         emp_edu = emp_edus[i] if i < len(emp_edus) else None
         if emp_edu:
             tmpl_inst = (tmpl_edu.get('institution') or '').strip()
-            emp_inst  = (
-                emp_edu.get('institution') or emp_edu.get('school') or
-                emp_edu.get('university') or ''
-            ).strip()
+            emp_inst  = (emp_edu.get('institution') or '').strip()
             if tmpl_inst and emp_inst:
                 _add(tmpl_inst, emp_inst)
 
             tmpl_deg = (tmpl_edu.get('degree') or '').strip()
-            emp_deg  = (
-                emp_edu.get('degree') or emp_edu.get('fieldOfStudy') or
-                emp_edu.get('field_of_study') or ''
-            ).strip()
+            emp_deg  = (emp_edu.get('degree') or '').strip()
             if tmpl_deg and emp_deg:
                 # Deduplicate doubled degree ("Foo Bar Foo Bar" → "Foo Bar")
                 words = emp_deg.split()
@@ -5215,18 +3789,8 @@ def _build_full_replacement_map(
                 if half >= 2 and words[:half] == words[half:]:
                     emp_deg = ' '.join(words[:half])
                 _add(tmpl_deg, emp_deg)
-
-            # Education date replacement
-            tmpl_edu_dates = (tmpl_edu.get('dates') or '').strip()
-            emp_edu_dates = ''
-            if i < len(_emp_edu_payload):
-                emp_edu_dates = (_emp_edu_payload[i].get('dates') or '').strip()
-            if not emp_edu_dates:
-                emp_edu_dates = (emp_edu.get('dates') or emp_edu.get('date_range') or '').strip()
-            if tmpl_edu_dates and emp_edu_dates and tmpl_edu_dates != emp_edu_dates:
-                _add(tmpl_edu_dates, emp_edu_dates)
         else:
-            for field in ('institution', 'degree', 'dates'):
+            for field in ('institution', 'degree'):
                 val = (tmpl_edu.get(field) or '').strip()
                 if val:
                     _add(val, '')
@@ -5247,6 +3811,60 @@ def _build_full_replacement_map(
                 pairs.append((old_s, new_s))
                 existing_olds.add(old_s)
 
+    # ── Jinja-token fallback pairs ────────────────────────────────────
+    # If the template has {{ variable }} placeholders (e.g. docxtpl Jinja
+    # templates that the mode detector missed because the file was saved
+    # in a way that split the braces), add direct replacement pairs so that
+    # those tokens are never left visible in the output.
+    emp_name    = (employee.get('name') or '').strip()
+    emp_title   = (employee.get('title') or '').strip()
+    emp_email   = (employee.get('email') or '').strip()
+    emp_phone   = (employee.get('phone') or '').strip()
+    emp_address = (employee.get('address') or '').strip()
+    emp_linkedin= (employee.get('linkedin') or '').strip()
+    _jinja_token_map = [
+        # name variants
+        ('{{ full_name }}',         emp_name),
+        ('{{full_name}}',           emp_name),
+        ('{{ name }}',              emp_name),
+        ('{{name}}',                emp_name),
+        ('{{ prenom }} {{ nom }}',  emp_name),
+        # title variants
+        ('{{ current_position }}',  emp_title),
+        ('{{current_position}}',    emp_title),
+        ('{{ title }}',             emp_title),
+        ('{{title}}',               emp_title),
+        ('{{ job_title }}',         emp_title),
+        ('{{job_title}}',           emp_title),
+        ('{{ poste }}',             emp_title),
+        ('{{poste}}',               emp_title),
+        # contact
+        ('{{ email }}',             emp_email),
+        ('{{email}}',               emp_email),
+        ('{{ phone }}',             emp_phone),
+        ('{{phone}}',               emp_phone),
+        ('{{ telephone }}',         emp_phone),
+        ('{{telephone}}',           emp_phone),
+        ('{{ address }}',           emp_address),
+        ('{{address}}',             emp_address),
+        ('{{ linkedin }}',          emp_linkedin),
+        ('{{linkedin}}',            emp_linkedin),
+    ]
+    for old_tok, new_tok in _jinja_token_map:
+        if old_tok and old_tok not in existing_olds:
+            pairs.append((old_tok, new_tok))
+            existing_olds.add(old_tok)
+
+    # ── Dotted placeholder fallback ───────────────────────────────────
+    # Identify paragraphs that consist ONLY of dots/placeholders
+    # and replace them with "N/A" if they haven't been mapped yet.
+    placeholder_re = re.compile(r"^[\\.·•…\s]{3,}$")
+    for p_text in (template_data.get('all_paragraphs') or []):
+        stripped = (p_text or '').strip()
+        if stripped and stripped not in existing_olds and placeholder_re.match(stripped):
+            pairs.append((stripped, "N/A"))
+            existing_olds.add(stripped)
+
     pairs.sort(key=lambda x: len(x[0]), reverse=True)
     logger.info(f"Full replacement map: {len(pairs)} pairs")
     for old, new in pairs[:15]:
@@ -5254,70 +3872,10 @@ def _build_full_replacement_map(
     return pairs
 
 
-    # Placeholders and Jinja2 tokens are not handled in fallback AI engine.
-    # No placeholder replacement logic is included here.
-def _final_quality_control_cleanup(docx_path: str):
-    """
-    Final pass to remove any residual template artifacts, placeholders, or Jinja2 tokens.
-    Ensures no {{...}} or similar tokens remain in the output document.
-    """
-    temp_dir = tempfile.mkdtemp()
-    try:
-        with zipfile.ZipFile(docx_path, 'r') as zf:
-            zf.extractall(temp_dir)
-        word_dir = os.path.join(temp_dir, 'word')
-        for root_dir, _dirs, files in os.walk(word_dir):
-            for fname in files:
-                if not fname.endswith('.xml'):
-                    continue
-                xml_path = os.path.join(root_dir, fname)
-                arcname = os.path.relpath(xml_path, temp_dir).replace('\\', '/')
-                if not _VISIBLE_WORD_PART_RE.match(arcname):
-                    continue
-                with open(xml_path, 'rb') as f:
-                    raw = f.read()
-                try:
-                    tree = etree.fromstring(raw)
-                except Exception:
-                    continue
-                changed = False
-                for t_elem in tree.iter(f'{{{NS_W}}}t', f'{{{NS_A}}}t'):
-                    original = t_elem.text or ''
-                    if not original:
-                        continue
-                    updated = original
-                    updated = re.sub(r'\{\{.*?\}\}', '', updated)
-                    updated = re.sub(r'\{%.*?%\}', '', updated)
-                    updated = re.sub(
-                        r'\b(?:janv?(?:ier)?|f[ée]vr?(?:ier)?|mars|avr(?:il)?|mai|juin|juil(?:let)?|ao[uû]t|sept(?:embre)?|oct(?:obre)?|nov(?:embre)?|d[ée]c(?:embre)?|january|february|march|april|may|june|july|august|september|october|november|december)\.?\s+(?:20xx|xxxx)\s*[–—-]\s*(?:janv?(?:ier)?|f[ée]vr?(?:ier)?|mars|avr(?:il)?|mai|juin|juil(?:let)?|ao[uû]t|sept(?:embre)?|oct(?:obre)?|nov(?:embre)?|d[ée]c(?:embre)?|january|february|march|april|may|june|july|august|september|october|november|december)\.?\s+(?:20xx|xxxx)\b',
-                        '',
-                        updated,
-                        flags=re.I,
-                    )
-                    updated = re.sub(r'\b(?:20xx|xxxx)\b', '', updated, flags=re.I)
-                    if updated == original:
-                        continue
-                    updated = re.sub(r'\s{2,}', ' ', updated).strip(' -–—|•·,;:/')
-                    if updated != original:
-                        t_elem.text = updated
-                        changed = True
-                if changed:
-                    with open(xml_path, 'wb') as f:
-                        f.write(etree.tostring(tree, xml_declaration=True, encoding='UTF-8', standalone=True))
-        with zipfile.ZipFile(docx_path, 'w', zipfile.ZIP_DEFLATED) as zout:
-            for root_dir, _dirs, files in os.walk(temp_dir):
-                for fname in files:
-                    fpath = os.path.join(root_dir, fname)
-                    arcname = os.path.relpath(fpath, temp_dir)
-                    zout.write(fpath, arcname)
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-
-
 # ── Known language names for textbox blanking ────────────────────────────
 _KNOWN_LANGUAGE_NAMES: set = {
     'anglais', 'english', 'français', 'french', 'espagnol', 'spanish',
-    'allemand', 'german', 'italien', 'italian',
+    'allemand', 'german', 'arabe', 'arabic', 'italien', 'italian',
     'portugais', 'portuguese', 'néerlandais', 'dutch', 'chinois', 'chinese',
     'japonais', 'japanese', 'russe', 'russian', 'coréen', 'korean',
     'turc', 'turkish', 'hindi', 'mandarin', 'cantonais', 'cantonese',
@@ -5475,12 +4033,7 @@ def _replace_language_textboxes_in_range(body_elements: list, employee_langs: li
     return modified
 
 
-
-def _replace_cv_sections(
-    docx_path: str,
-    employee: Dict[str, Any],
-    preferred_language: Optional[str] = None,
-) -> int:
+def _replace_cv_sections(docx_path: str, employee: Dict[str, Any]) -> int:
     """
     Find CV section headings in the document body and replace their content
     with the employee's structured data.
@@ -5534,7 +4087,7 @@ def _replace_cv_sections(
                     "— replacing sections in table cells"
                 )
                 count = _replace_sections_in_layout_table(
-                    layout_tbl, body, employee, preferred_language,
+                    layout_tbl, body, employee,
                 )
                 if count:
                     # Write back
@@ -5574,7 +4127,7 @@ def _replace_cv_sections(
             )
             content_children = body_children[heading_pos + 1 : next_pos]
 
-            new_content = _build_section_content(section_name, employee, preferred_language)
+            new_content = _build_section_content(section_name, employee)
             if new_content is None:
                 # No employee data for this section — remove content (but preserve
                 # textbox-container heading paragraphs: they are visual layout elements
@@ -5672,10 +4225,9 @@ def _replace_cv_sections(
             # of converting the whole section to plain paragraphs (preserves the
             # column layout defined by the template author).
             tables_in_range = [e for e in removable if e.tag == f'{{{W}}}tbl']
-            scaffold_tables = [tbl for tbl in tables_in_range if _is_docxtpl_scaffold_table(tbl)]
             if tables_in_range:
                 tbl_rows = _build_section_table_rows(section_name, employee)
-                if tbl_rows is not None and not scaffold_tables:
+                if tbl_rows is not None:
                     n_inserted = _fill_table_section(tables_in_range[0], tbl_rows)
                     # Remove extra tables from body (they held overflow data rows)
                     for extra_tbl in tables_in_range[1:]:
@@ -5697,56 +4249,52 @@ def _replace_cv_sections(
                         f"removed {len(non_tbl)} non-table element(s)"
                     )
                     continue
-                if scaffold_tables:
-                    logger.info(
-                        f"  '{section_name}': docxtpl scaffold table detected — rebuilding as paragraphs"
-                    )
             # ----------------------------------------------------------------
 
-            style_source_paras = [c for c in removable if c.tag == f'{{{W}}}p']
-            for tbl in tables_in_range:
-                style_source_paras.extend(list(tbl.iter(f'{{{W}}}p')))
-
-            template_pattern_paras = _build_template_preserving_section_paragraphs(
-                section_name,
-                employee,
-                style_source_paras,
+            ref_rpr = _get_ref_rpr(
+                [c for c in removable if c.tag == f'{{{W}}}p']
             )
-            if template_pattern_paras:
-                for elem in removable:
-                    body.remove(elem)
+            ref_spacing = _get_ref_ppr_spacing(removable)
+            if ref_spacing is None:
+                ref_spacing = _get_ref_ppr_spacing([heading_elem])
 
-                insert_after = heading_elem
-                for new_p in template_pattern_paras:
-                    insert_after.addnext(new_p)
-                    insert_after = new_p
-
-                replaced += 1
-                logger.info(
-                    f"  '{section_name}': reused template paragraph pattern "
-                    f"for {len(template_pattern_paras)} inserted paragraph(s)"
-                )
-                continue
-
-            rendered_paras = _render_section_paragraphs(
-                new_content,
-                style_source_paras,
-                heading_elem=heading_elem,
-            )
+            # Extract named styles from original content so replacement
+            # paragraphs inherit the template's font / colour / spacing.
+            content_styles = _extract_content_styles(removable)
 
             for elem in removable:
                 body.remove(elem)
 
             # Insert new paragraphs after heading (in order)
             insert_after = heading_elem
-            for new_p in rendered_paras:
+            for item in new_content:
+                # Choose the best matching style for this content item.
+                # compact+non-bullet → date/period line (e.g. Dates style)
+                # bold               → job-title line   (e.g. Titre1 style)
+                # bullet / other     → description text  (normal / no style)
+                sid = None
+                if item.get('compact') and not item.get('bullet'):
+                    sid = content_styles.get('compact')
+                elif item.get('bold'):
+                    sid = content_styles.get('bold')
+                else:
+                    sid = content_styles.get('normal')
+                new_p = _make_para_elem(
+                    item['text'],
+                    bold=item.get('bold', False),
+                    bullet=item.get('bullet', False),
+                    ref_rpr=ref_rpr,
+                    ref_spacing=ref_spacing,
+                    compact=item.get('compact', False),
+                    style_id=sid,
+                )
                 insert_after.addnext(new_p)
                 insert_after = new_p
 
             replaced += 1
             logger.info(
                 f"  '{section_name}': removed {len(removable)} elements "
-                f"→ {len(rendered_paras)} lines inserted"
+                f"→ {len(new_content)} lines inserted"
             )
 
             # For languages in infographic templates: also replace textbox labels
@@ -5839,7 +4387,7 @@ def _replace_cv_sections(
             return False
 
         if 'summary' not in sections_rebuilt and sections_found:
-            summary_content = _build_section_content('summary', employee, preferred_language)
+            summary_content = _build_section_content('summary', employee)
             if summary_content:
                 first_sec_pos = body_children.index(sections_found[0][1])
                 summary_candidates = [
@@ -5847,12 +4395,18 @@ def _replace_cv_sections(
                     if not _is_contact_para(p)
                 ]
                 if summary_candidates:
-                    rendered_paras = _render_section_paragraphs(
-                        summary_content,
-                        summary_candidates,
-                    )
+                    ref_rpr = _get_ref_rpr(summary_candidates)
+                    ref_spacing = _get_ref_ppr_spacing(summary_candidates)
                     anchor = summary_candidates[0]
-                    for new_p in rendered_paras:
+                    for item in summary_content:
+                        new_p = _make_para_elem(
+                            item['text'],
+                            bold=item.get('bold', False),
+                            bullet=item.get('bullet', False),
+                            ref_rpr=ref_rpr,
+                            ref_spacing=ref_spacing,
+                            compact=item.get('compact', False),
+                        )
                         anchor.addprevious(new_p)
                     for elem in summary_candidates:
                         try:
@@ -5861,13 +4415,13 @@ def _replace_cv_sections(
                             pass
                     replaced += 1
                     logger.info(
-                        f"  'summary': injected {len(rendered_paras)} lines, "
+                        f"  'summary': injected {len(summary_content)} lines, "
                         f"replaced {len(summary_candidates)} body block paragraphs"
                     )
 
         # --- Experience block: body paragraphs between last header and education ---
         if 'experience' not in sections_rebuilt:
-            exp_content = _build_section_content('experience', employee, preferred_language)
+            exp_content = _build_section_content('experience', employee)
             if exp_content:
                 edu_heading = next((h for s, h in sections_found if s == 'education'), None)
                 if edu_heading is not None:
@@ -5889,12 +4443,18 @@ def _replace_cv_sections(
                                     break
                         exp_candidates = _body_block_candidates(exp_start, edu_pos)
                         if exp_candidates:
-                            rendered_paras = _render_section_paragraphs(
-                                exp_content,
-                                exp_candidates,
-                            )
+                            ref_rpr = _get_ref_rpr(exp_candidates)
+                            ref_spacing = _get_ref_ppr_spacing(exp_candidates)
                             anchor = exp_candidates[0]
-                            for new_p in rendered_paras:
+                            for item in exp_content:
+                                new_p = _make_para_elem(
+                                    item['text'],
+                                    bold=item.get('bold', False),
+                                    bullet=item.get('bullet', False),
+                                    ref_rpr=ref_rpr,
+                                    ref_spacing=ref_spacing,
+                                    compact=item.get('compact', False),
+                                )
                                 anchor.addprevious(new_p)
                             for elem in exp_candidates:
                                 try:
@@ -5920,7 +4480,7 @@ def _replace_cv_sections(
                             logger.info(
                                 f"  'experience': injected before education heading — "
                                 f"replaced {len(exp_candidates)} body block paragraphs "
-                                f"→ {len(rendered_paras)} lines"
+                                f"→ {len(exp_content)} lines"
                             )
         # ── end post-loop blocks ─────────────────────────────────────────────────
 
@@ -5941,9 +4501,6 @@ def _replace_cv_sections(
         shutil.rmtree(temp_dir, ignore_errors=True)
 
     return replaced
-# At the end of the main generation process (after all replacements), call the final cleanup
-# Example usage (to be called in the main fallback generation function after all replacements):
-# _final_quality_control_cleanup(docx_path)
 
 
 def _get_txbx_position(txbx_content: Any) -> Optional[Tuple[int, int, int, int]]:
@@ -5999,11 +4556,8 @@ def _replace_txbx_content(
         and b'w:pict' not in etree.tostring(c)
     ]
     source = ref_source_elems if ref_source_elems else removable
-    rendered_paras = _render_section_paragraphs(
-        new_content,
-        source,
-        txbx_target=txbx_content,
-    )
+    ref_rpr = _get_ref_rpr(source)
+    ref_spacing = _get_ref_ppr_spacing(source)
 
     for elem in removable:
         try:
@@ -6012,10 +4566,19 @@ def _replace_txbx_content(
             pass
 
     prev: Any = None
-    for new_p in rendered_paras:
+    for item in new_content:
+        new_p = _make_para_elem(
+            item['text'],
+            bold=item.get('bold', False),
+            bullet=item.get('bullet', False),
+            ref_rpr=ref_rpr,
+            ref_spacing=ref_spacing,
+            compact=item.get('compact', False),
+        )
         if prev is not None:
             prev.addnext(new_p)
         else:
+            # Insert at position 0 (or after remaining non-removable elements)
             remaining = list(txbx_content)
             if remaining:
                 remaining[-1].addnext(new_p)
@@ -6028,7 +4591,6 @@ def _replace_cv_sections_in_textboxes(
     docx_path: str,
     employee: Dict[str, Any],
     body_sections_replaced: int = 0,
-    preferred_language: str = "original",
 ) -> Tuple[int, List[Tuple[str, str]]]:
     """
     Rebuild CV section content that lives INSIDE WPS textboxes.
@@ -6115,7 +4677,7 @@ def _replace_cv_sections_in_textboxes(
                 n_pos = live.index(next_h_elem) if next_h_elem in live else len(live)
                 content_elems = live[h_pos + 1: n_pos]
 
-                new_content = _build_section_content(sec_name, employee, preferred_language)
+                new_content = _build_section_content(sec_name, employee)
                 if new_content is None:
                     for elem in content_elems:
                         try:
@@ -6126,11 +4688,7 @@ def _replace_cv_sections_in_textboxes(
                         txbx_content.remove(h_elem)
                     except ValueError:
                         pass
-                    logger.info(
-                        "  [txbx] section='%s' heading=%r: no employee data, removed textbox content",
-                        sec_name,
-                        _paragraph_plain_text(h_elem),
-                    )
+                    logger.info(f"  [txbx] '{sec_name}': no data — removed")
                     rebuilt += 1
                     continue
 
@@ -6140,12 +4698,10 @@ def _replace_cv_sections_in_textboxes(
                     and b'w:drawing' not in etree.tostring(c)
                     and b'w:pict' not in etree.tostring(c)
                 ]
-                rendered_paras = _render_section_paragraphs(
-                    new_content,
-                    removable,
-                    heading_elem=h_elem,
-                    txbx_target=txbx_content,
-                )
+                ref_rpr = _get_ref_rpr(removable)
+                ref_spacing = _get_ref_ppr_spacing(removable)
+                if ref_spacing is None:
+                    ref_spacing = _get_ref_ppr_spacing([h_elem])
                 for elem in removable:
                     try:
                         txbx_content.remove(elem)
@@ -6153,16 +4709,21 @@ def _replace_cv_sections_in_textboxes(
                         pass
 
                 insert_after = h_elem
-                for new_p in rendered_paras:
+                for item in new_content:
+                    new_p = _make_para_elem(
+                        item['text'],
+                        bold=item.get('bold', False),
+                        bullet=item.get('bullet', False),
+                        ref_rpr=ref_rpr,
+                        ref_spacing=ref_spacing,
+                        compact=item.get('compact', False),
+                    )
                     insert_after.addnext(new_p)
                     insert_after = new_p
 
                 logger.info(
-                    "  [txbx] section='%s' heading=%r: removed %d paragraph(s), inserted %d item(s)",
-                    sec_name,
-                    _paragraph_plain_text(h_elem),
-                    len(removable),
-                    len(rendered_paras),
+                    f"  [txbx] '{sec_name}': {len(removable)} removed "
+                    f"→ {len(new_content)} inserted"
                 )
                 rebuilt += 1
 
@@ -6172,209 +4733,11 @@ def _replace_cv_sections_in_textboxes(
         # textboxes (e.g. 124-modele-cv-canadien) would otherwise have Phase B
         # spatially assign all textboxes as section content and wipe them.
         if heading_alone_sections and body_sections_replaced == 0:
-            def _is_rich_content_shape(
-                texts: List[str],
-                pos: Tuple[int, int, int, int],
-            ) -> bool:
-                total_chars = sum(len(t.strip()) for t in texts)
-                para_count = len([t for t in texts if t.strip()])
-                width = pos[2] if pos else 0
-                height = pos[3] if pos else 0
-                return (
-                    total_chars >= 120
-                    or para_count >= 2
-                    or (total_chars >= 60 and height >= 600000)
-                    or (total_chars >= 60 and width >= 3000000)
-                )
-
-            def _content_shape_score(
-                texts: List[str],
-                pos: Tuple[int, int, int, int],
-            ) -> Tuple[int, int, int]:
-                total_chars = sum(len(t.strip()) for t in texts)
-                para_count = len([t for t in texts if t.strip()])
-                area = (pos[2] * pos[3]) if pos else 0
-                return (total_chars, para_count, area)
-
-            _LANGUAGE_WORDS = frozenset({
-                'anglais', 'english', 'french', 'francais', 'français', 'arabic', 'arabe',
-                'spanish', 'espagnol', 'german', 'allemand', 'italian', 'italien',
-                'portuguese', 'portugais', 'turkish', 'turc', 'chinese', 'chinois',
-                'japanese', 'japonais', 'russian', 'russe', 'hindi', 'urdu',
-            })
-            _EDU_KEYWORDS = (
-                'université', 'universite', 'university', 'college', 'collège',
-                'school', 'école', 'ecole', 'lycée', 'lycee', 'institut',
-                'institute', 'faculty', 'faculté', 'baccalauréat', 'baccalaureat',
-            )
-            _DEGREE_KEYWORDS = (
-                'licence', 'license', 'master', 'maîtrise', 'maitrise', 'bachelor',
-                'diplôme', 'diplome', 'technicien', 'engineer', 'ingénieur',
-                'ingenieur', 'doctorat', 'phd', 'certificat', 'certificate',
-            )
-            _INTEREST_KEYWORDS = (
-                'voyage', 'voyages', 'sports', 'sport', 'bénévolat', 'benevolat',
-                'loisir', 'loisirs', 'hobby', 'hobbies', 'natation', 'football',
-                'escrime', 'association',
-            )
-            _JOB_KEYWORDS = frozenset({
-                'chargé', 'chargée', 'chef', 'directeur', 'directrice', 'manager',
-                'ingénieur', 'ingénieure', 'developpeur', 'développeur', 'analyste',
-                'assistant', 'assistante', 'responsable', 'coordinateur', 'coordinatrice',
-                'technicien', 'technicienne', 'architecte', 'designer', 'project',
-                'lead', 'developer', 'engineer', 'administrator', 'administrateur',
-            })
-            _DATE_RE = re.compile(
-                r'(?:\b(?:19|20)\d{2}\b|'
-                r'janv|févr|fevr|mars|avr|mai|juin|juil|août|aout|sept|oct|nov|déc|dec|'
-                r'present|current|aujourd|today)',
-                re.I,
-            )
-            _PHONE_RE = re.compile(r'\+?\d[\d\s\-\.\(\)]{7,}')
-            _CITY_COUNTRY_RE = re.compile(
-                r'^[A-ZÀ-Ý][A-Za-zÀ-ÿ\-\' ]+(?:,\s*[A-ZÀ-Ý][A-Za-zÀ-ÿ\-\' ]+)+$'
-            )
-
-            def _shape_stats(texts: List[str]) -> Dict[str, Any]:
-                clean = [t.strip() for t in texts if t and t.strip()]
-                lower_lines = [t.casefold() for t in clean]
-                joined = ' '.join(clean)
-                lower_joined = ' '.join(lower_lines)
-                total_chars = sum(len(t) for t in clean)
-                para_count = len(clean)
-                max_len = max((len(t) for t in clean), default=0)
-                short_alpha_lines = sum(
-                    1
-                    for t in clean
-                    if len(t) <= 28 and re.fullmatch(r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ '\-]{1,27}", t)
-                )
-                language_hits = sum(
-                    1
-                    for t in lower_lines
-                    if t in _LANGUAGE_WORDS or any(t.startswith(lang + ' ') for lang in _LANGUAGE_WORDS)
-                )
-                school_like = any(kw in lower_joined for kw in _EDU_KEYWORDS)
-                degree_like = any(kw in lower_joined for kw in _DEGREE_KEYWORDS)
-                interest_like = any(kw in lower_joined for kw in _INTEREST_KEYWORDS)
-                job_like = any(re.search(rf'\b{re.escape(kw)}\b', lower_joined) for kw in _JOB_KEYWORDS)
-                date_like = bool(_DATE_RE.search(lower_joined))
-                city_country_like = any(_CITY_COUNTRY_RE.match(t) for t in clean)
-                company_like = any(
-                    1 <= len(t.split()) <= 5
-                    and t == t.upper()
-                    and re.search(r'[A-ZÀ-Ý]', t)
-                    for t in clean
-                )
-                contact_like = bool(
-                    any('@' in t for t in clean)
-                    or any(re.search(r'(?:https?://|www\.|linkedin\.com)', t, re.I) for t in clean)
-                    or any(_PHONE_RE.search(t) for t in clean)
-                )
-                language_like = language_hits > 0 or (
-                    para_count >= 2
-                    and short_alpha_lines == para_count
-                    and not school_like
-                    and not job_like
-                    and not company_like
-                )
-                rich_desc = (
-                    total_chars >= 120
-                    or max_len >= 100
-                    or para_count >= 4
-                )
-                return {
-                    'clean': clean,
-                    'total_chars': total_chars,
-                    'para_count': para_count,
-                    'max_len': max_len,
-                    'short_alpha_lines': short_alpha_lines,
-                    'language_like': language_like,
-                    'school_like': school_like,
-                    'degree_like': degree_like,
-                    'interest_like': interest_like,
-                    'job_like': job_like,
-                    'date_like': date_like,
-                    'city_country_like': city_country_like,
-                    'company_like': company_like,
-                    'contact_like': contact_like,
-                    'rich_desc': rich_desc,
-                }
-
-            def _section_candidate_score(
-                sec_name: str,
-                info: Dict[str, Any],
-                heading_pos: Tuple[int, int, int, int],
-            ) -> int:
-                stats = info['stats']
-                pos = info['pos']
-                dist_penalty = int(abs(pos[1] - heading_pos[1]) / 100000)
-                score = -dist_penalty
-
-                if sec_name == 'summary':
-                    score += min(stats['total_chars'], 320)
-                    if stats['rich_desc']:
-                        score += 160
-                    if stats['para_count'] <= 3:
-                        score += 40
-                    if stats['language_like'] or stats['school_like'] or stats['date_like']:
-                        score -= 220
-                    if stats['company_like'] or stats['job_like']:
-                        score -= 120
-                    if stats['contact_like']:
-                        score -= 260
-                elif sec_name == 'skills':
-                    score += 55 * min(stats['para_count'], 4)
-                    if stats['para_count'] >= 2:
-                        score += 100
-                    if not stats['date_like'] and not stats['school_like'] and not stats['language_like']:
-                        score += 80
-                    if stats['max_len'] > 160:
-                        score -= 160
-                    if stats['language_like'] or stats['school_like'] or stats['date_like']:
-                        score -= 220
-                elif sec_name == 'languages':
-                    if stats['language_like']:
-                        score += 320
-                    score += 80 * min(stats['short_alpha_lines'], 4)
-                    if stats['max_len'] > 32:
-                        score -= 140
-                    if stats['school_like'] or stats['date_like'] or stats['job_like'] or stats['company_like']:
-                        score -= 240
-                elif sec_name == 'education':
-                    if stats['school_like']:
-                        score += 220
-                    if stats['degree_like']:
-                        score += 220
-                    if stats['date_like']:
-                        score += 100
-                    if stats['language_like'] or stats['job_like'] or stats['company_like']:
-                        score -= 160
-                elif sec_name == 'experience':
-                    if stats['date_like']:
-                        score += 120
-                    if stats['city_country_like']:
-                        score += 120
-                    if stats['job_like'] or stats['company_like']:
-                        score += 120
-                    if stats['rich_desc']:
-                        score += 140
-                    if stats['school_like'] or stats['degree_like'] or stats['language_like']:
-                        score -= 200
-                elif sec_name == 'interests':
-                    if stats['interest_like']:
-                        score += 260
-                    if stats['para_count'] >= 2 and not stats['date_like'] and not stats['school_like']:
-                        score += 40
-                    if stats['language_like'] or stats['job_like']:
-                        score -= 140
-
-                return score
-
             # Collect heading-only and content-only textboxes with positions
-            heading_shapes: List[Tuple[str, Any, Tuple[int, int, int, int], int]] = []
-            content_shapes: List[Tuple[Any, Tuple[int, int, int, int], int, List[str]]] = []
+            heading_shapes: List[Tuple[str, Any, Tuple[int, int, int, int]]] = []
+            content_shapes: List[Tuple[Any, Tuple[int, int, int, int]]] = []
 
-            for order_idx, txbx_content in enumerate(tree.iter(txbx_content_tag)):
+            for txbx_content in tree.iter(txbx_content_tag):
                 if txbx_content.xpath(
                     'ancestor::mc:Fallback', namespaces={'mc': MC}
                 ):
@@ -6407,169 +4770,49 @@ def _replace_cv_sections_in_textboxes(
                             non_heading_texts.append(txt)
 
                 if first_sec and first_sec in heading_alone_sections and not non_heading_texts:
-                    heading_shapes.append((first_sec, txbx_content, pos, order_idx))
+                    heading_shapes.append((first_sec, txbx_content, pos))
                 elif not first_sec and non_heading_texts:
-                    content_shapes.append((txbx_content, pos, order_idx, non_heading_texts))
+                    content_shapes.append((txbx_content, pos))
 
             if heading_shapes and content_shapes:
-                heading_positions = {sec_name: pos for sec_name, _txbx, pos, _order in heading_shapes}
-                semantic_candidates: Dict[str, List[Dict[str, Any]]] = {
-                    sec_name: [] for sec_name in heading_positions
-                }
-                claim_order = [
-                    sec for sec in ('summary', 'languages', 'skills', 'interests', 'education', 'experience')
-                    if sec in heading_positions
-                ]
-                thresholds = {
-                    'summary': 140,
-                    'languages': 140,
-                    'skills': 130,
-                    'interests': 120,
-                    'education': 120,
-                    'experience': 80,
-                }
-                scored_content_infos: List[Dict[str, Any]] = []
-                for c_txbx, c_pos, c_order, c_texts in content_shapes:
-                    scored_content_infos.append(
-                        {
-                            'txbx': c_txbx,
-                            'pos': c_pos,
-                            'y': c_pos[1],
-                            'order': c_order,
-                            'texts': c_texts,
-                            'stats': _shape_stats(c_texts),
-                        }
-                    )
-
-                claimed_ids: set[int] = set()
-                for sec_name in claim_order:
-                    heading_pos = heading_positions[sec_name]
-                    ranked: List[Tuple[int, Dict[str, Any]]] = []
-                    for info in scored_content_infos:
-                        if id(info['txbx']) in claimed_ids:
-                            continue
-                        score = _section_candidate_score(sec_name, info, heading_pos)
-                        if score >= thresholds.get(sec_name, 120):
-                            ranked.append((score, info))
-
-                    if not ranked:
-                        continue
-
-                    ranked.sort(key=lambda item: item[0], reverse=True)
-                    best_score = ranked[0][0]
-                    if sec_name == 'summary':
-                        chosen_infos = [ranked[0][1]]
-                    elif sec_name in {'languages', 'skills'}:
-                        chosen_infos = [
-                            info for score, info in ranked
-                            if score >= best_score - 80
-                        ][:4]
-                    elif sec_name == 'interests':
-                        chosen_infos = [ranked[0][1]]
-                    else:
-                        chosen_infos = [info for _score, info in ranked]
-
-                    for score, info in ranked:
-                        if info in chosen_infos:
-                            info['match_score'] = score
-
-                    if sec_name == 'experience':
-                        chosen_infos.sort(key=lambda info: (info['y'], info['order']))
-                    else:
-                        chosen_infos.sort(
-                            key=lambda info: (-int(info.get('match_score', 0)), info['y'], info['order'])
-                        )
-
-                    semantic_candidates[sec_name] = chosen_infos
-                    claimed_ids.update(id(info['txbx']) for info in chosen_infos)
-                    logger.info(
-                        "  [txbx-spatial] section='%s': semantic preassignment selected %d candidate box(es)",
-                        sec_name,
-                        len(chosen_infos),
-                    )
-
                 # Column tolerance: shapes within 1 inch (~914400 EMU) horizontally
                 # are considered in the same visual column.
                 COL_TOL = 914400
 
                 # Sort headings by x then y
                 heading_shapes.sort(key=lambda h: (h[2][0], h[2][1]))
-                heading_shapes_by_order = sorted(heading_shapes, key=lambda h: h[3])
 
                 matched_content: set = set()  # id() of matched content txbx
 
-                for sec_name, h_txbx, (hx, hy, hcx, hcy), h_order in heading_shapes:
-                    assigned_infos = semantic_candidates.get(sec_name) or []
-                    if assigned_infos:
-                        candidates = [
-                            (info['txbx'], info['y'], info['order'], info['texts'], info['pos'])
-                            for info in assigned_infos
-                        ]
-                        for info in assigned_infos:
-                            matched_content.add(id(info['txbx']))
-                    else:
-                        # Find the y of the next heading in the same column
-                        next_y = float('inf')
-                        for other_sec, _, (ox, oy, _, _), _other_order in heading_shapes:
-                            if abs(ox - hx) < COL_TOL and oy > hy:
-                                next_y = min(next_y, oy)
-
-                        next_order = float('inf')
-                        for _other_sec, _other_txbx, _other_pos, other_order in heading_shapes_by_order:
-                            if other_order > h_order:
-                                next_order = other_order
-                                break
-
-                        # Find content textboxes in same column, below heading,
-                        # above next heading
-                        candidates = []
-                        for c_txbx, (cx, cy, ccx, ccy), c_order, c_texts in content_shapes:
-                            if id(c_txbx) in matched_content:
-                                continue
-                            if abs(cx - hx) < COL_TOL and cy >= hy and cy < next_y:
-                                candidates.append((c_txbx, cy, c_order, c_texts, (cx, cy, ccx, ccy)))
-
-                        if sec_name == 'experience':
-                            has_rich_spatial = any(
-                                _is_rich_content_shape(c_texts, c_pos)
-                                for _c_txbx, _cy, _c_order, c_texts, c_pos in candidates
-                            )
-                            if not has_rich_spatial:
-                                ordered_candidates = []
-                                for c_txbx, c_pos, c_order, c_texts in content_shapes:
-                                    if id(c_txbx) in matched_content:
-                                        continue
-                                    if c_order <= h_order or c_order >= next_order:
-                                        continue
-                                    ordered_candidates.append(
-                                        (c_txbx, c_pos[1], c_order, c_texts, c_pos)
-                                    )
-                                has_rich_ordered = any(
-                                    _is_rich_content_shape(c_texts, c_pos)
-                                    for _c_txbx, _cy, _c_order, c_texts, c_pos in ordered_candidates
-                                )
-                                if has_rich_ordered:
-                                    candidates = ordered_candidates
-                                    logger.info(
-                                        "  [txbx-spatial] section='%s': using XML-order fallback with %d candidate box(es)",
-                                        sec_name,
-                                        len(candidates),
-                                    )
-
+                for sec_name, h_txbx, (hx, hy, hcx, hcy) in heading_shapes:
                     # Find the y of the next heading in the same column
+                    next_y = float('inf')
+                    for other_sec, _, (ox, oy, _, _) in heading_shapes:
+                        if abs(ox - hx) < COL_TOL and oy > hy:
+                            next_y = min(next_y, oy)
+
+                    # Find content textboxes in same column, below heading,
+                    # above next heading
+                    candidates = []
+                    for c_txbx, (cx, cy, ccx, ccy) in content_shapes:
+                        if id(c_txbx) in matched_content:
+                            continue
+                        if abs(cx - hx) < COL_TOL and cy >= hy and cy < next_y:
+                            candidates.append((c_txbx, cy))
+
                     if not candidates:
                         continue
 
                     candidates.sort(key=lambda c: c[1])  # top to bottom
 
-                    for c_txbx, *_rest in candidates:
+                    for c_txbx, _ in candidates:
                         matched_content.add(id(c_txbx))
 
                     # Capture old paragraph text BEFORE replacement — these will
                     # be returned as extra replacement pairs so that copies in
                     # headers/footers are also updated.
                     old_para_texts = []
-                    for c_txbx, _cy, _c_order, _c_texts, _c_pos in candidates:
+                    for c_txbx, _ in candidates:
                         for p in c_txbx.iter(f'{{{W}}}p'):
                             t = ''.join(
                                 tx.text for tx in p.iter(f'{{{W}}}t') if tx.text
@@ -6577,32 +4820,20 @@ def _replace_cv_sections_in_textboxes(
                             if t and len(t) > 15:
                                 old_para_texts.append(t)
 
-                    new_content = _build_section_content(sec_name, employee, preferred_language)
+                    new_content = _build_section_content(sec_name, employee)
                     if new_content is None:
                         # No data — blank all content textboxes
-                        for c_txbx, *_rest in candidates:
+                        for c_txbx, _ in candidates:
                             for p in list(c_txbx):
                                 if p.tag == f'{{{W}}}p':
                                     for t in p.iter(f'{{{W}}}t'):
                                         t.text = ''
                         logger.info(
-                            "  [txbx-spatial] section='%s': no employee data, blanked %d content box(es)",
-                            sec_name,
-                            len(candidates),
+                            f"  [txbx-spatial] '{sec_name}': no data — "
+                            f"blanked {len(candidates)} content box(es)"
                         )
                         rebuilt += 1
                         continue
-
-                    if candidates:
-                        ref_source = []
-                        for c_txbx, _cy, _c_order, _c_texts, _c_pos in candidates:
-                            ref_source.extend(list(c_txbx))
-                        ref_rpr = _get_ref_rpr(ref_source)
-                        new_content = _reflow_textbox_section_items(
-                            new_content,
-                            candidates[0][0],
-                            ref_rpr=ref_rpr,
-                        )
 
                     # ── Entry-aware distribution across textboxes ──
                     # Split section items into logical entries (each starting
@@ -6625,84 +4856,25 @@ def _replace_cv_sections_in_textboxes(
                     if cur_entry:
                         entries.append(cur_entry)
 
-                    candidate_infos = [
-                        {
-                            'txbx': c_txbx,
-                            'y': cy,
-                            'order': c_order,
-                            'texts': c_texts,
-                            'pos': c_pos,
-                        }
-                        for c_txbx, cy, c_order, c_texts, c_pos in candidates
-                    ]
-
-                    active_candidates = candidate_infos
-                    blank_candidates: List[Dict[str, Any]] = []
-
-                    if sec_name == 'experience' and candidate_infos:
-                        rich_candidates = [
-                            info for info in candidate_infos
-                            if _is_rich_content_shape(info['texts'], info['pos'])
-                        ]
-                        if rich_candidates:
-                            rich_candidates.sort(key=lambda info: (info['y'], info['order']))
-                            if len(entries) <= len(rich_candidates):
-                                active_candidates = rich_candidates[:len(entries)]
-                            else:
-                                active_candidates = rich_candidates
-                            active_ids = {id(info['txbx']) for info in active_candidates}
-                            blank_candidates = [
-                                info for info in candidate_infos
-                                if id(info['txbx']) not in active_ids
-                            ]
-                        else:
-                            best = max(
-                                candidate_infos,
-                                key=lambda info: _content_shape_score(info['texts'], info['pos']),
-                            )
-                            active_candidates = [best]
-                            blank_candidates = [
-                                info for info in candidate_infos
-                                if id(info['txbx']) != id(best['txbx'])
-                            ]
-                    elif sec_name == 'education' and candidate_infos:
-                        best = max(
-                            candidate_infos,
-                            key=lambda info: _content_shape_score(info['texts'], info['pos']),
-                        )
-                        active_candidates = [best]
-                        blank_candidates = [
-                            info for info in candidate_infos
-                            if id(info['txbx']) != id(best['txbx'])
-                        ]
-
-                    n_boxes = len(active_candidates)
+                    n_boxes = len(candidates)
                     if n_boxes == 1 or len(entries) <= 1:
-                        _replace_txbx_content(active_candidates[0]['txbx'], new_content)
-                        for info in active_candidates[1:]:
-                            _replace_txbx_content(info['txbx'], [{'text': '', 'bold': False, 'bullet': False}])
+                        _replace_txbx_content(candidates[0][0], new_content)
+                        for c_txbx, _ in candidates[1:]:
+                            _replace_txbx_content(c_txbx, [{'text': '', 'bold': False, 'bullet': False}])
                     else:
                         # Distribute entries across textboxes (1 entry per box,
                         # or all in first box if more entries than boxes)
                         if len(entries) <= n_boxes:
-                            for bi, info in enumerate(active_candidates):
+                            for bi, (c_txbx, _) in enumerate(candidates):
                                 if bi < len(entries):
-                                    _replace_txbx_content(info['txbx'], entries[bi])
+                                    _replace_txbx_content(c_txbx, entries[bi])
                                 else:
-                                    _replace_txbx_content(info['txbx'], [{'text': '', 'bold': False, 'bullet': False}])
+                                    _replace_txbx_content(c_txbx, [{'text': '', 'bold': False, 'bullet': False}])
                         else:
-                            # More entries than boxes — preserve the template layout by
-                            # spreading consecutive entries across all usable boxes.
-                            distributed_entries = _distribute_entries_across_boxes(entries, n_boxes)
-                            for bi, info in enumerate(active_candidates):
-                                box_content = distributed_entries[bi] if bi < len(distributed_entries) else []
-                                if box_content:
-                                    _replace_txbx_content(info['txbx'], box_content)
-                                else:
-                                    _replace_txbx_content(info['txbx'], [{'text': '', 'bold': False, 'bullet': False}])
-
-                    for info in blank_candidates:
-                        _replace_txbx_content(info['txbx'], [{'text': '', 'bold': False, 'bullet': False}])
+                            # More entries than boxes — put all in first, blank rest
+                            _replace_txbx_content(candidates[0][0], new_content)
+                            for c_txbx, _ in candidates[1:]:
+                                _replace_txbx_content(c_txbx, [{'text': '', 'bold': False, 'bullet': False}])
 
                     logger.info(
                         f"  [txbx-spatial] '{sec_name}': {len(entries)} entries "
@@ -6713,11 +4885,7 @@ def _replace_cv_sections_in_textboxes(
                     # Build extra pairs: old paragraph text → new section text.
                     # These are used by _apply_paragraph_replacements to update
                     # copies of the same content in headers/footers.
-                    if (
-                        old_para_texts
-                        and new_content
-                        and _section_supports_textbox_extra_pairs(sec_name)
-                    ):
+                    if old_para_texts and new_content:
                         new_text = ' '.join(
                             it['text'] for it in new_content if it.get('text')
                         )
@@ -6954,22 +5122,6 @@ def _resize_textboxes(docx_path: str) -> int:
                 line_height_emu = int(font_pt * EMU_PER_PT * LINE_SPACING)
                 content_emu += line_count * line_height_emu
 
-                # ── Width expansion for single-line content ──────────────────
-                # If the paragraph text fits on one line but the estimated text
-                # width exceeds the current cx, expand cx so the text is not
-                # clipped horizontally (e.g. "Chef de proje" → "Chef de projet").
-                if curr_cx > 0 and char_count > 0:
-                    EMU_PER_CHAR = int(EMU_PER_INCH / max(1, CHARS_PER_INCH_11PT)
-                                       * (DEFAULT_FONT_PT / font_pt))
-                    needed_cx = int(char_count * EMU_PER_CHAR * 1.15)  # 15 % buffer
-                    if needed_cx > curr_cx:
-                        _set_shape_cx(txbx, needed_cx)
-                        curr_cx = needed_cx
-                        # Recalculate chars_per_line with new width
-                        width_inches   = needed_cx / EMU_PER_INCH
-                        chars_per_line = max(10, int(width_inches * CHARS_PER_INCH_11PT))
-                        changed = True
-
             # Proportional padding: 15% of content height, minimum 30K EMU
             total_emu = content_emu + max(MIN_PADDING_EMU, int(content_emu * PADDING_RATIO))
 
@@ -6980,7 +5132,7 @@ def _resize_textboxes(docx_path: str) -> int:
                     f"[resize_textboxes] Capping cy from {total_emu} to {_MAX_SHAPE_CY}")
                 total_emu = _MAX_SHAPE_CY
 
-            # Only expand height, never shrink
+            # Only expand, never shrink
             if total_emu > curr_cy:
                 _set_shape_cy(txbx, total_emu)
                 resized += 1
@@ -7278,358 +5430,153 @@ def _detect_template_mode(docx_path: str) -> str:
                         b'{{title', b'{{summary', b'{{skills', b'{{address',
                     ]
                     if any(tok in raw for tok in _KNOWN_TOKENS):
-                        logger.info("Template syntax scan: Jinja2 markers detected")
+                        logger.info("Template mode: PLACEHOLDER (Jinja2)")
                         return "placeholder"
                     # Has {{ }} but no known tokens — could be literal text
-                    logger.info("Template syntax scan: '{{ }}' found but no known Jinja tokens")
+                    logger.info("Template mode: DIRECT ({{ found but no known Jinja tokens)")
                     return "direct"
     except (zipfile.BadZipFile, Exception) as exc:
-        logger.warning(f"Template syntax scan failed (defaulting to direct): {exc}")
+        logger.warning(f"Template mode detection error (defaulting to DIRECT): {exc}")
 
-    logger.info("Template syntax scan: no Jinja markers (direct pipeline)")
+    logger.info("Template mode: DIRECT (text replacement)")
     return "direct"
 
 
-def _supports_fast_placeholder_render(docx_path: str) -> bool:
-    """Return True when the template is simple enough for docxtpl rendering.
+def _build_context_from_employee(employee: Dict[str, Any]) -> Dict[str, Any]:
+    """Build Jinja2 context from employee data.
 
-    Placeholder mode is the only mode that can reliably execute Jinja loop
-    constructs (tables/sections authored with ``{% ... %}``).  We therefore
-    prefer placeholder mode by default and only disable it if explicitly
-    requested via env.
+    Every value is coerced to a safe type (string / list) so that the
+    Jinja2 renderer never receives ``None`` which would print "None" in
+    the generated document.
     """
-    if os.getenv("CV_PLACEHOLDER_FAST_MODE", "1") == "0":
-        return False
+    ctx: Dict[str, Any] = {}
+    
+    name = employee.get("name") or ""
+    ctx["name"] = name
+    ctx["full_name"] = name
+    parts = name.split() if name else []
+    ctx["prenom"] = parts[0] if parts else ""
+    ctx["nom"] = parts[-1] if parts else ""
+    
+    ctx["title"] = employee.get("title") or ""
+    ctx["job_title"] = ctx["title"]
+    ctx["poste"] = ctx["title"]
+    
+    ctx["email"] = employee.get("email") or ""
+    ctx["phone"] = employee.get("phone") or ""
+    ctx["telephone"] = ctx["phone"]
+    ctx["address"] = employee.get("address") or ""
+    ctx["linkedin"] = employee.get("linkedin") or ""
+    
+    ctx["summary"] = employee.get("summary") or ""
+    # Generate summary via Groq for placeholder templates when none is provided
+    if not ctx["summary"]:
+        api_key = settings.GROQ_API_KEY
+        if api_key:
+            try:
+                generated = _groq_generate_summary(employee, api_key)
+                if generated:
+                    ctx["summary"] = generated
+                    logger.info("[_build_context] Groq summary injected")
+            except Exception as exc:
+                logger.warning(f"[_build_context] Groq summary generation failed: {exc}")
 
-    try:
-        with zipfile.ZipFile(docx_path, 'r') as zf:
-            xml_members = [
-                name for name in zf.namelist()
-                if name.startswith('word/') and name.endswith('.xml')
-            ]
-            if not xml_members:
-                return False
-            # If we reached here and the template is a valid DOCX, let docxtpl try.
-            # Structural tags such as {%tr ...%} are expected in many templates.
-            return True
-    except Exception as exc:
-        logger.warning(f"Placeholder capability scan failed (defaulting to direct): {exc}")
-        return False
+    ctx["skills"] = employee.get("skills") or []
+    ctx["skills_text"] = ", ".join(str(s) for s in ctx["skills"] if s)
+    ctx["experience"] = employee.get("experience") or []
+    ctx["education"] = employee.get("education") or []
+    ctx["certifications"] = employee.get("certifications") or []
+    ctx["languages"] = employee.get("languages") or []
+    
+    return ctx
 
 
-def _plan_template_execution(docx_path: str) -> Dict[str, Any]:
-    """Analyze a template and choose the most appropriate execution strategy.
-
-    The generator previously only knew whether a template looked like
-    placeholder-based or direct-replacement. In practice, direct templates fall
-    into multiple structural families: body-section templates, textbox-heavy
-    infographic templates, layout-table templates, and hybrids. This planner
-    classifies the template up front so downstream phases can favor the right
-    replacement surfaces instead of treating all direct templates the same.
+class _NormalizedDocxTemplate(DocxTemplate):
     """
-    plan: Dict[str, Any] = {
-        "template_mode": "direct",
-        "use_fast_placeholder_render": False,
-        "strategy": "direct_text_replacement_only",
-        "body_section_headings": 0,
-        "textbox_section_headings": 0,
-        "heading_only_textboxes": 0,
-        "layout_table_detected": False,
-        "positioned_textboxes": 0,
-        "run_body_section_replacement": True,
-        "run_textbox_section_replacement": True,
-    }
+    DocxTemplate subclass that handles the case where templates are authored
+    with `{% tr for ... %}` (space-separated) instead of `{%tr for ... %}`
+    (no-space) which is what docxtpl's patch_xml normally expects.
 
-    template_mode = _detect_template_mode(docx_path)
-    plan["template_mode"] = template_mode
+    When text runs are SPLIT across multiple <w:t> elements, striptags joins
+    them into `{% tr for ... %}` (with a leading space).  docxtpl's <w:tr>
+    conversion pattern requires `{%tr` (no space), so it fails to strip the
+    `<w:tr>` wrapper.  After super().patch_xml(), any remaining `{% tr for %}`
+    patterns are converted to plain Jinja2 `{% for %} / {% endfor %}` so the
+    template can render without crashing.
 
-    if template_mode == "placeholder":
-        fast_placeholder = _supports_fast_placeholder_render(docx_path)
-        plan["use_fast_placeholder_render"] = fast_placeholder
-        plan["strategy"] = "placeholder_fast" if fast_placeholder else "placeholder_direct"
-        plan["run_body_section_replacement"] = not fast_placeholder
-        plan["run_textbox_section_replacement"] = not fast_placeholder
-        return plan
-
-    W = NS_W
-    txbx_content_tag = f'{{{W}}}txbxContent'
-    try:
-        with zipfile.ZipFile(docx_path, 'r') as zf:
-            raw = zf.read('word/document.xml')
-        tree = etree.fromstring(raw)
-    except Exception as exc:
-        logger.warning(f"Template strategy analysis failed (defaulting to direct text-only): {exc}")
-        plan["run_body_section_replacement"] = False
-        plan["run_textbox_section_replacement"] = False
-        return plan
-
-    body = tree.find(f'{{{W}}}body')
-    if body is None:
-        body = tree.find(f'.//{{{W}}}body')
-    if body is None:
-        plan["run_body_section_replacement"] = False
-        plan["run_textbox_section_replacement"] = False
-        return plan
-
-    body_children = list(body)
-    body_section_headings = 0
-    for child in body_children:
-        if child.tag == f'{{{W}}}p' and _identify_section_lxml(child):
-            body_section_headings += 1
-
-    layout_table = _get_layout_table(body)
-    layout_table_detected = layout_table is not None
-
-    textbox_section_headings = 0
-    heading_only_textboxes = 0
-    positioned_textboxes = 0
-    for txbx_content in tree.iter(txbx_content_tag):
-        if txbx_content.xpath('ancestor::mc:Fallback', namespaces={'mc': NS_MC}):
-            continue
-        if _get_txbx_position(txbx_content) is not None:
-            positioned_textboxes += 1
-
-        paragraphs = [c for c in list(txbx_content) if c.tag == f'{{{W}}}p']
-        if not paragraphs:
-            continue
-
-        heading_names = [sec for sec in (_identify_section_lxml(p) for p in paragraphs) if sec]
-        if not heading_names:
-            continue
-
-        textbox_section_headings += 1
-        has_non_heading_content = False
-        for p in paragraphs:
-            if _identify_section_lxml(p):
-                continue
-            text = ''.join(t.text or '' for t in p.iter(f'{{{W}}}t')).strip()
-            if text:
-                has_non_heading_content = True
-                break
-        if not has_non_heading_content:
-            heading_only_textboxes += 1
-
-    plan.update(
-        {
-            "body_section_headings": body_section_headings,
-            "textbox_section_headings": textbox_section_headings,
-            "heading_only_textboxes": heading_only_textboxes,
-            "layout_table_detected": layout_table_detected,
-            "positioned_textboxes": positioned_textboxes,
-        }
-    )
-
-    if body_section_headings > 0 and textbox_section_headings > 0:
-        plan["strategy"] = "direct_hybrid_sections"
-    elif body_section_headings > 0:
-        plan["strategy"] = "direct_body_sections"
-    elif layout_table_detected:
-        plan["strategy"] = "direct_layout_table"
-    elif textbox_section_headings > 0:
-        plan["strategy"] = "direct_textbox_sections"
-    elif positioned_textboxes >= 4:
-        plan["strategy"] = "direct_infographic_text_replacement"
-    else:
-        plan["strategy"] = "direct_text_replacement_only"
-
-    plan["run_body_section_replacement"] = body_section_headings > 0 or layout_table_detected
-    plan["run_textbox_section_replacement"] = textbox_section_headings > 0
-    return plan
-
-
-def _build_placeholder_render_context(employee_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Build a docxtpl-friendly context for placeholder templates.
-
-    The fallback engine receives heterogeneous payloads (camelCase/snake_case,
-    list items as dict or string).  This helper normalizes common aliases so
-    templates authored with loops like ``education``/``experience`` and fields
-    like ``edu.school`` or ``exp.period`` render reliably.
+    Note: table-row duplication won't work for the affected loops, but all
+    field substitution still works correctly.
     """
-    employee = dict(employee_data or {})
-    # Normalize common payload variants received from backend.
-    if "experience" not in employee and isinstance(employee.get("workExperiences"), list):
-        employee["experience"] = employee.get("workExperiences")
-    if "education" not in employee and isinstance(employee.get("educations"), list):
-        employee["education"] = employee.get("educations")
-    if "summary" not in employee and employee.get("professionalSummary"):
-        employee["summary"] = employee.get("professionalSummary")
 
-    def _s(value: Any) -> str:
-        return str(value).strip() if value is not None else ""
-
-    full_name = _s(employee.get("name"))
-    if not full_name:
-        full_name = _s(f"{_s(employee.get('firstName'))} {_s(employee.get('lastName'))}")
-
-    current_position = '' if employee.get('_title_derived') else _s(
-        employee.get("title")
-        or employee.get("current_position")
-        or employee.get("currentPosition")
-        or employee.get("jobTitle")
-    )
-
-    sections = build_structured_cv_sections_payload(employee).get("sections", {})
-    exp_rows = sections.get("experience") or []
-    edu_rows = sections.get("education") or []
-
-    experience = [
-        {
-            "title": _s(exp.get("title")),
-            "company": _s(exp.get("company")),
-            "period": _s(exp.get("dates")),
-            "dates": _s(exp.get("dates")),
-            "description": _s(exp.get("description") or ""),
-        }
-        for exp in exp_rows
-    ]
-
-    education = [
-        {
-            "degree": _s(edu.get("degree")),
-            "school": _s(edu.get("institution")),
-            "institution": _s(edu.get("institution")),
-            "period": _s(edu.get("dates")),
-            "dates": _s(edu.get("dates")),
-        }
-        for edu in edu_rows
-    ]
-
-    certifications: List[Dict[str, str]] = []
-    for cert in (employee.get("certifications") or []):
-        if isinstance(cert, dict):
-            name = _s(cert.get("name") or cert.get("title"))
-            year = _s(cert.get("year") or cert.get("date_obtained") or cert.get("issueDate"))
-        else:
-            name = _s(cert)
-            year = ""
-        if name:
-            certifications.append({"name": name, "year": year})
-
-    projects: List[Dict[str, str]] = []
-    for proj in (employee.get("projects") or []):
-        if not isinstance(proj, dict):
-            text = _s(proj)
-            if text:
-                projects.append({"name": text, "title": text, "period": "", "description": text, "role": ""})
-            continue
-        name = _s(proj.get("name") or proj.get("projectName") or proj.get("title"))
-        period = _s(proj.get("period") or proj.get("dates") or proj.get("date_range"))
-        if not period:
-            start = _s(proj.get("startDate") or proj.get("start_date"))
-            end = _s(proj.get("endDate") or proj.get("end_date"))
-            if start and end:
-                period = f"{start} - {end}"
-            else:
-                period = start or end
-        projects.append(
-            {
-                "name": name,
-                "title": _s(proj.get("title") or name),
-                "period": period,
-                "dates": period,
-                "description": _s(proj.get("description")),
-                "role": _s(proj.get("role")),
-            }
-        )
-
-    skills = sections.get("skills") or []
-
-    summary_text = _s(
-        employee.get("summary")
-        or employee.get("professionalSummary")
-        or employee.get("professional_summary")
-    )
-
-    context: Dict[str, Any] = {
-        "full_name": full_name,
-        "name": full_name,
-        "current_position": current_position,
-        "title": current_position,
-        "job_title": current_position,
-        "email": _s(employee.get("email")),
-        "phone": _s(employee.get("phone")),
-        "telephone": _s(employee.get("phone")),
-        "address": _s(employee.get("address")),
-        "linkedin": _s(employee.get("linkedin")),
-        "summary": summary_text,
-        "professional_summary": summary_text,
-        "experience": experience,
-        "experiences": experience,
-        "work_experiences": experience,
-        "education": education,
-        "educations": education,
-        "formation": education,
-        "certifications": certifications,
-        "projects": projects,
-        "skills": skills,
-    }
-
-    # Per-row aliases for common template variants.
-    for exp in context["experience"]:
-        exp.setdefault("jobTitle", exp.get("title", ""))
-        exp.setdefault("companyName", exp.get("company", ""))
-        exp.setdefault("startDate", "")
-        exp.setdefault("endDate", "")
-    for edu in context["education"]:
-        edu.setdefault("fieldOfStudy", "")
-        edu.setdefault("startDate", "")
-        edu.setdefault("endDate", edu.get("dates", ""))
-    for proj in context["projects"]:
-        proj.setdefault("projectName", proj.get("name", ""))
-        proj.setdefault("startDate", "")
-        proj.setdefault("endDate", "")
-
-    return context
+    def patch_xml(self, src_xml: str) -> str:  # type: ignore[override]
+        src_xml = super().patch_xml(src_xml)
+        # Convert remaining {% tr for ... %} / {% tr endfor %} that
+        # docxtpl's <w:tr> pattern missed (space before tr not normalised yet)
+        src_xml = re.sub(r'\{%\s*tr\s+for\s+', r'{% for ', src_xml)
+        src_xml = re.sub(r'\{%\s*tr\s+endfor\b', r'{% endfor', src_xml)
+        src_xml = re.sub(r'\{%\s*endtr\s*%\}', r'{% endfor %}', src_xml)
+        return src_xml
 
 
-def _build_jinja_scalar_placeholder_pairs(
-    paragraphs: List[str],
-    employee_data: Dict[str, Any],
-) -> List[Tuple[str, str]]:
-    """Build deterministic replacements for simple Jinja scalar placeholders.
-
-    This is used by the direct pipeline when a template contains docxtpl/Jinja
-    control tags that prevent safe placeholder-mode rendering. It covers header
-    tokens like ``{{ full_name }}``, ``{{email}}``, ``{{ phone }}``,
-    ``{{ current_position }}``, and ``{{ summary }}`` using the same normalized
-    context as placeholder mode, so the output does not depend on AI guesses.
+def _normalize_docxtpl_tags(template_path: str) -> str:
     """
-    context = _build_placeholder_render_context(employee_data)
-    placeholder_re = re.compile(r'\{\{\s*([a-zA-Z_][\w]*)\s*\}\}')
-    pairs: List[Tuple[str, str]] = []
-    seen_old: set[str] = set()
-
-    for para in paragraphs or []:
-        for match in placeholder_re.finditer(para or ''):
-            old_text = match.group(0)
-            key = match.group(1)
-            value = context.get(key)
-            if old_text in seen_old:
-                continue
-            if isinstance(value, str):
-                pairs.append((old_text, value))
-                seen_old.add(old_text)
-
-    if pairs:
-        logger.info(
-            "[jinja_scalar_placeholders] Detected %d deterministic pair(s): %s",
-            len(pairs),
-            ', '.join(repr(old[:40]) for old, _ in pairs[:6]),
-        )
-    return pairs
+    No-op — normalization now happens inside _NormalizedDocxTemplate.patch_xml.
+    """
+    return template_path
 
 
-def _render_placeholder_template(
+def _generate_with_placeholders(
     template_path: str,
-    employee_data: Dict[str, Any],
+    employee: Dict[str, Any],
     output_path: str,
-) -> None:
-    """Render a Jinja/docxtpl-authored DOCX template."""
-    context = _build_placeholder_render_context(employee_data)
-    doc = DocxTemplate(template_path)
-    doc.render(context)
-    doc.save(output_path)
+    gen_ctx: Optional[GenerationContext] = None,
+) -> str:
+    """Generate using docxtpl for placeholder templates.
 
+    Improvements:
+    - XML-safe context values (control chars stripped)
+    - Post-render validation that output is a valid DOCX
+    - All context values guaranteed non-None (prevents 'None' strings)
+    - Generation context tracking for debug tracing
+    """
+    if gen_ctx is None:
+        gen_ctx = GenerationContext()
+
+    with gen_ctx.phase("template_load") as p:
+        try:
+            tpl = _NormalizedDocxTemplate(template_path)
+        except Exception as exc:
+            raise ValueError(f"Failed to load template for placeholder rendering: {exc}") from exc
+        p.message = "Template loaded successfully"
+
+    with gen_ctx.phase("build_context") as p:
+        ctx = _build_context_from_employee(employee)
+        # Ensure all string values are XML-safe
+        for key, value in ctx.items():
+            if isinstance(value, str):
+                ctx[key] = _xml_safe_text(value)
+        p.details["context_keys"] = list(ctx.keys())
+        p.details["non_empty_keys"] = [k for k, v in ctx.items()
+                                        if v and (not isinstance(v, (list, str)) or v)]
+
+    with gen_ctx.phase("placeholder_render") as p:
+        try:
+            tpl.render(ctx)
+        except Exception as exc:
+            logger.error(f"Placeholder render error: {exc}", exc_info=True)
+            raise ValueError(
+                f"Template rendering failed — check that Jinja2 tokens match expected fields: {exc}"
+            ) from exc
+        p.message = "Rendered successfully"
+
+    with gen_ctx.phase("save_output") as p:
+        tpl.save(output_path)
+        # Post-render validation: verify the saved file is a valid DOCX
+        if not zipfile.is_zipfile(output_path):
+            raise RuntimeError("Placeholder render produced a corrupt (non-ZIP) file")
+        p.message = f"Saved to {os.path.basename(output_path)}"
+
+    return output_path
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -7637,168 +5584,46 @@ def _render_placeholder_template(
 # ═══════════════════════════════════════════════════════════════════════════
 
 _AI_PROMPT = """\
-You are a precise CV contact-field replacement engine.
-The structured section content (experience, education, skills, summary) is handled \
-by a SEPARATE pipeline — your ONLY job is to replace personal contact/identity fields \
-in the template header so the output carries the correct employee data.
+You are a CV editor assistant. You will receive:
+1. The RAW TEXT of a CV template (extracted paragraph by paragraph from a DOCX file).
+2. The target employee's profile data as JSON.
 
-## YOUR SCOPE — exactly these 7 field categories:
-1. Full name  (header / banner — ALL CAPS or title-case, as printed in template)
-2. Current job title / position  (subtitle line below the name)
-3. Email address
-4. Phone / mobile number
-5. LinkedIn URL or slug
-6. Portfolio / personal website URL
-7. Physical address / city / country
+Your task:
+Return a JSON object with two keys:
 
-## NAME MATCHING RULES:
-- Find the template's name text exactly as it appears (including ALL-CAPS, accents, spacing).
-- Return ONE entry for the full name: {{"old": "LUCAS LEBLANC", "new": "{employee_full_name}"}}.
-- If first-name and last-name appear in SEPARATE paragraphs, return TWO entries
-  (one per fragment) with the matching employee name parts.
-- Never split a single name paragraph into first/last sub-entries.
+"replacements": array of objects {{"old": "...", "new": "..."}} — one per piece of
+  personal data found in the template that must change.
+  Rules:
+  - "old" must be the EXACT string as it appears in the template text (copy-paste).
+  - Cover ALL contact / personal info: first name alone, last name alone,
+    job title, email, phone number, LinkedIn URL, address/location.
+  - CRITICAL — Name: return the full name as a SINGLE entry combining first AND last name.
+    Example: {{"old": "LUCAS LEBLANC", "new": "Aya BEN JEMAA"}}.
+    Do NOT split into "LUCAS" → "Aya" and "LEBLANC" → "BEN JEMAA" as separate entries.
+    Even if first name and last name live in separate text boxes, the replacement engine
+    will handle merging them into a single wider textbox automatically.
+    Copy the EXACT "FIRST LAST" string as it appears in the template (with a space between).
+  - For multi-part values (e.g. phone split as "555-555-5555"), use the joined form.
+  - Do NOT replace section headings (Expérience, Formation, Compétences, Langues…).
+  - Do NOT replace company names, school names, or dates from past experience.
 
-## STRICT RULES:
-- NEVER return empty replacements ("new": ""). If no employee value exists, omit the pair.
-- NEVER replace section headings (Expérience, Formation, Compétences, Skills, Education…).
-- NEVER replace experience job titles, company names, date ranges, or descriptions.
-- NEVER hallucinate data absent from the employee JSON.
-- Use the EXACT verbatim text found in the template for every "old" value.
-- Ignore invisible Unicode characters (\\u200b, \\u00a0) when matching.
-- For fragmented fields (e.g. email local-part and domain in separate runs), \
-  use the combined form as it appears contiguously in the template.
+"sections_to_clear": array of section heading strings whose content should be removed
+  because the employee has NO data for that section.
+  CRITICAL RULES:
+  - The employee HAS DATA for these sections: {populated_sections}
+    You MUST NOT include any of these in sections_to_clear — they will be rebuilt.
+  - Only include top-level section HEADINGS (e.g. "OBJECTIF", "CENTRES D'INTÉRÊT").
+  - Do NOT include job titles, experience entry titles, or sub-items — only top-level headings.
+  - Only include headings that LITERALLY APPEAR verbatim in the template text.
 
-## sections_to_clear:
-List ONLY top-level section headings that have ZERO employee data and should be hidden.
-The employee HAS DATA for: {populated_sections}. NEVER list those sections.
-Include only headings present VERBATIM in the template text.
-
-## Language:
-{language_hint}
-Keep company names, school names, product names, technical acronyms, and proper nouns unchanged.
-
-Output — strict JSON only, no prose, no markdown fences:
-{{
-  "replacements": [{{"old": "exact template text", "new": "employee value"}}],
-  "sections_to_clear": ["VERBATIM HEADING"]
-}}
+Return ONLY valid JSON — no prose, no markdown fences, no explanation.
 
 TEMPLATE TEXT:
 {template_text}
 
-EMPLOYEE DATA (JSON):
+EMPLOYEE DATA:
 {employee_json}
 """
-
-_VISIBLE_WORD_PART_RE = re.compile(
-    r'^word/(?:document|header\d+|footer\d+|footnotes|endnotes|comments)\.xml$',
-    re.I,
-)
-
-
-# Sections the AI must never be allowed to clear.  These are either populated
-# by the rendering engine separately (skills, summary) or legally-sensitive
-# (certifications), so removing them on an LLM guess causes data loss.
-_NEVER_CLEAR_SECTIONS: frozenset = frozenset({
-    'skills', 'certifications', 'summary',
-})
-
-# Patterns whose presence in an "old" replacement value indicate the text is
-# contact information — blanking those out is almost always an LLM hallucination.
-_CONTACT_CONTENT_RE = re.compile(
-    r'[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}|'   # email address
-    r'(?:\+?\d[\d\s.()\-]{5,}\d)',         # phone number
-    re.IGNORECASE,
-)
-
-
-_AUTO_CLEAR_SECTION_KEYWORDS: Dict[str, List[str]] = {
-    # Sidebar-only sections frequently present in generic templates but usually
-    # absent from structured employee payloads.
-    'communication': [
-        'communication',
-        'communications',
-        'communication skills',
-        'soft skills',
-        'compétences relationnelles',
-        'aptitudes relationnelles',
-        'compétences de communication',
-    ],
-    'direction': [
-        'direction',
-        'leadership',
-        'management',
-        'gestion',
-        'managerial skills',
-        'leadership skills',
-        'management skills',
-        'encadrement',
-    ],
-}
-
-
-def _normalize_heading_label(text: str) -> str:
-    normalized = _normalize_taxonomy_heading(text)
-    return re.sub(r'[^a-z0-9]+', ' ', normalized).strip()
-
-
-def _is_heading_label_match(text: str, keyword: str) -> bool:
-    t = _normalize_heading_label(text)
-    k = _normalize_heading_label(keyword)
-    if not t or not k:
-        return False
-    if t == k:
-        return True
-    return t.startswith(k + ' ') or re.search(rf'\b{re.escape(k)}\b', t) is not None
-
-
-def _has_optional_section_data(employee: Dict[str, Any], canonical: str) -> bool:
-    if canonical == 'communication':
-        keys = ('communication', 'communications', 'communicationSkills', 'soft_skills', 'softSkills')
-    elif canonical == 'direction':
-        keys = ('direction', 'leadership', 'management', 'managerialSkills', 'managerial_skills')
-    else:
-        keys = ()
-
-    for key in keys:
-        value = employee.get(key)
-        if isinstance(value, str) and value.strip():
-            return True
-        if isinstance(value, (list, tuple, dict)) and len(value) > 0:
-            return True
-    return False
-
-
-def _derive_deterministic_sections_to_clear(
-    paragraphs: List[str],
-    employee: Dict[str, Any],
-) -> List[str]:
-    """Find optional template sections to clear without relying on Groq.
-
-    We only consider short heading-like lines to avoid false positives.
-    """
-    extra: List[str] = []
-    seen_norm: set[str] = set()
-
-    for para in paragraphs or []:
-        text = (para or '').strip()
-        if not text or len(text) > 70:
-            continue
-        if re.search(r'@|https?://|\d{2,}[/-]\d{2,}', text, re.I):
-            continue
-
-        canonical = _canonicalize_section_label_for_clearing(text)
-        if canonical is None:
-            continue
-        if _employee_has_section_content(employee, canonical):
-            continue
-
-        norm = _normalize_heading_label(text)
-        if norm and norm not in seen_norm:
-            seen_norm.add(norm)
-            extra.append(text)
-
-    return extra
 
 
 def _build_groq_input_text(full_text: str, paragraphs: List[str], max_chars: int = 5500) -> str:
@@ -7841,17 +5666,19 @@ def _build_groq_input_text(full_text: str, paragraphs: List[str], max_chars: int
     parts: List[str] = [contact_para]
     used = len(contact_para)
 
-    # Add section headings using the same canonical classifier used by clearing.
+    # Add section headings (keyword match — same logic as _SECTION_MAP)
     for i, p in enumerate(paragraphs):
         if i == contact_idx:
             continue
-        t = p.strip()
+        t = p.strip().lower()
         if not t or len(t) > 65:
             continue
-        if _canonicalize_section_label(t, allow_partial=False) is not None:
-            if p not in parts and used + len(p) + 1 <= max_chars:
-                parts.append(p)
-                used += len(p) + 1
+        for kws in _SECTION_MAP.values():
+            if any(t == kw or t.startswith(kw) for kw in kws):
+                if p not in parts and used + len(p) + 1 <= max_chars:
+                    parts.append(p)
+                    used += len(p) + 1
+                break
 
     # Fill remaining budget with body text (excluding already-added parts)
     remaining = max_chars - used - 2
@@ -7869,7 +5696,6 @@ def _ai_get_replacements(
     template_text: str,
     employee: Dict[str, Any],
     paragraphs: Optional[List[str]] = None,
-    preferred_language: Optional[str] = None,
 ) -> Tuple[List[Tuple[str, str]], List[str]]:
     """
     Call Groq LLM to identify every personal data string in the template
@@ -7912,32 +5738,23 @@ def _ai_get_replacements(
         _populated.append("interests/centres d'intérêt")
     populated_sections_str = ', '.join(_populated) if _populated else 'see employee JSON'
 
-    language_hint = _language_instruction(preferred_language)
     prompt = _AI_PROMPT.format(
         template_text=trunc_text,
-        employee_json=json.dumps(_trim_employee_for_groq(employee), ensure_ascii=False, indent=2),
+        employee_json=json.dumps(employee, ensure_ascii=False, indent=2),
         populated_sections=populated_sections_str,
-        language_hint=language_hint,
-        employee_full_name=(employee.get('name') or '').strip(),
     )
 
     client = Groq(api_key=api_key, timeout=settings.GROQ_TIMEOUT_SECONDS)
     try:
-        response = _groq_with_retry(lambda: client.chat.completions.create(
+        response = client.chat.completions.create(
             model=settings.GROQ_CV_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
             max_tokens=1200,
             response_format={"type": "json_object"},
-        ))
+        )
     except Exception as exc:
-        if _is_groq_soft_fallback_error(exc):
-            logger.warning(
-                "Groq unavailable for this request; continuing with deterministic fallback: %s",
-                exc,
-            )
-        else:
-            logger.error(f"Groq API call failed: {exc}")
+        logger.error(f"Groq API call failed: {exc}")
         return [], []
 
     raw = (response.choices[0].message.content or '').strip()
@@ -7960,49 +5777,22 @@ def _ai_get_replacements(
         items = parsed
 
     pairs: List[Tuple[str, str]] = []
-    from app.services.cv_section_taxonomy import classify_heading as _classify_hd2
-
     for item in items:
         if not isinstance(item, dict):
             continue
         old = (item.get("old") or "").strip()
-        new_raw = item.get("new")
-        new = (new_raw or "").strip() if new_raw is not None else ""
-        if not old:
-            continue
-        if old == new:
-            continue
-        # Never allow replacing section headings (e.g. "Expérience", "Formation")
-        # with data values; that corrupts template structure.
-        if _classify_hd2(old) is not None:
-            logger.warning("Rejected heading replacement from AI: %r -> %r", old, new)
-            continue
-        # Reject ambiguous glyph-only placeholders (e.g. "……………..").
-        # Applying those globally often overwrites multiple unrelated fields.
-        if not re.search(r"[A-Za-zÀ-ÿ0-9@]", old):
-            logger.warning("Rejected ambiguous glyph-only replacement: %r -> %r", old, new)
-            continue
-        # Enforce the prompt rule: never accept empty replacements.
-        # An empty "new" is either a hallucination or an attempt to blank a
-        # field — both are rejected.  Specific destructive cases are logged.
-        if not new:
-            if _CONTACT_CONTENT_RE.search(old):
-                logger.warning("Rejected empty replacement (contact info): %r → ''", old)
-            elif _classify_hd2(old) is not None:
-                logger.warning("Rejected empty replacement (section heading): %r → ''", old)
+        new = (item.get("new") or "").strip()
+        if old and new and old != new:
+            if old in full_text:
+                pairs.append((old, new))
             else:
-                logger.warning("Rejected empty replacement: %r → ''", old)
-            continue
-        if old in full_text:
-            pairs.append((old, new))
-        else:
-            for para in paragraphs:
-                if old.lower() in para.lower():
-                    real_idx = para.lower().find(old.lower())
-                    real_old = para[real_idx: real_idx + len(old)]
-                    if real_old and real_old not in [p[0] for p in pairs]:
-                        pairs.append((real_old, new))
-                    break
+                for para in paragraphs:
+                    if old.lower() in para.lower():
+                        real_idx = para.lower().find(old.lower())
+                        real_old = para[real_idx: real_idx + len(old)]
+                        if real_old and real_old not in [p[0] for p in pairs]:
+                            pairs.append((real_old, new))
+                        break
 
     pairs.sort(key=lambda x: len(x[0]), reverse=True)
 
@@ -8015,57 +5805,44 @@ def _ai_get_replacements(
 
     # ── Deterministic safety filter ────────────────────────────────────
     # Remove any section heading from sections_to_clear that corresponds to
-    # employee data that actually exists.  Uses the shared taxonomy so that
-    # all 6 languages and 300+ synonyms are covered, not just a hard-coded
-    # English/French subset.
+    # employee data that actually exists. Groq sometimes incorrectly marks
+    # sections as empty even when the employee profile has data for them.
+    _FIELD_SECTION_KEYWORDS: Dict[str, List[str]] = {
+        'summary':        ['summary', 'profile', 'objectif', 'objective', 'profil', 'résumé'],
+        'experience':     ['experience', 'expérience', 'expériences', 'work history'],
+        'education':      ['education', 'formation', 'études', 'academic'],
+        'skills':         ['skills', 'compétences', 'competences', 'technical'],
+        'projects':       ['projects', 'projets', 'key projects'],
+        'certifications': ['certifications', 'hackathons', 'certifs', 'certification'],
+        'languages':      ['languages', 'langues', 'langue'],
+        'interests':      ['interests', "centres d'intérêt", "centres d'interet", 'hobbies', 'loisirs'],
+    }
+
     def _employee_has_field(heading: str) -> bool:
-        return _employee_has_section_content(employee, _canonicalize_section_label_for_clearing(heading))
+        norm = heading.lower().strip()
+        for field, kws in _FIELD_SECTION_KEYWORDS.items():
+            if any(kw in norm for kw in kws):
+                v = employee.get(field)
+                has_direct = bool(v) and (not isinstance(v, (list, dict)) or len(v) > 0)
+                if has_direct:
+                    return True
+                # For summary/objective sections: Groq can generate one from
+                # experience or title data even when 'summary' field is empty.
+                if field == 'summary':
+                    can_generate = (
+                        bool(employee.get('experience')) or
+                        bool(employee.get('title'))
+                    )
+                    return can_generate
+                return False
+        return False
 
-    skipped_ambiguous: List[str] = []
-    filtered_stc: List[str] = []
-    for heading in sections_to_clear:
-        canonical = _canonicalize_section_label_for_clearing(heading)
-        if canonical is None:
-            skipped_ambiguous.append(heading)
-            continue
-        if _employee_has_field(heading):
-            continue
-        filtered_stc.append(heading)
-
-    if skipped_ambiguous:
-        logger.info(
-            "Safety filter ignored %d ambiguous section(s) from clear list: %s",
-            len(skipped_ambiguous),
-            skipped_ambiguous,
-        )
-
+    filtered_stc = [s for s in sections_to_clear if not _employee_has_field(s)]
     if len(filtered_stc) < len(sections_to_clear):
         skipped = [s for s in sections_to_clear if s not in filtered_stc]
         logger.info(f"Safety filter removed {len(skipped)} section(s) from clear list "
                     f"(employee has data): {skipped}")
     sections_to_clear = filtered_stc
-
-    # ── Deterministic supplement (LLM-independent) ─────────────────────
-    # Some templates include optional sidebar sections such as
-    # "Communication"/"Direction" that Groq may occasionally miss.
-    # Detect those headings from template paragraphs and clear them when the
-    # employee profile has no dedicated data for them.
-    deterministic_stc = _derive_deterministic_sections_to_clear(paragraphs, employee)
-    if deterministic_stc:
-        existing_norm = {_normalize_heading_label(s) for s in sections_to_clear}
-        added = []
-        for sec in deterministic_stc:
-            norm = _normalize_heading_label(sec)
-            if norm and norm not in existing_norm:
-                sections_to_clear.append(sec)
-                existing_norm.add(norm)
-                added.append(sec)
-        if added:
-            logger.info(
-                "Deterministic clear detection added %d section(s): %s",
-                len(added),
-                added,
-            )
 
     logger.info(f"AI produced {len(pairs)} replacement pairs:")
     for old, new in pairs:
@@ -8092,7 +5869,6 @@ def _clear_template_sections(docx_path: str, sections_to_clear: List[str]) -> in
         return 0
 
     W = NS_W
-
     temp_dir = tempfile.mkdtemp()
     cleared = 0
     try:
@@ -8109,11 +5885,12 @@ def _clear_template_sections(docx_path: str, sections_to_clear: List[str]) -> in
             t_elems = list(txbx.iter(f'{{{W}}}t'))
             text = ''.join(t.text or '' for t in t_elems).strip()
             for label in sections_to_clear:
-                if _section_label_matches_text(text, label):
-                    # Clear only this textbox
-                    for t in t_elems:
-                        t.text = ''
-                    logger.info(f"  Cleared textbox label: '{text}'")
+                if text.upper() == label.upper() or text.strip() == label.strip():
+                    # For textboxes, we usually want to keep the label 
+                    # and clear the REST of the textbox content if it's mixed.
+                    # But if the textbox IS the label, we keep it as requested.
+                    logger.info(f"  Preserving textbox section label: '{text}'")
+                    # No longer clearing t.text = '' here.
                     cleared += 1
                     break
 
@@ -8127,7 +5904,8 @@ def _clear_template_sections(docx_path: str, sections_to_clear: List[str]) -> in
             # employee has no summary, remove body paragraphs that appear
             # BEFORE the first recognized section heading (those are the
             # template's objective/summary text with no heading of their own).
-            if any(_canonicalize_section_label(s) == 'summary' for s in sections_to_clear):
+            summary_labels = {'objectif', 'objective', 'summary', 'profil', 'profile', 'résumé'}
+            if any(s.lower().strip() in summary_labels for s in sections_to_clear):
                 first_heading_idx = None
                 for i, child in enumerate(body_children):
                     if child.tag == f'{{{W}}}p':
@@ -8151,7 +5929,7 @@ def _clear_template_sections(docx_path: str, sections_to_clear: List[str]) -> in
                     if child.tag != f'{{{W}}}p':
                         continue
                     texts = ''.join(t.text or '' for t in child.iter(f'{{{W}}}t')).strip()
-                    if _section_label_matches_text(texts, label):
+                    if texts.upper() == label.upper() or texts.strip() == label.strip():
                         # Found heading — remove it and its safe content range
                         current_body = list(body)
                         idx = current_body.index(child)
@@ -8186,8 +5964,15 @@ def _clear_template_sections(docx_path: str, sections_to_clear: List[str]) -> in
                                 body.remove(elem)
                             except ValueError:
                                 pass
-                        body.remove(child)
-                        logger.info(f"  Removed body section: '{label}' + {len(removable)} content elements")
+                        
+                        # Insert "N/A" paragraph after the heading
+                        na_p = etree.Element(f'{{{W}}}p')
+                        na_r = etree.SubElement(na_p, f'{{{W}}}r')
+                        na_t = etree.SubElement(na_r, f'{{{W}}}t')
+                        na_t.text = "N/A"
+                        child.addnext(na_p)
+
+                        logger.info(f"  Substituted body section with 'N/A': '{label}'")
                         cleared += 1
                         break
 
@@ -8208,7 +5993,7 @@ def _clear_template_sections(docx_path: str, sections_to_clear: List[str]) -> in
                     t.text or '' for t in child.iter(f'{{{W}}}t')
                 ).strip()
                 for label in sections_to_clear:
-                    if _section_label_matches_text(cell_text, label):
+                    if cell_text.upper() == label.upper() or cell_text.strip() == label.strip():
                         # Clear all subsequent paragraphs in this cell up to the
                         # next section-like heading paragraph
                         for content_p in tc_children[h_idx + 1:]:
@@ -8223,10 +6008,20 @@ def _clear_template_sections(docx_path: str, sections_to_clear: List[str]) -> in
                             # Clear all <w:t> text in this content paragraph
                             for t in content_p.iter(f'{{{W}}}t'):
                                 t.text = ''
-                        # Also blank the heading paragraph itself
-                        for t in child.iter(f'{{{W}}}t'):
-                            t.text = ''
-                        logger.info(f"  Cleared layout-table cell section: '{cell_text}'")
+                        # Also blank the heading paragraph itself? 
+                        # NO, keep the heading as requested.
+                        
+                        # Insert "N/A" into the first content paragraph if possible, 
+                        # or just make sure the following text is "N/A".
+                        first_content = tc_children[h_idx + 1] if h_idx + 1 < len(tc_children) else None
+                        if first_content is not None and first_content.tag == W_P:
+                             na_t = first_content.find(f'.//{{{W}}}t')
+                             if na_t is None:
+                                 na_r = etree.SubElement(first_content, f'{{{W}}}r')
+                                 na_t = etree.SubElement(na_r, f'{{{W}}}t')
+                             na_t.text = "N/A"
+                        
+                        logger.info(f"  Substituted layout-table cell section with 'N/A': '{cell_text}'")
                         cleared += 1
                         break
 
@@ -8269,7 +6064,7 @@ def _detect_generic_placeholders(
     seen_old: set = set()
 
     def _add(old_text: str, new_text: str) -> None:
-        if old_text and old_text not in seen_old and old_text != new_text:
+        if old_text and new_text and old_text not in seen_old:
             pairs.append((old_text, new_text))
             seen_old.add(old_text)
 
@@ -8277,6 +6072,8 @@ def _detect_generic_placeholders(
     skill_idx = 0                   # rotating pointer for skill-slot placeholders
     exps      = employee.get('experience') or []
     summary   = (employee.get('summary') or '').strip()
+    cur_year  = str(datetime.now().year)
+
     for para in paragraphs:
         ps = para.strip()
         if not ps:
@@ -8284,14 +6081,8 @@ def _detect_generic_placeholders(
 
         # ── Date placeholder "20xx", "xxxx" ─────────────────────────
         if re.search(r'\b20xx\b|\bxxxx\b', ps, re.I):
-            new_ps = re.sub(
-                r'\b(?:janv?(?:ier)?|f[ée]vr?(?:ier)?|mars|avr(?:il)?|mai|juin|juil(?:let)?|ao[uû]t|sept(?:embre)?|oct(?:obre)?|nov(?:embre)?|d[ée]c(?:embre)?|january|february|march|april|may|june|july|august|september|october|november|december)\.?\s+(?:20xx|xxxx)\s*[–—-]\s*(?:janv?(?:ier)?|f[ée]vr?(?:ier)?|mars|avr(?:il)?|mai|juin|juil(?:let)?|ao[uû]t|sept(?:embre)?|oct(?:obre)?|nov(?:embre)?|d[ée]c(?:embre)?|january|february|march|april|may|june|july|august|september|october|november|december)\.?\s+(?:20xx|xxxx)\b',
-                '',
-                ps,
-                flags=re.I,
-            )
-            new_ps = re.sub(r'\b(?:20xx|xxxx)\b', '', new_ps, flags=re.I)
-            new_ps = re.sub(r'\s{2,}', ' ', new_ps).strip(' ,;:-–—')
+            new_ps = re.sub(r'\b20xx\b', cur_year, ps, flags=re.I)
+            new_ps = re.sub(r'\bxxxx\b', cur_year, new_ps, flags=re.I)
             _add(ps, new_ps)
             continue
 
@@ -8349,10 +6140,7 @@ _QC_PLACEHOLDER_PATTERNS: List[Tuple[str, str]] = [
     (r'\bnom\s+pr[eé]nom\b',       'Nom Prénom name placeholder'),
     (r'\{\{\s*full_name\s*\}\}',   '{{ full_name }} Jinja token not replaced'),
     (r'\{\{\s*current_position\s*\}\}', '{{ current_position }} Jinja token not replaced'),
-    (r'\{\{\s*[\w.]+\s*\}\}',      'Unreplaced Jinja {{ }} token in output'),
-    (r'\{%\s*(?:tr\s+)?for\b[^%]*?%\}', 'Unreplaced Jinja {% for %} tag in output'),
-    (r'\{%\s*(?:tr\s+)?endfor\s*%\}',   'Unreplaced Jinja {% endfor %} tag in output'),
-    (r'\{%\s*endtr\s*%\}',              'Unreplaced Jinja {% endtr %} tag in output'),
+    (r'\{\{[a-z_]+\}\}',           'Unreplaced Jinja {{ }} token in output'),
 ]
 
 
@@ -8372,7 +6160,7 @@ def _quality_check(docx_path: str, employee: Dict[str, Any]) -> List[str]:
     all_parts: List[str] = []
     with zipfile.ZipFile(docx_path) as zf:
         for arc_name in zf.namelist():
-            if not _VISIBLE_WORD_PART_RE.match(arc_name.replace('\\', '/')):
+            if not arc_name.endswith('.xml'):
                 continue
             with zf.open(arc_name) as fh:
                 try:
@@ -8552,146 +6340,6 @@ def _fix_contact_separators(docx_path: str) -> int:
     return fixed
 
 
-def _fill_labeled_contact_placeholders(docx_path: str, employee: Dict[str, Any]) -> int:
-    """Fill dotted contact placeholders in label-prefixed paragraphs."""
-    phone = str(employee.get("phone") or "").strip()
-    email = str(employee.get("email") or "").strip()
-    linkedin = str(employee.get("linkedin") or "").strip()
-    address = str(employee.get("address") or "").strip()
-    if not any((phone, email, linkedin, address)):
-        return 0
-
-    try:
-        doc = Document(docx_path)
-    except Exception:
-        return 0
-
-    fixed = 0
-    dot_re = re.compile(r"[.…•·_]{4,}")
-    fill_rules: List[Tuple[re.Pattern[str], str]] = []
-    if phone:
-        fill_rules.append((re.compile(r"^\s*(?:t[ée]l(?:[ée]phone)?|tel|phone|mobile)\s*[:\-]\s*", re.I), phone))
-    if email:
-        fill_rules.append((re.compile(r"^\s*(?:e-?mail|courriel|email)\s*[:\-]\s*", re.I), email))
-    if linkedin:
-        fill_rules.append((re.compile(r"^\s*(?:linkedin)\s*[:\-]?\s*", re.I), linkedin))
-    if address:
-        fill_rules.append((re.compile(r"^\s*(?:adresse|address|location)\s*[:\-]\s*", re.I), address))
-
-    for para in doc.paragraphs:
-        text = para.text or ""
-        if not text.strip():
-            continue
-        for pattern, value in fill_rules:
-            m = pattern.match(text)
-            if not m:
-                continue
-            if value in text:
-                break
-            rhs = text[m.end():]
-            # Replace both dotted placeholders and stale hardcoded template values.
-            if not rhs.strip():
-                para.text = f"{text[:m.end()]}{value}"
-                fixed += 1
-                break
-            if dot_re.search(rhs) or rhs.strip() != value:
-                para.text = f"{text[:m.end()]}{value}"
-                fixed += 1
-                break
-            break
-
-    if fixed:
-        doc.save(docx_path)
-    return fixed
-
-
-def _fill_top_dotted_identity_placeholders(docx_path: str, employee: Dict[str, Any]) -> int:
-    """Fill top-of-document unlabeled dotted placeholders with identity fields.
-
-    Heuristic:
-    - Only inspect the first 20 body paragraphs.
-    - Only paragraphs made mostly of dots/placeholder glyphs.
-    - Fill in order: name, title, linkedin (when available).
-    """
-    name = str(employee.get("name") or "").strip()
-    title = str(employee.get("title") or employee.get("currentPosition") or "").strip()
-    linkedin = str(employee.get("linkedin") or "").strip()
-    values = [v for v in (name, title, linkedin) if v]
-    if not values:
-        return 0
-
-    try:
-        doc = Document(docx_path)
-    except Exception:
-        return 0
-
-    dot_line_re = re.compile(r"^[\s.…•·_]{4,}$")
-    changed = 0
-    vi = 0
-    max_scan = min(20, len(doc.paragraphs))
-    for i in range(max_scan):
-        if vi >= len(values):
-            break
-        p = doc.paragraphs[i]
-        txt = (p.text or "").strip()
-        if not txt:
-            continue
-        if dot_line_re.match(txt):
-            p.text = values[vi]
-            vi += 1
-            changed += 1
-
-    if changed:
-        doc.save(docx_path)
-    return changed
-
-
-def _cleanup_placeholder_noise(docx_path: str) -> int:
-    """Remove residual dotted/N-A placeholder artifacts in paragraphs and tables."""
-    try:
-        doc = Document(docx_path)
-    except Exception:
-        return 0
-
-    changed = 0
-    dot_re = re.compile(r"[.…•·_]{4,}")
-    na_re = re.compile(r"^\s*(?:N/?A|NA|n/?a)\s*$", re.I)
-
-    for para in doc.paragraphs:
-        text = para.text or ""
-        stripped = text.strip()
-        if not stripped:
-            continue
-        if na_re.match(stripped):
-            para.text = ""
-            changed += 1
-            continue
-        cleaned = dot_re.sub("", text).strip()
-        if cleaned != stripped and (not cleaned or len(cleaned) < len(stripped)):
-            para.text = cleaned
-            changed += 1
-
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                ctext = cell.text or ""
-                stripped = ctext.strip()
-                if not stripped:
-                    continue
-                if na_re.match(stripped):
-                    cell.text = ""
-                    changed += 1
-                    continue
-                cleaned = dot_re.sub("", ctext).strip()
-                if cleaned != stripped and (not cleaned or len(cleaned) < len(stripped)):
-                    cell.text = cleaned
-                    changed += 1
-
-    if changed:
-        doc.save(docx_path)
-    return changed
-
-
 # Template-specific residual strings that indicate the output still contains
 # Lucas Leblanc template data (used for logging only, does not abort).
 _LUCAS_RESIDUALS: List[Tuple[str, str]] = [
@@ -8721,17 +6369,7 @@ def _check_replacement_completeness(
     This function is informational only — it does not modify the document.
     """
     try:
-        paragraphs: List[str] = []
-        with zipfile.ZipFile(docx_path) as zf:
-            for arc_name in zf.namelist():
-                if not _VISIBLE_WORD_PART_RE.match(arc_name.replace('\\', '/')):
-                    continue
-                with zf.open(arc_name) as fh:
-                    try:
-                        xml_bytes = fh.read()
-                    except Exception:
-                        continue
-                paragraphs.extend(_get_paragraph_texts(xml_bytes))
+        _, paragraphs = _extract_all_text(docx_path)
         combined_text = '\n'.join(paragraphs)
     except Exception as exc:
         logger.warning(f"[completeness] Could not extract text: {exc}")
@@ -8762,295 +6400,6 @@ def _check_replacement_completeness(
                         f"[completeness] Lucas residual [{desc}]: '{text}' at para {i}: {p[:80]!r}"
                     )
                     break
-
-
-def _cleanup_unrendered_jinja_tags(docx_path: str) -> int:
-    """
-    Remove raw Jinja/docxtpl syntax left in the DOCX when running AI-only mode.
-
-    Clears control tags like ``{% tr for ... %}``, ``{% endfor %}``, ``{% endtr %}``
-    and variable tags like ``{{ exp.description }}`` across all ``word/*.xml`` parts.
-
-    Returns the number of paragraphs that were modified.
-    """
-    W = NS_W
-    A = NS_A
-    WP = f'{{{W}}}p'
-    WT = f'{{{W}}}t'
-    AP = f'{{{A}}}p'
-    AT = f'{{{A}}}t'
-    XML_SPACE = '{http://www.w3.org/XML/1998/namespace}space'
-
-    # Control-flow tags ({% ... %}) and variable tags ({{ ... }})
-    block_re = re.compile(r'\{%\s*[^%]*?%\}', re.IGNORECASE)
-    var_re = re.compile(r'\{\{\s*[^{}]+\s*\}\}')
-
-    temp_dir = tempfile.mkdtemp()
-    changed_count = 0
-    any_changed = False
-
-    try:
-        with zipfile.ZipFile(docx_path, 'r') as zf:
-            zf.extractall(temp_dir)
-
-        word_dir = os.path.join(temp_dir, 'word')
-        if not os.path.isdir(word_dir):
-            return 0
-
-        for xml_root, _dirs, xml_files in os.walk(word_dir):
-            for xml_name in xml_files:
-                if not xml_name.endswith('.xml'):
-                    continue
-                xml_path = os.path.join(xml_root, xml_name)
-                with open(xml_path, 'rb') as f:
-                    raw = f.read()
-                try:
-                    tree = etree.fromstring(raw)
-                except etree.XMLSyntaxError:
-                    continue
-
-                file_changed = False
-
-                def _clean_para(para_el: Any, t_tag: str) -> int:
-                    nonlocal file_changed
-                    t_elems = list(para_el.iter(t_tag))
-                    if not t_elems:
-                        return 0
-                    joined = ''.join(t.text or '' for t in t_elems)
-                    if not joined:
-                        return 0
-                    has_jinja = ('{{' in joined and '}}' in joined) or ('{%' in joined and '%}' in joined)
-                    if not has_jinja:
-                        return 0
-                    cleaned = block_re.sub('', joined)
-                    cleaned = var_re.sub('', cleaned)
-                    # Normalize obvious spacing artifacts after tag removal
-                    cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned)
-                    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
-                    if cleaned == joined:
-                        return 0
-                    cleaned = _xml_safe_text(cleaned)
-                    t_elems[0].text = cleaned
-                    if cleaned.startswith(' ') or cleaned.endswith(' '):
-                        t_elems[0].set(XML_SPACE, 'preserve')
-                    else:
-                        t_elems[0].set(XML_SPACE, 'preserve')
-                    for te in t_elems[1:]:
-                        te.text = ''
-                    file_changed = True
-                    return 1
-
-                file_mods = 0
-                for para in tree.iter(WP):
-                    file_mods += _clean_para(para, WT)
-                for para in tree.iter(AP):
-                    file_mods += _clean_para(para, AT)
-
-                if file_changed:
-                    changed_count += file_mods
-                    any_changed = True
-                    with open(xml_path, 'wb') as f:
-                        f.write(etree.tostring(
-                            tree, xml_declaration=True, encoding='UTF-8', standalone=True
-                        ))
-
-        if any_changed:
-            with zipfile.ZipFile(docx_path, 'w', zipfile.ZIP_DEFLATED) as zout:
-                for root_dir, _dirs, files in os.walk(temp_dir):
-                    for fname in files:
-                        fpath = os.path.join(root_dir, fname)
-                        zout.write(fpath, os.path.relpath(fpath, temp_dir))
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-
-    if changed_count:
-        logger.info(f"[jinja_cleanup] Cleared unrendered Jinja syntax in {changed_count} paragraph(s)")
-    return changed_count
-
-
-def _para_visible_text(p_elem: Any) -> str:
-    """Plain visible text in *p_elem*, ignoring text inside nested textboxes.
-
-    Body-level paragraphs that *contain* a textbox shape may also carry
-    surrounding plain runs; only those plain runs count as "this paragraph's
-    own text". Text inside `<w:txbxContent>` belongs to a child shape that we
-    inspect separately.
-    """
-    W = NS_W
-    WT = f'{{{W}}}t'
-    W_TXBX = f'{{{W}}}txbxContent'
-    out: List[str] = []
-    for t in p_elem.iter(WT):
-        if not t.text:
-            continue
-        anc = t.getparent()
-        in_txbx = False
-        while anc is not None and anc is not p_elem:
-            if anc.tag == W_TXBX:
-                in_txbx = True
-                break
-            anc = anc.getparent()
-        if not in_txbx:
-            out.append(t.text)
-    return ''.join(out).strip()
-
-
-def _prune_empty_sections(docx_path: str) -> int:
-    """Remove section headings whose body content has been emptied.
-
-    Runs after every replacement and cleanup pass. For each container
-    (``<w:body>``, every ``<w:tc>`` cell, every ``<w:txbxContent>`` shape),
-    walks the direct ``<w:p>`` children, identifies section headings via
-    ``_identify_section_lxml``, and inspects the paragraphs/tables that
-    follow each heading up to the next heading. When that range carries no
-    visible text (only blanks / drawings / Jinja remnants already cleared),
-    the heading **and** its body range are deleted so the layout collapses
-    cleanly with no orphan title.
-
-    Preserved as-is:
-      * Heading paragraphs that wrap a ``wps:txbx`` shape — those are layout
-        anchors and ``_identify_section_lxml`` already filters them out.
-      * Pure-drawing / pure-picture paragraphs (decoration borders, column
-        separators).
-      * Textbox-container paragraphs inside a body range (they hold sidebar
-        chrome that must survive the wipe).
-      * One empty ``<w:p>`` in any ``<w:tc>`` / ``<w:txbxContent>`` that
-        would otherwise become structurally empty (OOXML invariant).
-    """
-    W = NS_W
-    WP = f'{{{W}}}p'
-    WTBL = f'{{{W}}}tbl'
-    WTC = f'{{{W}}}tc'
-    W_TXBX_CONTENT = f'{{{W}}}txbxContent'
-    pruned = 0
-
-    temp_dir = tempfile.mkdtemp(prefix='cv_prune_')
-    try:
-        with zipfile.ZipFile(docx_path, 'r') as zf:
-            zf.extractall(temp_dir)
-
-        doc_xml_path = os.path.join(temp_dir, 'word', 'document.xml')
-        if not os.path.isfile(doc_xml_path):
-            return 0
-
-        with open(doc_xml_path, 'rb') as f:
-            raw = f.read()
-        try:
-            tree = etree.fromstring(raw)
-        except etree.XMLSyntaxError as exc:
-            logger.warning(f"[prune_empty_sections] Cannot parse document.xml: {exc}")
-            return 0
-
-        # Build the list of containers to walk. Body first (so removals there
-        # don't affect later cell/textbox traversal — we re-iterate live each time).
-        body = tree.find(f'{{{W}}}body')
-        containers: List[Tuple[str, Any, bool]] = []
-        if body is not None:
-            containers.append(('body', body, False))
-        for tc in tree.iter(WTC):
-            containers.append(('tc', tc, True))
-        for txbx in tree.iter(W_TXBX_CONTENT):
-            containers.append(('txbx', txbx, True))
-
-        for kind, container, must_keep_para in containers:
-            children = list(container)
-            heading_info: List[Tuple[int, str, Any]] = []
-            for c_idx, child in enumerate(children):
-                if child.tag != WP:
-                    continue
-                sec = _identify_section_lxml(child)
-                if sec:
-                    heading_info.append((c_idx, sec, child))
-
-            if not heading_info:
-                continue
-
-            to_remove: List[Any] = []
-            for h_pos, (c_idx, sec, h_elem) in enumerate(heading_info):
-                next_idx = (
-                    heading_info[h_pos + 1][0]
-                    if h_pos + 1 < len(heading_info)
-                    else len(children)
-                )
-                body_range = children[c_idx + 1: next_idx]
-
-                has_content = False
-                for elem in body_range:
-                    if elem.tag == WP:
-                        # Pure-drawing paragraphs are decoration, not content
-                        if _para_is_drawing_only(elem):
-                            continue
-                        # Textbox-container paragraphs hold child shapes whose
-                        # text is checked separately when we walk txbxContent
-                        # nodes, so don't count their inherited text here.
-                        if _para_is_textbox(elem):
-                            continue
-                        if _para_visible_text(elem):
-                            has_content = True
-                            break
-                    elif elem.tag == WTBL:
-                        tbl_text = ''.join(
-                            t.text or '' for t in elem.iter(f'{{{W}}}t')
-                        ).strip()
-                        if tbl_text:
-                            has_content = True
-                            break
-
-                if has_content:
-                    continue
-
-                # Empty section — remove the heading and any plain paragraphs in
-                # its body range. Pure-drawing / textbox-container paragraphs
-                # are layout chrome and stay untouched so the page geometry
-                # doesn't shift around the now-gone section.
-                to_remove.append(h_elem)
-                for elem in body_range:
-                    if elem.tag == WP and (
-                        _para_is_drawing_only(elem) or _para_is_textbox(elem)
-                    ):
-                        continue
-                    to_remove.append(elem)
-                pruned += 1
-                logger.info(
-                    f"[prune_empty_sections] {kind}: pruned empty section '{sec}' "
-                    f"(heading + {len(body_range)} body element(s))"
-                )
-
-            for elem in to_remove:
-                try:
-                    container.remove(elem)
-                except ValueError:
-                    pass
-
-            # OOXML requires <w:tc> and <w:txbxContent> to contain at least one
-            # <w:p> or <w:tbl>. If we just emptied them, drop in a placeholder
-            # paragraph so Word still opens the file cleanly.
-            if must_keep_para:
-                live_children = list(container)
-                if not any(c.tag in (WP, WTBL) for c in live_children):
-                    placeholder = etree.SubElement(container, WP)
-                    logger.debug(
-                        f"[prune_empty_sections] {kind}: inserted placeholder "
-                        f"<w:p> for OOXML validity"
-                    )
-                    # Avoid unused-var lint; placeholder lives in the tree now.
-                    _ = placeholder
-
-        if pruned:
-            with open(doc_xml_path, 'wb') as f:
-                f.write(etree.tostring(
-                    tree, xml_declaration=True, encoding='UTF-8', standalone=True,
-                ))
-            with zipfile.ZipFile(docx_path, 'w', zipfile.ZIP_DEFLATED) as zout:
-                for root_dir, _dirs, files in os.walk(temp_dir):
-                    for fname in files:
-                        fpath = os.path.join(root_dir, fname)
-                        zout.write(fpath, os.path.relpath(fpath, temp_dir))
-            logger.info(f"[prune_empty_sections] Pruned {pruned} empty section(s)")
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-
-    return pruned
 
 
 def _remove_orphan_paragraphs(docx_path: str) -> int:
@@ -9144,8 +6493,6 @@ def _generate_with_replacement(
     employee: Dict[str, Any],
     output_path: str,
     gen_ctx: Optional[GenerationContext] = None,
-    template_strategy: Optional[Dict[str, Any]] = None,
-    preferred_language: Optional[str] = None,
 ) -> str:
     """Replacement pipeline — single pass with full mapping.
 
@@ -9181,19 +6528,6 @@ def _generate_with_replacement(
             p.status = "failed"
             p.error = str(exc)
             logger.warning(f"SDT dissolution failed (non-fatal): {exc}")
-
-    strategy = template_strategy or _plan_template_execution(output_path)
-    with gen_ctx.phase("strategy_selection") as p:
-        p.details["strategy"] = strategy.get("strategy")
-        p.details["body_section_headings"] = strategy.get("body_section_headings")
-        p.details["textbox_section_headings"] = strategy.get("textbox_section_headings")
-        p.details["layout_table_detected"] = strategy.get("layout_table_detected")
-        p.details["positioned_textboxes"] = strategy.get("positioned_textboxes")
-        p.message = str(strategy.get("strategy") or "direct_text_replacement_only")
-        logger.info(
-            "Using template execution strategy: %s",
-            strategy.get("strategy") or "direct_text_replacement_only",
-        )
 
     # Phase 1: Extract template text
     # NOTE: extraction now uses output_path (SDTs dissolved) instead of
@@ -9242,7 +6576,7 @@ def _generate_with_replacement(
                     logger.info("[gen] GROQ_API_KEY not set — summary will use fallback")
                     summary = None
                 else:
-                    summary = _groq_generate_summary(employee, api_key, preferred_language)
+                    summary = _groq_generate_summary(employee, api_key)
                 if summary:
                     employee = dict(employee)
                     employee['summary'] = summary
@@ -9259,51 +6593,13 @@ def _generate_with_replacement(
         gen_ctx.skip_phase("summary_generation", "Employee already has a summary")
 
     # Phase 4: Build full replacement map
-    apilayer_pairs: List[Tuple[str, str]] = []
-    with gen_ctx.phase("apilayer_template_mapping") as p:
-        try:
-            if not settings.APILAYER_API_KEY:
-                p.status = "skipped"
-                p.message = "APILAYER_API_KEY not set"
-            else:
-                apilayer_pairs = _build_apilayer_template_pairs(output_path, employee)
-                p.details["pair_count"] = len(apilayer_pairs)
-                p.message = f"{len(apilayer_pairs)} APILayer pair(s)"
-                if apilayer_pairs:
-                    logger.info("APILayer template mapping contributed %d pair(s)", len(apilayer_pairs))
-        except Exception as exc:
-            p.status = "failed"
-            p.error = str(exc)
-            logger.warning(f"APILayer template mapping failed (non-fatal): {exc}")
-
     with gen_ctx.phase("build_replacement_map") as p:
         combined_pairs = _build_full_replacement_map(detected, template_data, employee)
-        if combined_pairs is None:
-            gen_ctx.warn("Replacement map builder returned None; falling back to an empty list")
-            combined_pairs = []
-        if apilayer_pairs:
-            existing_olds = {old for old, _ in combined_pairs}
-            combined_pairs = list(combined_pairs) + [
-                (old, new) for old, new in apilayer_pairs if old not in existing_olds
-            ]
-        jinja_scalar_pairs = _build_jinja_scalar_placeholder_pairs(paragraphs, employee)
-        if jinja_scalar_pairs:
-            existing_olds = {old for old, _ in combined_pairs}
-            combined_pairs = list(combined_pairs) + [
-                (old, new) for old, new in jinja_scalar_pairs if old not in existing_olds
-            ]
-        generic_pairs = _detect_generic_placeholders(paragraphs, employee)
-        if generic_pairs:
-            existing_olds = {old for old, _ in combined_pairs}
-            combined_pairs = list(combined_pairs) + [
-                (old, new) for old, new in generic_pairs if old not in existing_olds
-            ]
         # Sanitise all replacement values for XML safety
         combined_pairs = [
             (old, _xml_safe_text(str(new)) if new is not None else '')
             for old, new in combined_pairs
         ]
-        combined_pairs.sort(key=lambda x: len(x[0]), reverse=True)
         gen_ctx.replacements_attempted = len(combined_pairs)
         p.details["pair_count"] = len(combined_pairs)
         if gen_ctx.debug:
@@ -9315,12 +6611,7 @@ def _generate_with_replacement(
     # Phase 5: Groq AI pairs — supplement (fills any gap the structured map missed)
     with gen_ctx.phase("ai_supplement") as p:
         try:
-            ai_pairs, sections_to_clear = _ai_get_replacements(
-                full_text,
-                employee,
-                paragraphs,
-                preferred_language=preferred_language,
-            )
+            ai_pairs, sections_to_clear = _ai_get_replacements(full_text, employee, paragraphs)
         except Exception as exc:
             p.status = "failed"
             p.error = str(exc)
@@ -9347,51 +6638,33 @@ def _generate_with_replacement(
     #           detected while their text is still intact (before text replacement
     #           can blank them via the structured-data replacement map).
     sections_replaced = 0
-    if strategy.get("run_body_section_replacement", True):
-        with gen_ctx.phase("section_replacement") as p:
-            try:
-                sections_replaced = _replace_cv_sections(
-                    output_path,
-                    employee,
-                    preferred_language=preferred_language,
-                )
-                p.details["sections_replaced"] = sections_replaced
-                p.message = f"{sections_replaced} sections replaced"
-                if sections_replaced:
-                    logger.info(f"CV sections replaced: {sections_replaced}")
-            except Exception as exc:
-                p.status = "failed"
-                p.error = str(exc)
-                logger.warning(f"Section replacement failed (non-fatal): {exc}")
-    else:
-        gen_ctx.skip_phase(
-            "section_replacement",
-            f"Strategy {strategy.get('strategy')} skips body-section replacement",
-        )
+    with gen_ctx.phase("section_replacement") as p:
+        try:
+            sections_replaced = _replace_cv_sections(output_path, employee)
+            p.details["sections_replaced"] = sections_replaced
+            p.message = f"{sections_replaced} sections replaced"
+            if sections_replaced:
+                logger.info(f"CV sections replaced: {sections_replaced}")
+        except Exception as exc:
+            p.status = "failed"
+            p.error = str(exc)
+            logger.warning(f"Section replacement failed (non-fatal): {exc}")
 
     # Phase 6b: Replace sections inside textbox shapes
     txbx_extra_pairs: List[Tuple[str, str]] = []
-    if strategy.get("run_textbox_section_replacement", True):
-        with gen_ctx.phase("textbox_section_replacement") as p:
-            try:
-                txbx_replaced, txbx_extra_pairs = _replace_cv_sections_in_textboxes(
-                    output_path, employee,
-                    body_sections_replaced=sections_replaced,
-                    preferred_language=preferred_language,
-                )
-                p.details["txbx_replaced"] = txbx_replaced
-                p.message = f"{txbx_replaced} textbox sections replaced"
-                if txbx_replaced:
-                    logger.info(f"Textbox sections replaced: {txbx_replaced}")
-            except Exception as exc:
-                p.status = "failed"
-                p.error = str(exc)
-                logger.warning(f"Textbox section replacement failed (non-fatal): {exc}")
-    else:
-        gen_ctx.skip_phase(
-            "textbox_section_replacement",
-            f"Strategy {strategy.get('strategy')} skips textbox-section replacement",
-        )
+    with gen_ctx.phase("textbox_section_replacement") as p:
+        try:
+            txbx_replaced, txbx_extra_pairs = _replace_cv_sections_in_textboxes(
+                output_path, employee, body_sections_replaced=sections_replaced
+            )
+            p.details["txbx_replaced"] = txbx_replaced
+            p.message = f"{txbx_replaced} textbox sections replaced"
+            if txbx_replaced:
+                logger.info(f"Textbox sections replaced: {txbx_replaced}")
+        except Exception as exc:
+            p.status = "failed"
+            p.error = str(exc)
+            logger.warning(f"Textbox section replacement failed (non-fatal): {exc}")
 
     # Phase 6c: Clear sections with no employee data (AI-identified)
     if sections_to_clear:
@@ -9425,86 +6698,6 @@ def _generate_with_replacement(
         p.details["paragraphs_modified"] = count
         p.message = f"{count} paragraph(s) modified"
         logger.info(f"Replacements applied: {count} paragraph(s) modified")
-
-    # Phase 6e: AI-only hardening — remove any raw Jinja/docxtpl syntax that
-    # could remain visible when templates were originally authored for docxtpl.
-    with gen_ctx.phase("jinja_cleanup") as p:
-        try:
-            cleaned = _cleanup_unrendered_jinja_tags(output_path)
-            p.details["paragraphs_cleaned"] = cleaned
-            p.message = f"{cleaned} paragraph(s) cleaned"
-        except Exception as exc:
-            p.status = "failed"
-            p.error = str(exc)
-            logger.warning(f"Jinja cleanup failed (non-fatal): {exc}")
-
-    # Phase 6f: deterministic cleanup for visible residual placeholders.
-    with gen_ctx.phase("final_cleanup") as p:
-        try:
-            _final_quality_control_cleanup(output_path)
-            p.message = "Visible placeholder cleanup applied"
-        except Exception as exc:
-            p.status = "failed"
-            p.error = str(exc)
-            logger.warning(f"Final cleanup failed (non-fatal): {exc}")
-
-    # Phase 6f2: Prune sections whose body has been emptied so we never leave
-    # an orphan heading behind. Runs after every replacement / cleanup pass
-    # has had a chance to write its data, so the only sections still empty
-    # at this point are the ones that genuinely have no employee data.
-    with gen_ctx.phase("empty_section_prune") as p:
-        try:
-            pruned_sections = _prune_empty_sections(output_path)
-            p.details["sections_pruned"] = pruned_sections
-            p.message = f"{pruned_sections} empty section(s) pruned"
-        except Exception as exc:
-            p.status = "failed"
-            p.error = str(exc)
-            logger.warning(f"Empty section prune failed (non-fatal): {exc}")
-
-    # Phase 6g: Remove empty orphan paragraphs created by cleanup/replacement.
-    with gen_ctx.phase("orphan_cleanup") as p:
-        try:
-            removed = _remove_orphan_paragraphs(output_path)
-            p.details["removed"] = removed
-            p.message = f"{removed} orphan paragraph(s) removed"
-        except Exception as exc:
-            p.status = "failed"
-            p.error = str(exc)
-            logger.warning(f"Orphan cleanup failed (non-fatal): {exc}")
-
-    # Phase 6h: Repair contact line separators when email/address got concatenated.
-    with gen_ctx.phase("contact_placeholder_fill") as p:
-        try:
-            filled = _fill_labeled_contact_placeholders(output_path, employee)
-            top_filled = _fill_top_dotted_identity_placeholders(output_path, employee)
-            p.details["filled"] = filled
-            p.details["top_identity_filled"] = top_filled
-            p.message = f"{filled + top_filled} contact/identity placeholder(s) filled"
-        except Exception as exc:
-            p.status = "failed"
-            p.error = str(exc)
-            logger.warning(f"Contact placeholder fill failed (non-fatal): {exc}")
-
-    with gen_ctx.phase("contact_separator_fix") as p:
-        try:
-            fixed = _fix_contact_separators(output_path)
-            p.details["fixed"] = fixed
-            p.message = f"{fixed} contact paragraph(s) fixed"
-        except Exception as exc:
-            p.status = "failed"
-            p.error = str(exc)
-            logger.warning(f"Contact separator fix failed (non-fatal): {exc}")
-
-    with gen_ctx.phase("placeholder_noise_cleanup") as p:
-        try:
-            cleaned = _cleanup_placeholder_noise(output_path)
-            p.details["cleaned"] = cleaned
-            p.message = f"{cleaned} placeholder artifact(s) cleaned"
-        except Exception as exc:
-            p.status = "failed"
-            p.error = str(exc)
-            logger.warning(f"Placeholder noise cleanup failed (non-fatal): {exc}")
 
     # Snapshot textbox positions BEFORE resize for the reflow phase.
     # This lets reflow distinguish resize-caused overlap from intentional overlap.
@@ -9584,41 +6777,21 @@ def _find_libreoffice() -> Optional[str]:
 
 
 def convert_docx_to_pdf(docx_path: str, output_path: Optional[str] = None) -> Optional[str]:
-    """Convert DOCX to PDF using LibreOffice.
-
-    Uses a per-call temporary UserInstallation directory so that multiple
-    concurrent conversions don't fight over the same LibreOffice profile and
-    crash each other.  --norestore and --nofirststartwizard prevent interactive
-    dialogs that would hang the process in headless mode.
-    """
+    """Convert DOCX to PDF using LibreOffice."""
     soffice = _find_libreoffice()
     if not soffice:
-        logger.warning("LibreOffice not found — PDF conversion unavailable")
+        logger.warning("LibreOffice not found")
         return None
-
+    
     output_dir = os.path.dirname(output_path or docx_path) or "."
     os.makedirs(output_dir, exist_ok=True)
-
-    user_profile = tempfile.mkdtemp(prefix="lo_profile_")
+    
     try:
-        # LibreOffice UserInstallation URI must use forward slashes.
-        profile_uri = "file:///" + user_profile.replace("\\", "/")
         result = subprocess.run(
-            [
-                soffice,
-                "--headless",
-                "--norestore",
-                "--nofirststartwizard",
-                f"-env:UserInstallation={profile_uri}",
-                "--convert-to", "pdf",
-                "--outdir", output_dir,
-                docx_path,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=120,
+            [soffice, "--headless", "--convert-to", "pdf", "--outdir", output_dir, docx_path],
+            capture_output=True, text=True, timeout=120
         )
-
+        
         if result.returncode == 0:
             pdf_name = os.path.splitext(os.path.basename(docx_path))[0] + ".pdf"
             pdf_path = os.path.join(output_dir, pdf_name)
@@ -9627,13 +6800,9 @@ def convert_docx_to_pdf(docx_path: str, output_path: Optional[str] = None) -> Op
                     shutil.move(pdf_path, output_path)
                     return output_path
                 return pdf_path
-        else:
-            logger.warning("LibreOffice exited %d. stderr: %s", result.returncode, result.stderr[:500])
-    except Exception as exc:
-        logger.error("PDF conversion failed: %s", exc)
-    finally:
-        shutil.rmtree(user_profile, ignore_errors=True)
-
+    except Exception as e:
+        logger.error(f"PDF conversion failed: {e}")
+    
     return None
 
 
@@ -9642,62 +6811,44 @@ def convert_docx_to_pdf(docx_path: str, output_path: Optional[str] = None) -> Op
 # ===========================================================================
 
 def _replace_photo(docx_path: str, photo_path: str) -> bool:
-    """Replace the largest image in the DOCX with the employee photo.
-
-    Repacks atomically: writes to a temp file first then renames over the
-    original so a mid-write crash cannot corrupt the DOCX.
-    """
+    """Replace the largest image with employee photo."""
     if not photo_path or not os.path.exists(photo_path):
         return False
-
-    temp_dir = tempfile.mkdtemp(prefix="cv_photo_")
-    tmp_out: Optional[str] = None
+    
+    temp_dir = tempfile.mkdtemp()
     try:
         with zipfile.ZipFile(docx_path, 'r') as zf:
             zf.extractall(temp_dir)
-
+        
         media_dir = os.path.join(temp_dir, 'word', 'media')
         if not os.path.exists(media_dir):
             return False
-
-        images = [
-            f for f in os.listdir(media_dir)
-            if f.lower().endswith(('.png', '.jpg', '.jpeg'))
-        ]
+        
+        images = [f for f in os.listdir(media_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
         if not images:
             return False
-
+        
+        # Find largest image
         largest = max(images, key=lambda f: os.path.getsize(os.path.join(media_dir, f)))
         target = os.path.join(media_dir, largest)
-
+        
         with Image.open(target) as orig:
             size = orig.size
-
+        
         with Image.open(photo_path) as new_img:
-            resized = new_img.convert('RGB').resize(size, Image.LANCZOS)
+            new_img = new_img.convert('RGB').resize(size, Image.LANCZOS)
             ext = os.path.splitext(largest)[1].lower()
-            fmt = 'JPEG' if ext in ('.jpg', '.jpeg') else 'PNG'
-            resized.save(target, fmt, quality=95)
-
-        # Write to a temp file alongside the original, then rename atomically.
-        doc_dir = os.path.dirname(os.path.abspath(docx_path))
-        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False, dir=doc_dir) as tmp_f:
-            tmp_out = tmp_f.name
-        with zipfile.ZipFile(tmp_out, 'w', zipfile.ZIP_DEFLATED) as zout:
-            for root, _dirs, files in os.walk(temp_dir):
+            new_img.save(target, 'JPEG' if ext in ('.jpg', '.jpeg') else 'PNG', quality=95)
+        
+        with zipfile.ZipFile(docx_path, 'w', zipfile.ZIP_DEFLATED) as zout:
+            for root, dirs, files in os.walk(temp_dir):
                 for file in files:
                     fp = os.path.join(root, file)
                     zout.write(fp, os.path.relpath(fp, temp_dir))
-        os.replace(tmp_out, docx_path)
-        tmp_out = None  # ownership transferred
+        
         return True
-    except Exception as exc:
-        logger.warning("Photo replacement failed: %s", exc)
-        return False
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
-        if tmp_out and os.path.exists(tmp_out):
-            os.unlink(tmp_out)
 
 
 # ===========================================================================
@@ -9914,74 +7065,16 @@ def cleanEmployeeData(employee: Dict[str, Any]) -> Dict[str, Any]:
     return cleaned
 
 
-def _normalize_employee_payload_aliases(employee: Dict[str, Any]) -> Dict[str, Any]:
-    """Normalize common backend/raw payload aliases for fallback generation.
-
-    Keeps this engine resilient whether caller sends the flattened fallback
-    payload or the richer raw profile object.
-    """
-    normalized = dict(employee or {})
-
-    if not normalized.get("name"):
-        first = str(normalized.get("firstName") or normalized.get("first_name") or "").strip()
-        last = str(normalized.get("lastName") or normalized.get("last_name") or "").strip()
-        if first or last:
-            normalized["name"] = f"{first} {last}".strip()
-
-    if not normalized.get("title"):
-        normalized["title"] = (
-            normalized.get("currentPosition")
-            or normalized.get("current_position")
-            or normalized.get("jobTitle")
-            or ""
-        )
-
-    if not normalized.get("summary"):
-        normalized["summary"] = (
-            normalized.get("professionalSummary")
-            or normalized.get("professional_summary")
-            or ""
-        )
-
-    if not normalized.get("linkedin"):
-        normalized["linkedin"] = (
-            normalized.get("linkedinUrl")
-            or normalized.get("linkedin_url")
-            or normalized.get("linkedIn")
-            or ""
-        )
-
-    if not isinstance(normalized.get("experience"), list):
-        for k in ("workExperiences", "work_experiences", "experiences", "parcours"):
-            if isinstance(normalized.get(k), list):
-                normalized["experience"] = normalized.get(k)
-                break
-    if not isinstance(normalized.get("education"), list):
-        for k in ("educations", "formations", "degrees", "etudes"):
-            if isinstance(normalized.get(k), list):
-                normalized["education"] = normalized.get(k)
-                break
-    if not isinstance(normalized.get("projects"), list):
-        for k in ("projectList", "project_list"):
-            if isinstance(normalized.get(k), list):
-                normalized["projects"] = normalized.get(k)
-                break
-
-    return normalized
-
-
 def process_cv(
     template_path: str,
     employee_data: Dict[str, Any],
     output_dir: str,
     output_pdf: bool = False,
     debug: bool = False,
-    language: str = "original",
-    out_warnings: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """
     Process a CV template and replace personal information with employee data.
-
+    
     Works with ANY DOCX template - no placeholders required.
     Handles complex layouts with textboxes, shapes, tables, etc.
 
@@ -9991,8 +7084,6 @@ def process_cv(
         output_dir: Directory for the generated output.
         output_pdf: If True, also convert to PDF and return the PDF path.
         debug: If True, write a JSON trace file alongside the output.
-        out_warnings: Optional mutable list; engine warnings are appended here
-                      so callers can surface them to the HTTP response.
 
     Returns:
         Path to the generated DOCX (or PDF if output_pdf=True).
@@ -10018,9 +7109,7 @@ def process_cv(
 
     # Step 0: Validate and sanitise all employee fields using the schema
     with ctx.phase("input_validation") as p:
-        employee_data = _normalize_employee_payload_aliases(employee_data)
         employee_data, validation_report = validate_employee_data(employee_data)
-        employee_data = _normalize_employee_payload_aliases(employee_data)
         validation_report.log_all()
         ctx.validation_warnings = validation_report.warnings
         p.details["fields_defaulted"] = validation_report.fields_defaulted
@@ -10030,15 +7119,6 @@ def process_cv(
             f"{validation_report.valid_field_count}/"
             f"{validation_report.original_field_count} fields valid"
         )
-    preferred_language = _resolve_generation_language(template_path, language)
-    logger.info(f"Target language hint: {preferred_language}")
-    employee_data = _normalize_employee_language_for_generation(
-        employee_data,
-        preferred_language,
-    )
-    # Translation/normalization helpers may reshape keys; re-apply aliases so
-    # downstream section builders always see canonical lists.
-    employee_data = _normalize_employee_payload_aliases(employee_data)
     
     os.makedirs(output_dir, exist_ok=True)
     
@@ -10073,72 +7153,24 @@ def process_cv(
     output_path = os.path.join(output_dir, f"{name}_CV.docx")
     ctx.output_path = output_path
     
-    template_plan = _plan_template_execution(template_path)
-    template_mode = template_plan["template_mode"]
-    use_placeholder_mode = bool(template_plan.get("use_fast_placeholder_render"))
-    logger.info(
-        "Template execution strategy: %s (body=%s, textbox=%s, layout_table=%s, positioned_txbx=%s)",
-        template_plan.get("strategy"),
-        template_plan.get("body_section_headings"),
-        template_plan.get("textbox_section_headings"),
-        template_plan.get("layout_table_detected"),
-        template_plan.get("positioned_textboxes"),
-    )
-    if template_mode == "placeholder" and not use_placeholder_mode:
-        logger.info(
-            "Template uses advanced docxtpl structural tags; falling back to direct pipeline"
-        )
-    ctx.mode = "placeholder" if use_placeholder_mode else "ai_only"
-
+    # Detect mode and generate — check for Jinja2 placeholders without
+    # a full extraction (just scan the raw XML bytes for {{ patterns)
+    mode = _detect_template_mode(template_path)
+    ctx.mode = mode
+    
     try:
-        if use_placeholder_mode:
-            try:
-                with ctx.phase("placeholder_render") as p:
-                    _render_placeholder_template(template_path, employee_data, output_path)
-                    p.message = "Rendered via docxtpl placeholder mode"
-
-                # Placeholder templates can still overflow in textbox-heavy layouts
-                # after values expand; run the same geometry safety passes.
-                pre_resize_positions = _snapshot_textbox_positions(output_path)
-                with ctx.phase("textbox_resize") as p:
-                    resized = _resize_textboxes(output_path)
-                    p.details["resized"] = resized
-                    p.message = f"{resized} textboxes resized"
-                with ctx.phase("textbox_reflow") as p:
-                    reflowed = _reflow_contact_textboxes(output_path, pre_resize_positions)
-                    p.details["reflowed"] = reflowed
-                    p.message = f"{reflowed} textboxes reflowed"
-            except TemplateError as exc:
-                logger.warning(
-                    "Placeholder render failed (%s); retrying with direct pipeline",
-                    exc,
-                )
-                ctx.mode = "ai_only"
-                _generate_with_replacement(
-                    template_path,
-                    employee_data,
-                    output_path,
-                    ctx,
-                    template_strategy=template_plan,
-                    preferred_language=preferred_language,
-                )
+        if mode == "placeholder":
+            _generate_with_placeholders(template_path, employee_data, output_path, ctx)
         else:
-            _generate_with_replacement(
-                template_path,
-                employee_data,
-                output_path,
-                ctx,
-                template_strategy=template_plan,
-                preferred_language=preferred_language,
-            )
+            _generate_with_replacement(template_path, employee_data, output_path, ctx)
     except CVGenerationError:
         ctx.save_trace()
         raise
     except Exception as exc:
-        logger.error(f"CV generation failed: {exc}", exc_info=True)
+        logger.error(f"CV generation failed in {mode} mode: {exc}", exc_info=True)
         ctx.save_trace()
         raise CVRenderError(
-            f"CV generation failed: {exc}", cause=exc
+            f"CV generation failed ({mode} mode): {exc}", cause=exc
         ) from exc
 
     # Verify output was actually created and is a valid DOCX
@@ -10199,13 +7231,4 @@ def process_cv(
     ctx.save_trace()
     logger.info(f"=== CV Generation Complete: {output_path} ===")
     logger.info(ctx.get_summary())
-
-    # Surface engine-level warnings to caller so they can be forwarded
-    # through the API response headers (X-CV-Warnings).
-    if out_warnings is not None:
-        for w in (ctx.validation_warnings or []):
-            out_warnings.append({"code": "validation", "severity": "info", "message": str(w)})
-        for issue in (ctx.quality_issues or []):
-            out_warnings.append({"code": "quality", "severity": "warning", "message": str(issue)})
-
     return output_path

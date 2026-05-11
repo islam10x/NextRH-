@@ -72,16 +72,13 @@ export const bidService = {
     employeeId: string,
     templateFile: File,
     format: 'docx' | 'pdf' = 'docx',
-    language: 'en' | 'fr' | 'original' = 'original',
-    engine: 'primary' | 'fallback' = 'fallback',
-    options?: { signal?: AbortSignal },
-  ): Promise<{ blob: Blob; warnings: CvWarning[] }> {
+    engine: 'primary' | 'fallback' = 'primary',
+  ): Promise<Blob> {
     const formData = new FormData();
     formData.append('template', templateFile);
     formData.append('employeeId', employeeId);
 
-    const params = new URLSearchParams({ format, language, engine });
-    const res = await api.post(`/cv/generate?${params.toString()}`, formData, {
+    const res = await api.post(`/cv/generate?format=${format}&engine=${engine}`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
       responseType: 'blob',
       signal: options?.signal,
@@ -202,9 +199,10 @@ export const bidService = {
     templateEmployeeId: string,
     targetEmployeeId: string,
     format: 'docx' | 'pdf' = 'docx',
+    engine: 'primary' | 'fallback' = 'primary',
   ): Promise<Blob> {
     const res = await api.post(
-      `/cv/generate-from-stored?format=${format}`,
+      `/cv/generate-from-stored?format=${format}&engine=${engine}`,
       { templateEmployeeId, targetEmployeeId },
       { responseType: 'blob' },
     );

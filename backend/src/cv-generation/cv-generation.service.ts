@@ -1,10 +1,4 @@
-import {
-    BadRequestException,
-    Injectable,
-    Logger,
-    NotFoundException,
-    ServiceUnavailableException,
-} from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { GeneratedCv } from './entities/generated-cv.entity';
@@ -91,7 +85,6 @@ export class CvGenerationService {
             translate,
             filename_prefix: filenamePrefix,
             profile: profilePayload,
-            engine: dto.engine || 'primary',
         };
 
         // Use cached field mapping when available (skips re-analysis).
@@ -161,7 +154,6 @@ export class CvGenerationService {
     async getGeneratedFile(generatedId: string, format: 'docx' | 'pdf') {
         const record = await this.generatedRepo.findOne({
             where: { generated_cv_id: generatedId },
-            relations: ['profile', 'profile.user', 'template'],
         });
         if (!record) {
             throw new NotFoundException('Generated CV not found');
@@ -171,19 +163,9 @@ export class CvGenerationService {
             throw new NotFoundException(`No ${format.toUpperCase()} file available`);
         }
         const absPath = this.resolveAbsolutePath(filePath);
-        // Build a meaningful filename: Name_Template_YYYY-MM-DD.pdf
-        const safe = (value: string) => String(value || '').trim().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_\-]/g, '');
-        const date = record.generatedAt ? record.generatedAt.toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
-        const user = record.profile?.user;
-        const name = user
-            ? [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || 'CV'
-            : 'CV';
-        const templateName = record.template && record.template.templateName ? record.template.templateName : 'Template';
-        const ext = format === 'pdf' ? 'pdf' : 'docx';
-        const filename = `${safe(name)}_${safe(templateName)}_${date}.${ext}`;
         return {
             path: absPath,
-            filename,
+            filename: path.basename(absPath),
             mime:
                 format === 'pdf'
                     ? 'application/pdf'
@@ -217,44 +199,22 @@ export class CvGenerationService {
         const timeoutMs = 120_000; // 2 minutes
         const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
         try {
-            const call = async (targetUrl: string) => {
-                const response = await fetch(targetUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
-                    signal: controller.signal,
-                });
-                if (!response.ok) {
-                    const body = await response.text().catch(() => '');
-                    this.logger.error(`AI generation failed: ${response.status} ${response.statusText} ${body}`);
-                    throw new BadRequestException('AI service failed to generate CV');
-                }
-                return (await response.json()) as AiGenerateResponse;
-            };
-
-            try {
-                return await call(url);
-            } catch (error: any) {
-                const isNetworkError = error instanceof TypeError || error?.message === 'fetch failed';
-                const canRetryIpv4 = /:\/\/localhost(?::|\/|$)/i.test(url);
-                if (!isNetworkError || !canRetryIpv4) {
-                    throw error;
-                }
-
-                const ipv4Url = url.replace('://localhost', '://127.0.0.1');
-                this.logger.warn(`AI service fetch failed for ${url}; retrying once via ${ipv4Url}`);
-                return await call(ipv4Url);
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                signal: controller.signal,
+            });
+            if (!response.ok) {
+                const body = await response.text().catch(() => '');
+                this.logger.error(`AI generation failed: ${response.status} ${response.statusText} ${body}`);
+                throw new BadRequestException('AI service failed to generate CV');
             }
+            return (await response.json()) as AiGenerateResponse;
         } catch (error) {
             if (error instanceof DOMException && error.name === 'AbortError') {
                 this.logger.error(`AI service call timed out after ${timeoutMs / 1000}s`);
                 throw new BadRequestException('CV generation timed out. Please try again.');
-            }
-            if (error instanceof TypeError) {
-                this.logger.error(`AI service unreachable at ${url}: ${error.message}`);
-                throw new ServiceUnavailableException(
-                    `AI service unreachable at ${url}. Ensure ai-service is running and AI_SERVICE_URL is correct.`,
-                );
             }
             throw error;
         } finally {

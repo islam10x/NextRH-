@@ -1,4 +1,4 @@
-import { IsArray, IsBoolean, IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsArray, IsBoolean, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 export class GenerateCvDto {
     @IsUUID()
@@ -8,8 +8,9 @@ export class GenerateCvDto {
     templateId: string;
 
     @IsOptional()
-    @IsIn(['en', 'fr'])
-    language?: 'en' | 'fr';
+    @IsString()
+    @MaxLength(10)
+    language?: string;
 
     @IsOptional()
     @IsBoolean()
@@ -23,8 +24,4 @@ export class GenerateCvDto {
     @IsString()
     @MaxLength(100)
     generationPurpose?: string;
-
-    @IsOptional()
-    @IsIn(['primary', 'fallback'])
-    engine?: 'primary' | 'fallback';
 }

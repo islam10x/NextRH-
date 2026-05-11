@@ -98,10 +98,11 @@ export class RagService {
             const elapsedMs = Date.now() - startedAt;
             const context = Array.isArray(payload?.context) ? payload.context : [];
             const results = this.buildResults(context, message);
+            const groundedAnswer = this.buildGroundedAnswer(message, context, results, payload?.answer);
             const extractedEntities = this.extractEntities(context);
             const resultCount = this.resolveResultCount(context, extractedEntities, results);
             await this.safeLogQuery(userId, message, extractedEntities, resultCount, elapsedMs);
-            return { ...payload, results };
+            return { ...payload, answer: groundedAnswer, results };
         } catch (error) {
             this.logger.error(`Error in RAG chat: ${error.message}`);
             const elapsedMs = Date.now() - startedAt;

@@ -78,6 +78,8 @@ class TemplateCVParser:
                 data["certifications"] = docx_data["certifications"]
             if docx_data.get("education"):
                 data["education"] = docx_data["education"]
+            if docx_data.get("projects"):
+                data["projects"] = docx_data["projects"]
 
         return data
 
@@ -128,17 +130,16 @@ class TemplateCVParser:
                 if not paragraph_text:
                     continue
 
-                _canon = _classify_section_heading(paragraph_text)
-                if _canon == "experience":
+                norm = self._normalize_for_match(paragraph_text)
+                if "experience professionnelle" in norm:
                     current_section = "experience"
-                elif _canon == "certifications":
+                elif re.search(r"\bcertification(s)?\b|\bcertificat(s)?\b", norm):
                     current_section = "certifications"
-                elif _canon == "education":
+                elif "formation academique" in norm or norm in {"education", "formation", "formations"}:
                     current_section = "education"
-                elif _canon == "projects":
+                elif "experience academique" in norm or re.search(r"\bprojects?\b|\bprojets?\b", norm):
                     current_section = "projects"
-                elif _canon is not None:
-                    # skills / summary / contact / languages etc. — no table entries here
+                elif re.search(r"\bskills?\b|\bcompetence(s)?\b", norm):
                     current_section = ""
                 continue
 

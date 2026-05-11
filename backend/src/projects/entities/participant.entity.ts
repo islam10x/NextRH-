@@ -23,13 +23,8 @@ export class ProjectParticipant {
   @Column({ name: 'assigned_by', type: 'uuid', nullable: true })
   assignedBy: string | null;
 
-  @Column({
-    name: 'assignment_type',
-    type: 'enum',
-    enum: ['internal', 'external'],
-    default: 'internal',
-  })
-  assignmentType: ParticipantAssignmentType;
+    @Column({ type: 'text', nullable: true })
+    role: string;
 
   @Column({ name: 'home_manager_id', type: 'uuid', nullable: true })
   homeManagerId: string | null;

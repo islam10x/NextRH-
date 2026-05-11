@@ -858,9 +858,10 @@ def _build_grounding_blob(structured_facts_blob: str, docs: list[LCDocument]) ->
 
 
 def _is_answer_grounded(answer: str, structured_facts_blob: str, docs: list[LCDocument]) -> bool:
-    """Last-resort safety net: only blocks answers that share ZERO tokens with
-    the evidence. This catches pure hallucinations (made-up people/companies)
-    without interfering with reasoning or paraphrased answers from real data."""
+    """Safety net against hallucination. Short answers need minimal grounding,
+    but long essays must have proportional overlap with the evidence to pass.
+    This catches the case where the LLM generates a long Wikipedia-style essay
+    from its training data instead of using the provided StructuredFacts."""
     normalized_answer = _normalize_for_match(answer)
     if not normalized_answer:
         return False
@@ -869,23 +870,33 @@ def _is_answer_grounded(answer: str, structured_facts_blob: str, docs: list[LCDo
     if "timed out" in normalized_answer:
         return True
     if "i don" in normalized_answer or "don t have" in normalized_answer:
-        # LLM explicitly saying it doesn't know — always valid.
         return True
 
     answer_tokens = _signal_tokens(normalized_answer)
     if not answer_tokens:
-        # Very short generic answer — pass through.
         return True
 
     evidence_blob = _build_grounding_blob(structured_facts_blob, docs)
     if not evidence_blob:
-        # No evidence to compare against — can't verify, let through.
         return True
 
     matched = [token for token in answer_tokens if _contains_word(evidence_blob, token)]
-    # Only reject if ZERO overlap — a real answer will always reference at
-    # least one name, certification, company, or skill from the data.
-    return len(matched) > 0
+    if not matched:
+        return False
+
+    coverage = len(matched) / len(answer_tokens)
+    num_tokens = len(answer_tokens)
+
+    # Scale threshold with answer length:
+    # - Short (1-8): 1 match is enough (direct factual answers)
+    # - Medium (9-20): 15% coverage (reasoning with some paraphrasing)
+    # - Long (21+): 20% coverage (catches hallucinated essays from training data
+    #   that coincidentally share a name/word with the evidence)
+    if num_tokens <= 8:
+        return True
+    if num_tokens <= 20:
+        return coverage >= 0.15
+    return coverage >= 0.20
 
 
 def build_chain():
@@ -1309,99 +1320,6 @@ Rules:
         except Exception:
             return fallback_query, fallback_queries[:3]
 
-    llm_first_evidence_selector_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """Select explicit evidence rows that directly support answering the query.
-Return strict JSON only:
-{"query_type":"category_filter|listing|other","selected_evidence_ids":["E1","E2"],"notes":"..."}
-Rules:
-- Use only ids from EvidenceCatalog.
-- Set query_type=category_filter when the user asks membership/filter/category/comparison across people
-  (examples: who has worked for banks, healthcare organizations, telecom, cybersecurity).
-- For category_filter, be conservative: select only rows with direct lexical evidence for the target category.
-- Do not infer category from unrelated organizations; if uncertain, select no rows.
-- Set query_type=listing when the user asks to list, enumerate, or summarize all employees or the workforce
-  (examples: who are the employees, list all employees, how many employees do we have, show me the team).
-  For listing queries, set selected_evidence_ids=[].
-- For non-category, non-listing queries, set query_type=other and selected_evidence_ids=[].""",
-            ),
-            ("human", "StandaloneQuery:\n{standalone_query}\n\nEvidenceCatalog:\n{evidence_catalog}"),
-        ]
-    )
-
-    def _select_llm_first_evidence(standalone_query: str, docs: list[LCDocument]) -> dict[str, object]:
-        fallback = {
-            "query_type": "other",
-            "selected_rows": [],
-            "notes": "",
-        }
-        candidates = _build_evidence_rows(docs)
-        if not candidates:
-            return fallback
-
-        catalog_lines: list[str] = []
-        for row in candidates:
-            text = str(row.get("evidence_text") or "")
-            if len(text) > 220:
-                text = f"{text[:220]}..."
-            catalog_lines.append(
-                " | ".join(
-                    [
-                        str(row.get("id") or ""),
-                        f"employee={row.get('employee_name') or ''}",
-                        f"type={row.get('evidence_type') or ''}",
-                        f"entity={row.get('entity') or ''}",
-                        f"text={text}",
-                    ]
-                )
-            )
-        evidence_catalog = "\n".join(catalog_lines)
-        id_to_row = {str(row.get("id") or ""): row for row in candidates}
-
-        try:
-            messages = llm_first_evidence_selector_prompt.format_messages(
-                standalone_query=standalone_query,
-                evidence_catalog=evidence_catalog,
-            )
-            raw = llm.invoke(messages)
-            obj = parse_json_object(str(getattr(raw, "content", "") or "").strip()) or {}
-            query_type = str(obj.get("query_type") or "other").strip().lower()
-            if query_type not in {"category_filter", "listing", "other"}:
-                query_type = "other"
-
-            selected_ids_raw = obj.get("selected_evidence_ids")
-            selected_ids: list[str] = []
-            if isinstance(selected_ids_raw, list):
-                for item in selected_ids_raw:
-                    row_id = str(item or "").strip().upper()
-                    if row_id in id_to_row:
-                        selected_ids.append(row_id)
-            selected_ids = _dedupe_keep_order(selected_ids)
-
-            selected_rows: list[dict[str, str]] = []
-            for row_id in selected_ids:
-                row = id_to_row.get(row_id)
-                if not row:
-                    continue
-                selected_rows.append(
-                    {
-                        "employee_name": str(row.get("employee_name") or "").strip(),
-                        "evidence_type": str(row.get("evidence_type") or "").strip(),
-                        "entity": str(row.get("entity") or "").strip(),
-                        "evidence_text": str(row.get("evidence_text") or "").strip(),
-                    }
-                )
-
-            return {
-                "query_type": query_type,
-                "selected_rows": selected_rows,
-                "notes": str(obj.get("notes") or "").strip(),
-            }
-        except Exception:
-            return fallback
-
     def _recent_history_blob(chat_history: list) -> str:
         lines: list[str] = []
         for msg in chat_history[-8:]:
@@ -1415,37 +1333,27 @@ Rules:
         [
             (
                 "system",
-                """You are a Bid Manager assistant for an employee database.
-Use StructuredFacts as your primary source of truth and Context as supporting evidence.
-
-Reasoning guidelines:
-1) Keep answers grounded only in provided facts; never invent details.
-2) For category/list/filter/comparison questions, evaluate all employees in StructuredFacts before answering.
-3) Respect query constraints exactly (for example "other than X", "least", "same", "all", "except").
-4) Resolve minor spelling mistakes in names using StructuredFacts employee names when unambiguous.
-5) Stay consistent with RecentChatHistory unless newly retrieved facts clearly change the answer.
-6) If information is missing or ambiguous, reply exactly: "I don't have that information."
-
-Formatting guidelines (ALWAYS follow these):
-- Use **bold** for employee names on first mention.
-- Use bullet points (- ) when listing multiple items (employees, skills, projects, certifications).
-- When comparing two or more employees, use a markdown table with columns for each attribute.
-- When answering about a single employee, structure the response with clear labeled sections if multiple attributes are mentioned (e.g., Experience, Projects, Certifications).
-- Keep answers concise: under 150 words for simple questions, up to 300 words for complex comparisons or lists.
-- Never repeat the question back. Start directly with the answer.
-- End with a brief one-line summary when listing 3+ items (e.g., "In total, 4 employees have worked in banking.").
-
-RecentChatHistory:
-{recent_chat_history}
-
-Question:
-{standalone_query}
+                """You are an employee database assistant. Below is the employee database you have access to.
 
 StructuredFacts:
 {structured_facts}
 
 Context:
-{context}""",
+{context}
+
+RecentChatHistory:
+{recent_chat_history}
+
+RULES:
+- Answer the question using ONLY the StructuredFacts and Context above. Do NOT use outside knowledge.
+- All names in the question refer to employees in the data above, not famous people.
+- Match names partially and case-insensitively (e.g. "anouar" = "Anouar ABDALLAH").
+- If matching data exists, answer concisely from it.
+- If no matching data exists, reply exactly: "I don't have that information."
+- Answer only what was asked. Keep it short.
+- For greetings or small talk, respond briefly and explain you can help with employee data.
+
+Question: {standalone_query}""",
             ),
             ("human", "{input}"),
         ]

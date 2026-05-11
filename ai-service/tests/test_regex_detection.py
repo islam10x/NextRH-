@@ -21,7 +21,7 @@ CASES = [
     ('adversarial_long_preamble.docx',   'Jean DUPONT',    '+33 7 45 12 89 36'),
     ('adversarial_spanish.docx',         'Maria',          '+34 698 765 432'),
     ('adversarial_fontsize_heading.docx','Sophie MARTIN',  '+33 6 12 34 56 78'),
-    ('Resume-RaniaAmmar (1).docx',       'Rania Ammar',    '+216 27 920 721'),
+    ('Resume-JaneDoe.docx',       'Jane Doe',    '+216 27 920 721'),
     ('124-modele-cv-canadien-1-2.docx',  'LUCAS',          '555-555-5555'),
 ]
 
