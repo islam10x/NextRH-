@@ -833,7 +833,7 @@ export class CvService {
                     profile: profile,
                     project: project,
                     description: projectDesc,
-                    role: this.normalizeProjectRole(projectData.role) || 'Contributor'
+                    role: this.normalizeProjectRoleForStorage(projectData.role) || 'contributor'
                 });
                 await this.participantRepository.save(participant);
                 processedProjectIds.add(project.project_id);
@@ -975,6 +975,7 @@ export class CvService {
                 const rawClient = this.cleanText(project?.client);
                 const description = this.normalizeProjectDescription(project?.description, rawClient);
                 const client = this.normalizeProjectClientName(rawClient) || '';
+                const role = this.normalizeProjectRoleForStorage(project?.role);
 
                 if ((name || 'Unknown Project').toLowerCase() === 'unknown project' && !description && !client) {
                     return null;
@@ -985,9 +986,16 @@ export class CvService {
                     date,
                     client,
                     description,
+                    role,
                 };
             })
-            .filter(Boolean) as Array<{ name: string; date: string; client: string; description: string }>;
+            .filter(Boolean) as Array<{
+                name: string;
+                date: string;
+                client: string;
+                description: string;
+                role: 'contributor' | 'technical_lead' | 'project_lead' | null;
+            }>;
 
         if (educationNarratives.length > 0) {
             const narrative = this.cleanText(educationNarratives.join(' '));
@@ -1003,6 +1011,7 @@ export class CvService {
                         date: '',
                         client: '',
                         description: this.normalizeProjectDescription('', narrative),
+                        role: null,
                     });
                 }
             }
@@ -1558,6 +1567,11 @@ export class CvService {
     }
 
     private normalizeProjectRole(value: unknown): string | null {
+        const canonicalRole = this.normalizeProjectRoleForStorage(value);
+        if (canonicalRole) {
+            return this.formatProjectRole(canonicalRole);
+        }
+
         const text = this.cleanText(value);
         if (!text) {
             return null;
@@ -1568,6 +1582,85 @@ export class CvService {
         }
 
         return text;
+    }
+
+    private normalizeProjectRoleForStorage(
+        value: unknown,
+    ): 'contributor' | 'technical_lead' | 'project_lead' | null {
+        const text = this.cleanText(value);
+        if (!text) {
+            return null;
+        }
+
+        if (text.split(/\s+/).length > 6 && /[.!?]/.test(text)) {
+            return null;
+        }
+
+        const normalized = text
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[_-]+/g, ' ')
+            .replace(/[^a-zA-Z0-9\s]/g, ' ')
+            .replace(/\s{2,}/g, ' ')
+            .trim()
+            .toLowerCase();
+
+        if (!normalized) {
+            return null;
+        }
+
+        if (normalized === 'project lead' || normalized === 'project_lead') {
+            return 'project_lead';
+        }
+        if (normalized === 'technical lead' || normalized === 'technical_lead') {
+            return 'technical_lead';
+        }
+        if (normalized === 'contributor') {
+            return 'contributor';
+        }
+
+        if (
+            normalized.includes('project lead') ||
+            normalized.includes('lead project') ||
+            normalized.includes('project manager') ||
+            normalized.includes('chef de projet') ||
+            normalized.includes('chef projet')
+        ) {
+            return 'project_lead';
+        }
+
+        if (
+            normalized.includes('technical lead') ||
+            normalized.includes('tech lead') ||
+            normalized.includes('lead tech') ||
+            normalized.includes('lead technique')
+        ) {
+            return 'technical_lead';
+        }
+
+        if (
+            normalized.includes('contributor') ||
+            normalized.includes('contribut') ||
+            normalized.includes('participant') ||
+            normalized.includes('collaborateur') ||
+            normalized.includes('team member') ||
+            normalized.includes('member')
+        ) {
+            return 'contributor';
+        }
+
+        return null;
+    }
+
+    private formatProjectRole(role: 'contributor' | 'technical_lead' | 'project_lead'): string {
+        switch (role) {
+            case 'project_lead':
+                return 'Project Lead';
+            case 'technical_lead':
+                return 'Technical Lead';
+            default:
+                return 'Contributor';
+        }
     }
 
     private normalizeEducationEntry(input: {
