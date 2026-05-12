@@ -218,6 +218,7 @@ _HEADING_KEYWORDS: Dict[str, set] = {
         "education", "academic", "academics", "qualifications",
         "formation", "formations", "études", "etudes",
         "diplômes", "diplomes", "scolarité", "scolarite",
+        "expérience académique", "experience academique",
     },
     "skills": {
         "skills", "technical skills", "competencies", "expertise",

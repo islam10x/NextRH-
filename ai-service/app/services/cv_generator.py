@@ -1273,14 +1273,19 @@ def generate_cv_document(
                         "matched_template_path": matched_template_path,
                     }
                 if analyzer_only:
-                    raise RuntimeError(
-                        "Analyzer rules were insufficient to render this template. "
-                        "Add explicit DOCX tags or adjust headers to match detected sections."
-                    )
+                    force_analyzer = os.getenv("CV_TEMPLATE_FORCE_ANALYZER", "0") == "1"
+                    if force_analyzer:
+                        raise RuntimeError(
+                            "Analyzer rules were insufficient to render this template. "
+                            "Add explicit DOCX tags or adjust headers to match detected sections."
+                        )
+                    else:
+                        logger.warning("[WARN] Analyzer rules were insufficient. Falling back to auto-tagger.")
         except Exception as exc:
-            if analyzer_only:
+            force_analyzer = os.getenv("CV_TEMPLATE_FORCE_ANALYZER", "0") == "1"
+            if force_analyzer:
                 raise
-            logger.warning(f"[WARN] Analyzer-based rendering failed: {exc}")
+            logger.warning(f"[WARN] Analyzer-based rendering failed: {exc}. Trying auto-tagger...")
 
     # --- Auto-tag if the template has no Jinja2 tags ---
     from app.services.template_tagger import auto_tag_template
