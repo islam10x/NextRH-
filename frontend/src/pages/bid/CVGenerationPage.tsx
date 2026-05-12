@@ -197,7 +197,10 @@ const CVGenerationPage: React.FC = () => {
     if (fileInputRef.current) fileInputRef.current.value = '';
     if (!file) return;
 
-    if (!ALLOWED_MIMES.has(file.type)) {
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    const validByMime = ALLOWED_MIMES.has(file.type);
+    const validByExt = ext === 'docx' || ext === 'pdf';
+    if (!validByMime && !validByExt) {
       toast.error('Veuillez importer un fichier .docx ou .pdf.');
       return;
     }
