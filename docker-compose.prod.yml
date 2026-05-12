@@ -57,6 +57,8 @@ services:
     environment:
       - DATABASE_URL=postgresql+psycopg://postgres:${DB_PASSWORD}@postgres:5432/cv_management
       - OLLAMA_URL=http://ollama:11434
+       # Lock LLM provider to Groq to match final-merge outputs
+      - LLM_PROVIDER=groq
       - RAG_CHAT_MODEL=${RAG_CHAT_MODEL:-qwen2.5:1.5b-instruct}
       - RAG_CHAT_TIMEOUT_SECONDS=${RAG_CHAT_TIMEOUT_SECONDS:-30}
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://cv-otel-collector:4317
