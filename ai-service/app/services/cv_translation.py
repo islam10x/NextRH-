@@ -24,6 +24,7 @@ from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.config import settings
+from app.utils.llm import get_llm_client, get_cv_model
 
 logger = logging.getLogger("ai_service.translation")
 
@@ -155,9 +156,10 @@ def _merge_translated_cv_data(source: Dict[str, Any], translated: Dict[str, Any]
 # ─── Groq helpers ────────────────────────────────────────────────────────────
 
 def _groq_client():
-    from groq import Groq
     # 4× the per-request timeout: translation batches can be large
-    return Groq(api_key=settings.GROQ_API_KEY, timeout=settings.GROQ_TIMEOUT_SECONDS * 4)
+    timeout = (settings.GROQ_TIMEOUT_SECONDS if settings.LLM_PROVIDER != 'ollama'
+               else settings.OLLAMA_LLM_TIMEOUT_SECONDS) * 4
+    return get_llm_client(timeout=timeout)
 
 
 def _extract_json(raw: str) -> Dict[str, str]:
@@ -217,7 +219,7 @@ def _translate_batch(texts: List[str], target_lang: str, context: str) -> List[s
     try:
         client = _groq_client()
         resp = client.chat.completions.create(
-            model=settings.GROQ_CV_MODEL,
+            model=get_cv_model(),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.05,
             max_tokens=4096,
@@ -257,7 +259,7 @@ def _translate_items_individually(
         )
         try:
             resp = client.chat.completions.create(
-                model=settings.GROQ_CV_MODEL,
+                model=get_cv_model(),
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.05,
                 max_tokens=1024,
@@ -348,7 +350,7 @@ def translate_docx_headings(docx_path: str, target_lang: str) -> None:
         try:
             client = _groq_client()
             resp = client.chat.completions.create(
-                model=settings.GROQ_CV_MODEL,
+                model=get_cv_model(),
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
                 max_tokens=2048,
@@ -700,7 +702,7 @@ def translate_cv_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         client = _groq_client()
         resp = client.chat.completions.create(
-            model=settings.GROQ_CV_MODEL,
+            model=get_cv_model(),
             messages=[
                 {"role": "system", "content": _SEMANTIC_SYSTEM_PROMPT},
                 {"role": "user",   "content": user_prompt},
