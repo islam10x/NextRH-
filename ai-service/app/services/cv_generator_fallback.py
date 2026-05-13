@@ -7083,10 +7083,9 @@ def convert_docx_to_pdf(docx_path: str, output_path: Optional[str] = None) -> Op
     os.makedirs(output_dir, exist_ok=True)
 
     stem = os.path.splitext(os.path.basename(docx_path))[0]
-    subst_path = os.path.join(output_dir, f"{stem}_fs.docx")
-    used_subst = _substitute_fonts_in_docx(docx_path, subst_path)
-    pdf_source = subst_path if used_subst else docx_path
-    logger.info(f"[pdf] font_subst={'yes' if used_subst else 'no'}, source={os.path.basename(pdf_source)}")
+    pdf_source = docx_path
+    used_subst = False
+    logger.info(f"[pdf] font_subst=no (real MS fonts installed), source={os.path.basename(pdf_source)}")
 
     lo_profile = tempfile.mkdtemp(prefix='lo_profile_')
     try:
