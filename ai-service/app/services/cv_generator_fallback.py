@@ -6980,17 +6980,12 @@ def _generate_with_replacement(
     return output_path
 
 _FONT_SUBSTITUTIONS: Dict[str, str] = {
-    'Calibri':           'Carlito',
-    'Calibri Light':     'Carlito',
-    'Cambria':           'Caladea',
-    'Cambria Math':      'Caladea',
-    'Arial':             'Liberation Sans',
-    'Arial Narrow':      'Liberation Sans Narrow',
-    'Times New Roman':   'Liberation Serif',
-    'Courier New':       'Liberation Mono',
-    'Segoe UI':          'Carlito',
-    'Segoe UI Light':    'Carlito',
-    'Segoe UI Semibold': 'Carlito',
+    # Resolve Office theme font placeholders to explicit font names
+    # so LibreOffice uses the real installed Microsoft fonts
+    '+mj-lt': 'Cambria',
+    '+mj-cs': 'Cambria',
+    '+mn-lt': 'Calibri',
+    '+mn-cs': 'Calibri',
 }
 
 
@@ -7083,9 +7078,10 @@ def convert_docx_to_pdf(docx_path: str, output_path: Optional[str] = None) -> Op
     os.makedirs(output_dir, exist_ok=True)
 
     stem = os.path.splitext(os.path.basename(docx_path))[0]
-    pdf_source = docx_path
-    used_subst = False
-    logger.info(f"[pdf] font_subst=no (real MS fonts installed), source={os.path.basename(pdf_source)}")
+    subst_path = os.path.join(output_dir, f"{stem}_fs.docx")
+    used_subst = _substitute_fonts_in_docx(docx_path, subst_path)
+    pdf_source = subst_path if used_subst else docx_path
+    logger.info(f"[pdf] font_subst={'yes' if used_subst else 'no'}, source={os.path.basename(pdf_source)}")
 
     lo_profile = tempfile.mkdtemp(prefix='lo_profile_')
     try:
