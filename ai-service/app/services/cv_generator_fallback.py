@@ -5865,82 +5865,87 @@ def _ai_get_replacements(
 
     replacement_pairs: list of (old, new) tuples
     sections_to_clear: list of section heading strings with no employee data
-    """
-    api_key = settings.GROQ_API_KEY
-    if not api_key:
-        logger.warning("GROQ_API_KEY not set — falling back to regex detection")
-        return [], []
 
-    full_text = template_text
+    On any Groq failure the deterministic section-clearing detection still runs
+    so optional template sections without employee data are removed.
+    """
+    pairs: List[Tuple[str, str]] = []
+    sections_to_clear: List[str] = []
+
     if paragraphs is None:
         paragraphs = []
+    full_text = template_text
 
-    # Use prioritized text instead of a blind character truncation.
-    # This guarantees Groq always sees the contact block even in long templates.
-    trunc_text = _build_groq_input_text(full_text, paragraphs, max_chars=5500)
+    api_key = settings.GROQ_API_KEY
+    parsed: Any = None
 
-    # Build a list of sections the employee actually has data for, so the AI
-    # knows not to include them in sections_to_clear
-    _populated: List[str] = []
-    if employee.get('summary'):
-        _populated.append('summary/profile/objective')
-    if employee.get('experience') and len(employee['experience']) > 0:
-        _populated.append('experience/work history')
-    if employee.get('education') and len(employee['education']) > 0:
-        _populated.append('education/formation')
-    if employee.get('skills') and len(employee['skills']) > 0:
-        _populated.append('skills/compétences')
-    if employee.get('projects') and len(employee['projects']) > 0:
-        _populated.append('projects/key projects')
-    if employee.get('certifications') and len(employee['certifications']) > 0:
-        _populated.append('certifications')
-    if employee.get('languages') and len(employee['languages']) > 0:
-        _populated.append('languages/langues')
-    if employee.get('interests') and len(employee['interests']) > 0:
-        _populated.append("interests/centres d'intérêt")
-    populated_sections_str = ', '.join(_populated) if _populated else 'see employee JSON'
+    if not api_key:
+        logger.warning("GROQ_API_KEY not set — falling back to deterministic detection")
+    else:
+        # Use prioritized text instead of a blind character truncation.
+        # This guarantees Groq always sees the contact block even in long templates.
+        trunc_text = _build_groq_input_text(full_text, paragraphs, max_chars=5500)
 
-    language_hint = _language_instruction(preferred_language)
-    prompt = _AI_PROMPT.format(
-        template_text=trunc_text,
-        employee_json=json.dumps(employee, ensure_ascii=False, indent=2),
-        populated_sections=populated_sections_str,
-        language_hint=language_hint,
-    )
+        # Build a list of sections the employee actually has data for, so the AI
+        # knows not to include them in sections_to_clear
+        _populated: List[str] = []
+        if employee.get('summary'):
+            _populated.append('summary/profile/objective')
+        if employee.get('experience') and len(employee['experience']) > 0:
+            _populated.append('experience/work history')
+        if employee.get('education') and len(employee['education']) > 0:
+            _populated.append('education/formation')
+        if employee.get('skills') and len(employee['skills']) > 0:
+            _populated.append('skills/compétences')
+        if employee.get('projects') and len(employee['projects']) > 0:
+            _populated.append('projects/key projects')
+        if employee.get('certifications') and len(employee['certifications']) > 0:
+            _populated.append('certifications')
+        if employee.get('languages') and len(employee['languages']) > 0:
+            _populated.append('languages/langues')
+        if employee.get('interests') and len(employee['interests']) > 0:
+            _populated.append("interests/centres d'intérêt")
+        populated_sections_str = ', '.join(_populated) if _populated else 'see employee JSON'
 
-    client = Groq(api_key=api_key, timeout=settings.GROQ_TIMEOUT_SECONDS)
-    try:
-        response = client.chat.completions.create(
-            model=settings.GROQ_CV_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            max_tokens=1200,
-            response_format={"type": "json_object"},
+        language_hint = _language_instruction(preferred_language)
+        prompt = _AI_PROMPT.format(
+            template_text=trunc_text,
+            employee_json=json.dumps(employee, ensure_ascii=False, indent=2),
+            populated_sections=populated_sections_str,
+            language_hint=language_hint,
         )
-    except Exception as exc:
-        logger.error(f"Groq API call failed: {exc}")
-        return [], []
 
-    raw = (response.choices[0].message.content or '').strip()
-    logger.info(f"Groq raw response: {raw[:600]}")
-
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        logger.error(f"Could not parse Groq JSON response: {exc}\nRaw: {raw[:300]}")
-        return [], []
+        client = Groq(api_key=api_key, timeout=settings.GROQ_TIMEOUT_SECONDS)
+        try:
+            response = client.chat.completions.create(
+                model=settings.GROQ_CV_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=1200,
+                response_format={"type": "json_object"},
+            )
+            raw = (response.choices[0].message.content or '').strip()
+            logger.info(f"Groq raw response: {raw[:600]}")
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                logger.error(f"Could not parse Groq JSON response: {exc}\nRaw: {raw[:300]}")
+        except Exception as exc:
+            logger.error(f"Groq API call failed: {exc}")
 
     # ── Extract replacement pairs ──────────────────────────────────────
-    if isinstance(parsed, dict):
-        items = parsed.get("replacements") or parsed.get("pairs") or []
-        if not items and parsed:
-            # Legacy: flat dict where keys are old values
-            items = [{"old": k, "new": v} for k, v in parsed.items()
-                     if k not in ("replacements", "sections_to_clear", "pairs")]
+    if parsed is not None:
+        if isinstance(parsed, dict):
+            items = parsed.get("replacements") or parsed.get("pairs") or []
+            if not items and parsed:
+                # Legacy: flat dict where keys are old values
+                items = [{"old": k, "new": v} for k, v in parsed.items()
+                         if k not in ("replacements", "sections_to_clear", "pairs")]
+        else:
+            items = parsed
     else:
-        items = parsed
+        items = []
 
-    pairs: List[Tuple[str, str]] = []
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -5966,7 +5971,6 @@ def _ai_get_replacements(
     pairs.sort(key=lambda x: len(x[0]), reverse=True)
 
     # ── Extract sections to clear ──────────────────────────────────────
-    sections_to_clear: List[str] = []
     if isinstance(parsed, dict):
         raw_stc = parsed.get("sections_to_clear") or []
         if isinstance(raw_stc, list):
