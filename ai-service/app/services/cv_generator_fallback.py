@@ -7001,6 +7001,19 @@ def _substitute_fonts_in_docx(docx_path: str, output_path: str) -> bool:
         with zipfile.ZipFile(docx_path, 'r') as zf:
             zf.extractall(tmp_dir)
 
+        # Attribute-style theme font references: inject explicit font names
+        # so LibreOffice uses the installed Microsoft fonts.
+        _THEME_ATTR_SUBS: list = [
+            (b'w:asciiTheme="majorHAnsi"', b'w:ascii="Cambria" w:asciiTheme="majorHAnsi"'),
+            (b'w:hAnsiTheme="majorHAnsi"',  b'w:hAnsi="Cambria" w:hAnsiTheme="majorHAnsi"'),
+            (b'w:asciiTheme="minorHAnsi"', b'w:ascii="Calibri" w:asciiTheme="minorHAnsi"'),
+            (b'w:hAnsiTheme="minorHAnsi"',  b'w:hAnsi="Calibri" w:hAnsiTheme="minorHAnsi"'),
+            (b"w:asciiTheme='majorHAnsi'", b'w:ascii="Cambria" w:asciiTheme=\'majorHAnsi\''),
+            (b"w:hAnsiTheme='majorHAnsi'",  b'w:hAnsi="Cambria" w:hAnsiTheme=\'majorHAnsi\''),
+            (b"w:asciiTheme='minorHAnsi'", b'w:ascii="Calibri" w:asciiTheme=\'minorHAnsi\''),
+            (b"w:hAnsiTheme='minorHAnsi'",  b'w:hAnsi="Calibri" w:hAnsiTheme=\'minorHAnsi\''),
+        ]
+
         word_dir = os.path.join(tmp_dir, 'word')
         if os.path.isdir(word_dir):
             for xml_root, _dirs, xml_files in os.walk(word_dir):
@@ -7012,10 +7025,16 @@ def _substitute_fonts_in_docx(docx_path: str, output_path: str) -> bool:
                         with open(xml_path, 'rb') as f:
                             content = f.read()
                         changed = False
+                        # Replace literal theme font placeholders (+mj-lt, +mn-lt)
                         for ms_font, free_font in _FONT_SUBSTITUTIONS.items():
                             enc = ms_font.encode('utf-8')
                             if enc in content:
                                 content = content.replace(enc, free_font.encode('utf-8'))
+                                changed = True
+                        # Inject explicit font names alongside XML theme attributes
+                        for old_attr, new_attr in _THEME_ATTR_SUBS:
+                            if old_attr in content:
+                                content = content.replace(old_attr, new_attr)
                                 changed = True
                         if changed:
                             with open(xml_path, 'wb') as f:
