@@ -3,10 +3,8 @@ FROM python:3.11-slim-bookworm
 WORKDIR /app
 
 # Install system dependencies including LibreOffice for PDF conversion
-RUN echo 'Acquire::https::Verify-Peer "false";' > /etc/apt/apt.conf.d/99insecure \
-    && echo 'Acquire::Check-Valid-Until "false";' >> /etc/apt/apt.conf.d/99insecure
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update --allow-insecure-repositories -o Acquire::Check-Date=false \
+    && apt-get install -y --no-install-recommends --allow-unauthenticated \
     tesseract-ocr \
     libtesseract-dev \
     libgl1 \
