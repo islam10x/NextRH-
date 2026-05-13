@@ -6213,6 +6213,44 @@ def _clear_template_sections(docx_path: str, sections_to_clear: List[str]) -> in
 
         with open(doc_xml_path, 'wb') as f:
             f.write(etree.tostring(tree, xml_declaration=True, encoding='UTF-8', standalone=True))
+
+        # Also process glossary document (Word stores building blocks there)
+        glossary_path = os.path.join(temp_dir, 'word', 'glossary', 'document.xml')
+        if os.path.exists(glossary_path):
+            with open(glossary_path, 'rb') as f:
+                graw = f.read()
+            try:
+                gtree = etree.fromstring(graw)
+                for tc_elem in gtree.iter(W_TC):
+                    tc_children = list(tc_elem)
+                    for h_idx, child in enumerate(tc_children):
+                        if child.tag != W_P:
+                            continue
+                        cell_text = ''.join(
+                            t.text or '' for t in child.iter(f'{{{W}}}t')
+                        ).strip()
+                        for label in sections_to_clear:
+                            if _label_match(cell_text, label):
+                                for content_p in tc_children[h_idx + 1:]:
+                                    if content_p.tag != W_P:
+                                        continue
+                                    following_text = ''.join(
+                                        t.text or '' for t in content_p.iter(f'{{{W}}}t')
+                                    ).strip()
+                                    if following_text and _identify_section_lxml(content_p):
+                                        break
+                                    for t in content_p.iter(f'{{{W}}}t'):
+                                        t.text = ''
+                                for t in child.iter(f'{{{W}}}t'):
+                                    t.text = ''
+                                logger.info(f"  Cleared glossary cell section: '{cell_text}'")
+                                cleared += 1
+                                break
+                with open(glossary_path, 'wb') as f:
+                    f.write(etree.tostring(gtree, xml_declaration=True, encoding='UTF-8', standalone=True))
+            except Exception as exc:
+                logger.warning(f"Glossary section clearing failed (non-fatal): {exc}")
+
         with zipfile.ZipFile(docx_path, 'w', zipfile.ZIP_DEFLATED) as zout:
             for root_dir, _dirs, files in os.walk(temp_dir):
                 for fname in files:
@@ -6941,6 +6979,68 @@ def _generate_with_replacement(
     logger.info(f"=== CV Generated: {output_path} ===")
     return output_path
 
+_FONT_SUBSTITUTIONS: Dict[str, str] = {
+    'Calibri':           'Carlito',
+    'Calibri Light':     'Carlito',
+    'Cambria':           'Caladea',
+    'Cambria Math':      'Caladea',
+    'Arial':             'Liberation Sans',
+    'Arial Narrow':      'Liberation Sans Narrow',
+    'Times New Roman':   'Liberation Serif',
+    'Courier New':       'Liberation Mono',
+    'Segoe UI':          'Carlito',
+    'Segoe UI Light':    'Carlito',
+    'Segoe UI Semibold': 'Carlito',
+}
+
+
+def _substitute_fonts_in_docx(docx_path: str, output_path: str) -> bool:
+    """Write a font-substituted copy of docx_path to output_path.
+
+    Replaces Microsoft font names with free equivalents (Carlito, Caladea,
+    Liberation) so LibreOffice renders them correctly during PDF conversion.
+    Returns True on success, False if substitution failed (caller falls back).
+    """
+    try:
+        tmp_dir = tempfile.mkdtemp(prefix='cv_fontsubst_')
+        with zipfile.ZipFile(docx_path, 'r') as zf:
+            zf.extractall(tmp_dir)
+
+        word_dir = os.path.join(tmp_dir, 'word')
+        if os.path.isdir(word_dir):
+            for xml_root, _dirs, xml_files in os.walk(word_dir):
+                for xml_name in xml_files:
+                    if not xml_name.endswith('.xml'):
+                        continue
+                    xml_path = os.path.join(xml_root, xml_name)
+                    try:
+                        with open(xml_path, 'rb') as f:
+                            content = f.read()
+                        changed = False
+                        for ms_font, free_font in _FONT_SUBSTITUTIONS.items():
+                            enc = ms_font.encode('utf-8')
+                            if enc in content:
+                                content = content.replace(enc, free_font.encode('utf-8'))
+                                changed = True
+                        if changed:
+                            with open(xml_path, 'wb') as f:
+                                f.write(content)
+                    except Exception:
+                        pass
+
+        with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zout:
+            for root_dir, _dirs, files in os.walk(tmp_dir):
+                for fname in files:
+                    fpath = os.path.join(root_dir, fname)
+                    zout.write(fpath, os.path.relpath(fpath, tmp_dir))
+        return True
+    except Exception as exc:
+        logger.warning(f"Font substitution failed (non-fatal): {exc}")
+        return False
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def _find_libreoffice() -> Optional[str]:
     """Find LibreOffice executable."""
     import platform
@@ -6973,32 +7073,44 @@ def _find_libreoffice() -> Optional[str]:
 
 
 def convert_docx_to_pdf(docx_path: str, output_path: Optional[str] = None) -> Optional[str]:
-    """Convert DOCX to PDF using LibreOffice."""
+    """Convert DOCX to PDF using LibreOffice with font substitution."""
     soffice = _find_libreoffice()
     if not soffice:
         logger.warning("LibreOffice not found")
         return None
-    
+
     output_dir = os.path.dirname(output_path or docx_path) or "."
     os.makedirs(output_dir, exist_ok=True)
-    
+
+    stem = os.path.splitext(os.path.basename(docx_path))[0]
+    subst_path = os.path.join(output_dir, f"{stem}_fs.docx")
+    used_subst = _substitute_fonts_in_docx(docx_path, subst_path)
+    pdf_source = subst_path if used_subst else docx_path
+
     try:
         result = subprocess.run(
-            [soffice, "--headless", "--convert-to", "pdf", "--outdir", output_dir, docx_path],
-            capture_output=True, text=True, timeout=120
+            [soffice, "--headless", "--convert-to", "pdf", "--outdir", output_dir, pdf_source],
+            capture_output=True, text=True, timeout=120,
         )
-        
         if result.returncode == 0:
-            pdf_name = os.path.splitext(os.path.basename(docx_path))[0] + ".pdf"
+            pdf_name = os.path.splitext(os.path.basename(pdf_source))[0] + ".pdf"
             pdf_path = os.path.join(output_dir, pdf_name)
             if os.path.exists(pdf_path):
+                # Rename back to original stem if we used a substituted copy
+                final_pdf = os.path.join(output_dir, f"{stem}.pdf")
+                if pdf_path != final_pdf:
+                    shutil.move(pdf_path, final_pdf)
+                    pdf_path = final_pdf
                 if output_path and pdf_path != output_path:
                     shutil.move(pdf_path, output_path)
                     return output_path
                 return pdf_path
     except Exception as e:
         logger.error(f"PDF conversion failed: {e}")
-    
+    finally:
+        if used_subst and os.path.exists(subst_path):
+            os.remove(subst_path)
+
     return None
 
 
