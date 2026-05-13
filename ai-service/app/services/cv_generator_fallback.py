@@ -1,4 +1,4 @@
-"""
+﻿"""
 CV Generation Service (Production-Ready)
 =========================================
 Handles DOCX templates with complex layouts including textboxes, shapes, tables.
@@ -27,7 +27,7 @@ from docx import Document
 from docx.text.paragraph import Paragraph as DocxParagraph
 from docxtpl import DocxTemplate
 from PIL import Image
-from app.utils.llm import get_llm_client, get_cv_model, get_scoring_model, is_llm_available
+from groq import Groq
 
 from app.config import settings
 from app.services.cv_validation import validate_employee_data, ValidationReport
@@ -2694,6 +2694,7 @@ def _language_instruction(language: Optional[str]) -> str:
 
 def _groq_generate_skills(
     employee: Dict[str, Any],
+    api_key: str,
     preferred_language: Optional[str] = None,
 ) -> Optional[str]:
     """
@@ -2734,9 +2735,9 @@ def _groq_generate_skills(
     )
 
     try:
-        client = get_llm_client()
+        client = Groq(api_key=api_key, timeout=settings.GROQ_TIMEOUT_SECONDS)
         resp = client.chat.completions.create(
-            model=get_cv_model(),
+            model=settings.GROQ_CV_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=settings.GROQ_PAIRS_TEMPERATURE,
             max_tokens=200,
@@ -2755,6 +2756,7 @@ def _groq_generate_skills(
 
 def _groq_generate_summary(
     employee: Dict[str, Any],
+    api_key: str,
     preferred_language: Optional[str] = None,
 ) -> Optional[str]:
     """
@@ -2796,9 +2798,9 @@ def _groq_generate_summary(
     )
 
     try:
-        client = get_llm_client()
+        client = Groq(api_key=api_key, timeout=settings.GROQ_TIMEOUT_SECONDS)
         resp = client.chat.completions.create(
-            model=get_cv_model(),
+            model=settings.GROQ_CV_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=settings.GROQ_SUMMARY_TEMPERATURE,
             max_tokens=200,
@@ -2855,8 +2857,9 @@ def _build_section_content(
         text = _strip(employee.get('summary'))
         if not text:
             # Attempt Groq generation when no pre-written summary is in the profile
-            if is_llm_available():
-                generated = _groq_generate_summary(employee, preferred_language)
+            api_key = settings.GROQ_API_KEY
+            if api_key:
+                generated = _groq_generate_summary(employee, api_key, preferred_language)
                 if generated:
                     text = generated
                     logger.info("[_build_section_content] Groq summary injected")
@@ -2929,8 +2932,9 @@ def _build_section_content(
         if not skills and not certs and not projs:
             return None
         # Try Groq synthesis first; fall back to formatted list
-        if is_llm_available() and (certs or projs):
-            synthesized = _groq_generate_skills(employee, preferred_language)
+        api_key = settings.GROQ_API_KEY
+        if api_key and (certs or projs):
+            synthesized = _groq_generate_skills(employee, api_key, preferred_language)
             if synthesized:
                 return [{'text': synthesized, 'bold': False, 'bullet': False}]
         # Fallback: build from skills array + tech keywords extracted from cert names
@@ -5531,9 +5535,10 @@ def _build_context_from_employee(
     ctx["summary"] = employee.get("summary") or ""
     # Generate summary via Groq for placeholder templates when none is provided
     if not ctx["summary"]:
-        if is_llm_available():
+        api_key = settings.GROQ_API_KEY
+        if api_key:
             try:
-                generated = _groq_generate_summary(employee, preferred_language)
+                generated = _groq_generate_summary(employee, api_key, preferred_language)
                 if generated:
                     ctx["summary"] = generated
                     logger.info("[_build_context] Groq summary injected")
@@ -5861,8 +5866,9 @@ def _ai_get_replacements(
     replacement_pairs: list of (old, new) tuples
     sections_to_clear: list of section heading strings with no employee data
     """
-    if not is_llm_available():
-        logger.warning("LLM provider not configured — falling back to regex detection")
+    api_key = settings.GROQ_API_KEY
+    if not api_key:
+        logger.warning("GROQ_API_KEY not set — falling back to regex detection")
         return [], []
 
     full_text = template_text
@@ -5902,10 +5908,10 @@ def _ai_get_replacements(
         language_hint=language_hint,
     )
 
-    client = get_llm_client()
+    client = Groq(api_key=api_key, timeout=settings.GROQ_TIMEOUT_SECONDS)
     try:
         response = client.chat.completions.create(
-            model=get_cv_model(),
+            model=settings.GROQ_CV_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
             max_tokens=1200,
@@ -6750,13 +6756,14 @@ def _generate_with_replacement(
     if not employee.get('summary'):
         with gen_ctx.phase("summary_generation") as p:
             try:
-                if not is_llm_available():
+                api_key = settings.GROQ_API_KEY
+                if not api_key:
                     p.status = "skipped"
-                    p.message = "LLM provider not configured — using deterministic fallback"
-                    logger.info("[gen] LLM provider not configured — summary will use fallback")
+                    p.message = "GROQ_API_KEY not set — using deterministic fallback"
+                    logger.info("[gen] GROQ_API_KEY not set — summary will use fallback")
                     summary = None
                 else:
-                    summary = _groq_generate_summary(employee, preferred_language)
+                    summary = _groq_generate_summary(employee, api_key, preferred_language)
                 if summary:
                     employee = dict(employee)
                     employee['summary'] = summary
