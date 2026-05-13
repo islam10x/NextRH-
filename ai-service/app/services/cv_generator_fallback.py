@@ -7093,7 +7093,7 @@ def convert_docx_to_pdf(docx_path: str, output_path: Optional[str] = None) -> Op
         result = subprocess.run(
             [
                 soffice,
-                f"--env:UserInstallation=file://{lo_profile}",
+                f"-env:UserInstallation=file://{lo_profile}",
                 "--headless",
                 "--convert-to", "pdf:writer_pdf_Export:EmbedStandardFonts=true",
                 "--outdir", output_dir,
