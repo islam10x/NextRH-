@@ -23,10 +23,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# Install Microsoft fonts (copied from Windows) for accurate PDF rendering
-COPY fonts/ /usr/share/fonts/truetype/microsoft/
-RUN fc-cache -f -v
-
 # Verify LibreOffice installation
 RUN which soffice || echo "LibreOffice soffice not found in PATH"
 
