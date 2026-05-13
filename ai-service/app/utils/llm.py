@@ -14,6 +14,67 @@ _LLM_MODEL_CACHE: dict[str, object] = {"model": None, "ts": 0.0}
 
 logger = logging.getLogger(__name__)
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Polymorphic LLM Switch — toggle between Groq and Ollama via .env
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _is_ollama_provider() -> bool:
+    """Return True when LLM_PROVIDER is set to 'ollama'."""
+    return (settings.LLM_PROVIDER or "").strip().lower() == "ollama"
+
+
+def get_llm_client(*, timeout: Optional[float] = None):
+    """Return a chat-completion client for the active LLM provider.
+
+    Both Groq and OpenAI (Ollama) expose the same ``client.chat.completions.create()``
+    interface, so callers never need to change their logic.
+
+    Parameters
+    ----------
+    timeout : float, optional
+        Per-request timeout override. Falls back to provider-specific default.
+
+    Returns
+    -------
+    client : Groq | openai.OpenAI
+        A chat-completion–compatible client.
+    """
+    if _is_ollama_provider():
+        from openai import OpenAI
+        effective_timeout = timeout if timeout is not None else settings.OLLAMA_LLM_TIMEOUT_SECONDS
+        return OpenAI(
+            base_url=f"{settings.OLLAMA_URL}/v1",
+            api_key="ollama",          # Ollama doesn't need a key, but the SDK requires one
+            timeout=effective_timeout,
+        )
+    else:
+        from groq import Groq
+        effective_timeout = timeout if timeout is not None else settings.GROQ_TIMEOUT_SECONDS
+        return Groq(api_key=settings.GROQ_API_KEY, timeout=effective_timeout)
+
+
+def get_cv_model() -> str:
+    """Return the model name for CV generation tasks."""
+    if _is_ollama_provider():
+        return settings.OLLAMA_LLM_MODEL
+    return settings.GROQ_CV_MODEL
+
+
+def get_scoring_model() -> str:
+    """Return the model name for scoring / document inference tasks."""
+    if _is_ollama_provider():
+        return settings.OLLAMA_SCORING_MODEL
+    return settings.GROQ_SCORING_MODEL
+
+
+def is_llm_available() -> bool:
+    """Return True if the active LLM provider is properly configured."""
+    if _is_ollama_provider():
+        return bool(settings.OLLAMA_URL)
+    return bool(settings.GROQ_API_KEY)
+
+
 def resolve_llm_model() -> str:
     """Return the strongest available local instruct model."""
     now = time.time()
