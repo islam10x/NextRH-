@@ -3,8 +3,7 @@ FROM python:3.11-slim-bookworm
 WORKDIR /app
 
 # Install system dependencies including LibreOffice for PDF conversion
-RUN apt-get update --allow-insecure-repositories -o Acquire::Check-Date=false \
-    && apt-get install -y --no-install-recommends --allow-unauthenticated \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     libtesseract-dev \
     libgl1 \
@@ -17,7 +16,6 @@ RUN apt-get update --allow-insecure-repositories -o Acquire::Check-Date=false \
     fonts-noto \
     fonts-crosextra-caladea \
     fonts-crosextra-carlito \
-    fonts-open-sans \
     wkhtmltopdf \
     libxrender1 \
     libfontconfig1 \
