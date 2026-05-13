@@ -47,9 +47,6 @@ class Settings(BaseSettings):
     # Comma-separated candidate roots for employee metadata.json files.
     RAG_METADATA_ROOTS: str = "backend/local-storage,backend/file-storage/CV_Database,/app/file-storage/CV_Database"
 
-    # LLM provider switch — "groq" (cloud) or "ollama" (local)
-    LLM_PROVIDER: str = "groq"
-
     # Groq LLM for CV generation
     GROQ_API_KEY: str = ""
     GROQ_CV_MODEL: str = "llama-3.3-70b-versatile"
@@ -57,11 +54,6 @@ class Settings(BaseSettings):
     GROQ_TIMEOUT_SECONDS: float = 15.0  # per-request timeout for Groq API calls
     GROQ_SUMMARY_TEMPERATURE: float = 0.3
     GROQ_PAIRS_TEMPERATURE: float = 0.2
-
-    # Ollama LLM models (used when LLM_PROVIDER=ollama)
-    OLLAMA_LLM_MODEL: str = "qwen2.5:1.5b-instruct"
-    OLLAMA_SCORING_MODEL: str = "qwen2.5:1.5b-instruct"
-    OLLAMA_LLM_TIMEOUT_SECONDS: float = 60.0
 
     # APILayer Resume Parser — https://apilayer.com/marketplace/resume_parser-api
     APILAYER_API_KEY: str = ""

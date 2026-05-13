@@ -16,7 +16,6 @@ from jinja2 import TemplateSyntaxError
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import BooleanObject
 
-from app.config import settings
 from app.services.translation_service import translate_json_payload
 from app.services.ocr_rebuilder import is_docx_scanned, is_pdf_scanned, rebuild_scanned_template
 from app.services.pdf_overlay import apply_pdf_overlay, build_auto_overlay_mapping
@@ -26,7 +25,6 @@ from app.services.template_retrieval import find_closest_template
 logger = logging.getLogger(__name__)
 
 _SOFFICE_SEMAPHORE = asyncio.Semaphore(1)
-_MAX_SHAPE_CY = 20_000_000
 
 # ---------------------------------------------------------------------------
 # DOCX placeholder aliases – maps common alternative names to canonical keys
@@ -41,7 +39,6 @@ DOCX_ALIASES: Dict[str, str] = {
     "mail": "email", "courriel": "email", "e_mail": "email",
     "telephone": "phone", "tel": "phone", "mobile": "phone", "portable": "phone",
     "adresse": "address", "lieu": "address", "location": "address",
-    "linkedin": "linkedin", "linkedin_url": "linkedin",
     # Position
     "poste": "current_position", "titre": "current_position",
     "poste_actuel": "current_position", "titre_poste": "current_position",
@@ -69,7 +66,7 @@ DOCX_ALIASES: Dict[str, str] = {
 
 # Available context keys for LLM mapping reference.
 _CONTEXT_KEYS = [
-    "full_name", "email", "phone", "address", "linkedin", "current_position",
+    "full_name", "email", "phone", "address", "current_position",
     "professional_summary", "total_experience_years", "skills",
     "work_experiences", "educations", "certifications", "projects",
 ]
@@ -103,35 +100,6 @@ def _normalize_lines(value: Any) -> List[str]:
 
 
 def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
-    # Normalize payload aliases so templates work regardless of backend shape.
-    # We support both camelCase (API) and snake_case / legacy variants.
-    profile = dict(profile or {})
-    if not profile.get("name"):
-        first = str(profile.get("firstName") or profile.get("first_name") or "").strip()
-        last = str(profile.get("lastName") or profile.get("last_name") or "").strip()
-        if first or last:
-            profile["name"] = f"{first} {last}".strip()
-    if not profile.get("currentPosition"):
-        profile["currentPosition"] = (
-            profile.get("title")
-            or profile.get("current_position")
-            or profile.get("jobTitle")
-            or ""
-        )
-    if not profile.get("professionalSummary"):
-        profile["professionalSummary"] = (
-            profile.get("summary")
-            or profile.get("professional_summary")
-            or ""
-        )
-    if not profile.get("workExperiences") and isinstance(profile.get("experience"), list):
-        profile["workExperiences"] = profile.get("experience")
-    if not profile.get("educations") and isinstance(profile.get("education"), list):
-        profile["educations"] = profile.get("education")
-
-    logger.warning(f"[DEBUG] RAW DATA DISCOVERY - Profile Root Keys: {list(profile.keys())}")
-    
-    # Extract projects from the profile
     raw_projects = list(profile.get("projects") or [])
     projects: List[Dict[str, Any]] = []
     for p in raw_projects:
@@ -139,50 +107,23 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
         name = str(p.get("name") or "").strip()
         generated = str(p.get("generatedTitle") or "").strip()
 
-        # Relax placeholder detection to ensure data flows through
-        p["displayTitle"] = name or generated or "Project"
+        def _is_placeholder(value: str) -> bool:
+            norm = value.strip().lower()
+            return norm in {"unknown project", "unknown", "n/a", "na", "none", "null"}
+
+        if _is_placeholder(name):
+            name = ""
+        if _is_placeholder(generated):
+            generated = ""
+
+        if not name and not generated:
+            # Skip entries that only have a role or placeholder title.
+            continue
+
+        p["displayTitle"] = name or generated
         projects.append(p)
 
-    logger.warning(f"[DEBUG] Profile Data - Projects: {len(projects)} entries")
-    if projects:
-        logger.warning(f"[DEBUG]   prj[0]: name={projects[0].get('name')}, client={projects[0].get('client')}")
-
-    work_experiences = list(profile.get("workExperiences") or profile.get("work_experiences") or [])
-    if work_experiences and isinstance(work_experiences[0], dict):
-        logger.warning(f"[DEBUG] RAW DATA DISCOVERY - First Experience Keys: {list(work_experiences[0].keys())}")
-        logger.warning(f"[DEBUG] RAW DATA DISCOVERY - First Experience Sample: {work_experiences[0]}")
-
-    normalized_work_experiences: List[Dict[str, Any]] = []
-    for exp in work_experiences:
-        if not isinstance(exp, dict):
-            continue
-        merged = dict(exp)
-        title = _safe_text(exp.get("jobTitle") or exp.get("title") or exp.get("role"))
-        company = _safe_text(exp.get("companyName") or exp.get("company") or exp.get("client"))
-        start = _safe_text(exp.get("startDate") or exp.get("start_date"))
-        end = _safe_text(exp.get("endDate") or exp.get("end_date"))
-        dates_raw = _safe_text(exp.get("dates") or exp.get("date_range"))
-        
-        # Fallback: Parse dates from the 'dates' string if start/end are missing
-        if not start and dates_raw:
-            if " - " in dates_raw or " to " in dates_raw or " à " in dates_raw:
-                parts = [p.strip() for p in re.split(r" \- | to | à ", dates_raw)]
-                if len(parts) >= 1: start = parts[0]
-                if len(parts) >= 2: end = parts[1]
-            else:
-                start = dates_raw
-
-        dates = dates_raw or _format_date_range(start, end)
-        merged["jobTitle"] = title
-        merged["title"] = title or _safe_text(exp.get("title"))
-        merged["companyName"] = company
-        merged["company"] = company or _safe_text(exp.get("company"))
-        merged["startDate"] = start
-        merged["endDate"] = end
-        merged["dates"] = dates
-        merged["date_range"] = dates
-        normalized_work_experiences.append(merged)
-    work_experiences = normalized_work_experiences
+    work_experiences = list(profile.get("workExperiences") or profile.get("experience") or profile.get("work_experiences") or [])
 
     # Attach internal projects under the Next Step experience entry only.
     def _dedupe_preserve_order(items: List[str]) -> List[str]:
@@ -195,6 +136,7 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
             seen.add(key)
             deduped.append(item)
         return deduped
+
     if projects:
         def _normalize_company(value: str) -> str:
             return re.sub(r"[^a-z0-9]", "", (value or "").lower())
@@ -225,10 +167,17 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
         )
 
         if target_exp:
-            # No merging into experience - projects now have their own table
-            pass
+            existing_desc = str(target_exp.get("description") or "").strip()
+            if existing_desc:
+                target_exp["description"] = f"{existing_desc}\n\n{projects_block}"
+            else:
+                target_exp["description"] = projects_block
+            existing_lines = []
+            if isinstance(target_exp.get("description_lines"), list):
+                existing_lines = [str(v) for v in target_exp.get("description_lines") if str(v).strip()]
+            target_exp["description_lines"] = _dedupe_preserve_order(existing_lines + project_lines)
         elif not work_experiences:
-            # Create synthetic experience only if profile is empty
+            # Create a synthetic Next Step experience entry to host projects.
             start_dates = [p.get("startDate") for p in projects if p.get("startDate")]
             min_start = min(start_dates) if start_dates else None
             end_dates = [p.get("endDate") for p in projects if p.get("endDate")]
@@ -254,55 +203,11 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
             lines = [line.strip() for line in str(desc_value or "").splitlines() if line.strip()]
         exp["description_lines"] = _normalize_lines(lines)
 
-    raw_educations = list(profile.get("educations") or profile.get("education") or [])
-    if raw_educations and isinstance(raw_educations[0], dict):
-        logger.warning(f"[DEBUG] RAW DATA DISCOVERY - First Education Keys: {list(raw_educations[0].keys())}")
-
-    educations: List[Dict[str, Any]] = []
-    for edu in raw_educations:
-        if not isinstance(edu, dict):
-            continue
-        merged = dict(edu)
-        degree = _safe_text(edu.get("degree"))
-        institution = _safe_text(edu.get("institution") or edu.get("school"))
-        field = _safe_text(edu.get("fieldOfStudy") or edu.get("field") or edu.get("speciality"))
-        start = _safe_text(edu.get("startDate") or edu.get("start_date"))
-        end = _safe_text(edu.get("endDate") or edu.get("end_date") or edu.get("graduationDate"))
-        dates = _safe_text(edu.get("dates") or edu.get("date_range") or _format_date_range(start, end))
-        merged["degree"] = degree
-        merged["institution"] = institution
-        merged["school"] = institution or _safe_text(edu.get("school"))
-        merged["fieldOfStudy"] = field
-        merged["startDate"] = start
-        merged["endDate"] = end
-        merged["dates"] = dates
-        merged["date_range"] = dates
-        educations.append(merged)
-
-    raw_certs = list(profile.get("certifications") or profile.get("certs") or [])
-    if raw_certs and isinstance(raw_certs[0], dict):
-        logger.warning(f"[DEBUG] RAW DATA DISCOVERY - First Certification Keys: {list(raw_certs[0].keys())}")
-    
-    certifications: List[Dict[str, Any]] = []
-    for cert in raw_certs:
-        if not isinstance(cert, dict): continue
-        c = dict(cert)
-        # Normalize keys for template
-        c["name"] = _safe_text(cert.get("name") or cert.get("title") or cert.get("label"))
-        c["issuingOrganization"] = _safe_text(cert.get("issuingOrganization") or cert.get("organization") or cert.get("issuer") or cert.get("authority"))
-        certifications.append(c)
-
-    context = {
+    return {
         "full_name": profile.get("name") or "Employee",
         "email": _safe_text(profile.get("email")),
         "phone": _safe_text(profile.get("phone")),
         "address": _safe_text(profile.get("address")),
-        "linkedin": _safe_text(
-            profile.get("linkedin")
-            or profile.get("linkedinUrl")
-            or profile.get("linkedin_url")
-            or profile.get("linkedIn")
-        ),
         "birth_date": _safe_text(profile.get("birthDate") or profile.get("birth_date")),
         "marital_status": _safe_text(profile.get("maritalStatus") or profile.get("marital_status")),
         "hire_date": _safe_text(profile.get("hireDate") or profile.get("hire_date")),
@@ -311,8 +216,8 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
         "total_experience_years": _safe_text(profile.get("totalExperienceYears")),
         "skills": profile.get("skills") or [],
         "work_experiences": work_experiences,
-        "educations": educations,
-        "certifications": certifications,
+        "educations": profile.get("educations") or profile.get("education") or [],
+        "certifications": profile.get("certifications") or [],
         "projects": projects,
         "languages": profile.get("languages") or [],
         "awards": profile.get("awards") or profile.get("distinctions") or [],
@@ -322,231 +227,6 @@ def _build_context(profile: Dict[str, Any]) -> Dict[str, Any]:
         "open_end_label": "Present",
         "section_titles": {},
     }
-    for key in ["email", "phone", "address", "linkedin", "birth_date", "marital_status", "hire_date", "current_position", "professional_summary", "total_experience_years", "last_update"]:
-        if not context[key]:
-            context.pop(key)
-
-    # --- HIGH VISIBILITY DEBUG LOGS ---
-    logger.warning(f"[DEBUG] Profile Data - Work Experiences: {len(work_experiences)} entries")
-    for i, exp in enumerate(work_experiences):
-        logger.warning(f"[DEBUG]   exp[{i}]: company={exp.get('companyName')}, start={exp.get('startDate')}, end={exp.get('endDate')}")
-    
-    logger.warning(f"[DEBUG] Profile Data - Educations: {len(educations)} entries")
-    for i, edu in enumerate(educations):
-        logger.warning(f"[DEBUG]   edu[{i}]: inst={edu.get('institution')}, start={edu.get('startDate')}, end={edu.get('endDate')}")
-
-    logger.warning(f"[DEBUG] Profile Data - Certifications: {len(certifications)} entries")
-    for i, cert in enumerate(certifications):
-        logger.warning(f"[DEBUG]   cert[{i}]: name={cert.get('name')}, org={cert.get('issuingOrganization')}")
-    # -----------------------------------
-    return context
-
-
-def _build_context_from_employee(profile: Dict[str, Any]) -> Dict[str, Any]:
-    """Backward-compatible alias for older tests and callers."""
-    full_name = str(profile.get("name") or "").strip()
-    if not full_name:
-        first = str(profile.get("firstName") or "").strip()
-        last = str(profile.get("lastName") or "").strip()
-        full_name = f"{first} {last}".strip()
-
-    parts = [part for part in full_name.split() if part]
-    first_name = str(profile.get("firstName") or (parts[0] if parts else "")).strip()
-    last_name = str(profile.get("lastName") or (parts[-1] if len(parts) > 1 else "")).strip()
-    short_last_name = parts[-1] if len(parts) > 1 else last_name
-
-    raw_skills = profile.get("skills") or []
-    if not isinstance(raw_skills, list):
-        raw_skills = [raw_skills]
-    skills = [str(skill).strip() for skill in raw_skills if str(skill).strip()]
-
-    summary = str(profile.get("summary") or "")
-
-    return {
-        "name": full_name,
-        "full_name": full_name,
-        "email": str(profile.get("email") or ""),
-        "phone": str(profile.get("phone") or ""),
-        "title": str(profile.get("title") or ""),
-        "current_position": str(profile.get("title") or ""),
-        "summary": summary,
-        "skills": skills,
-        "skills_text": ", ".join(skills),
-        "prenom": first_name,
-        "nom": short_last_name,
-        "address": str(profile.get("address") or ""),
-        "linkedin": str(profile.get("linkedin") or ""),
-    }
-
-
-def _build_section_content(
-    section: str,
-    employee: Dict[str, Any],
-    preferred_language: Optional[str] = None,
-):
-    """Backward-compatible section builder used by legacy tests.
-
-    The live fallback runtime uses the richer implementation in
-    cv_generator_fallback. This wrapper preserves the older, flatter output
-    shape expected by legacy unit tests that still import from cv_generator.
-    """
-    def _s(value: Any) -> str:
-        return str(value or "").strip()
-
-    def _year_only(value: Any) -> str:
-        text = _s(value)
-        if re.search(r'\b(?:present|current|ongoing|today|now)\b', text, re.I):
-            return text
-        match = re.search(r"\b(19|20)\d{2}\b", text)
-        return match.group(0) if match else text
-
-    def _meta_line(*parts: Any) -> str:
-        values = [_s(part) for part in parts if _s(part)]
-        return "  —  ".join(values)
-
-    if section == "summary":
-        text = _s(employee.get("summary"))
-        return [{"text": text, "bold": False, "bullet": False}] if text else None
-
-    if section == "experience":
-        raw = employee.get("experience")
-        if not isinstance(raw, list) or not raw:
-            return None
-        lines: List[Dict[str, Any]] = []
-        for entry in raw:
-            if not isinstance(entry, dict):
-                continue
-            title = _s(entry.get("title") or entry.get("jobTitle"))
-            company = _s(entry.get("company") or entry.get("companyName"))
-            dates = _year_only(
-                entry.get("dates")
-                or entry.get("date_range")
-                or entry.get("period")
-                or entry.get("start_date")
-                or entry.get("startDate")
-            )
-            desc = _s(entry.get("description") or entry.get("responsibilities") or entry.get("tasks"))
-            if len(desc) > 1500:
-                desc = desc[:1500].rsplit(" ", 1)[0] + "…"
-            if not title and not company:
-                continue
-            if title:
-                lines.append({"text": title, "bold": True, "bullet": False})
-            meta = _meta_line(company, dates)
-            if meta:
-                lines.append({"text": meta, "bold": False, "bullet": False, "compact": True})
-            for part in desc.splitlines():
-                part = part.strip().lstrip("•●-– ").strip()
-                if part:
-                    lines.append({"text": part, "bold": False, "bullet": True, "compact": True})
-        return lines or None
-
-    if section == "education":
-        raw = employee.get("education")
-        if not isinstance(raw, list) or not raw:
-            return None
-        lines: List[Dict[str, Any]] = []
-        for entry in raw:
-            if not isinstance(entry, dict):
-                continue
-            degree = _s(entry.get("degree"))
-            institution = _s(entry.get("institution") or entry.get("school") or entry.get("university"))
-            dates = _year_only(entry.get("dates") or entry.get("end_date") or entry.get("graduationDate"))
-            if not degree and not institution:
-                continue
-            parts = [part for part in (degree, institution, dates) if part]
-            if parts:
-                lines.append({"text": " | ".join(parts), "bold": False, "bullet": False})
-        return lines or None
-
-    if section == "skills":
-        raw = employee.get("skills")
-        items = raw if isinstance(raw, list) else ([raw] if raw else [])
-        values = [_s(item.get("name") if isinstance(item, dict) else item) for item in items]
-        values = [value for value in values if value]
-        if not values:
-            certs = employee.get("certifications") or []
-            cert_items = certs if isinstance(certs, list) else [certs]
-            tech_values: List[str] = []
-            seen: set[str] = set()
-            tech_re = re.compile(
-                r'\b(DELL|HP|IBM|VMware|Microsoft|Compellent|PowerVault|PowerEdge|'
-                r'FluidFS|Hyper-V|StorageWorks|BladeCenter|MCSA|MCSE|Cisco|Linux|'
-                r'Windows|Server|Storage|Blade|Cloud|NAS|SAN|vSphere|ESXi|'
-                r'SQL|Exchange|SharePoint|Azure|AWS|Docker|Kubernetes|Python|Java|'
-                r'React|Angular|Node)\b',
-                re.I,
-            )
-            for cert in cert_items:
-                cert_name = _s(cert.get("name") if isinstance(cert, dict) else cert)
-                for match in tech_re.finditer(cert_name):
-                    token = match.group()
-                    key = token.lower()
-                    if key not in seen:
-                        seen.add(key)
-                        tech_values.append(token)
-            values = tech_values
-        if not values:
-            return None
-        return [{"text": ", ".join(values), "bold": False, "bullet": False}] if values else None
-
-    if section == "certifications":
-        raw = employee.get("certifications")
-        if not raw:
-            return None
-        items = raw if isinstance(raw, list) else [raw]
-        values = [
-            _s(item.get("name") if isinstance(item, dict) else item)
-            for item in items
-        ]
-        values = [value for value in values if value]
-        return [{"text": value, "bold": False, "bullet": True} for value in values] or None
-
-    if section == "languages":
-        raw = employee.get("languages")
-        if not raw:
-            return None
-        items = raw if isinstance(raw, list) else [raw]
-        values = [
-            _s(item.get("name") if isinstance(item, dict) else item)
-            for item in items
-        ]
-        values = [value for value in values if value]
-        return [{"text": ", ".join(values), "bold": False, "bullet": False}] if values else None
-
-    if section == "interests":
-        raw = employee.get("interests")
-        if not raw:
-            return None
-        items = raw if isinstance(raw, list) else [raw]
-        values = [
-            _s(item.get("name") if isinstance(item, dict) else item)
-            for item in items
-        ]
-        values = [value for value in values if value]
-        return [{"text": value, "bold": False, "bullet": True} for value in values] or None
-
-    if section == "projects":
-        raw = employee.get("projects")
-        if not raw:
-            return None
-        items = raw if isinstance(raw, list) else [raw]
-        lines: List[Dict[str, Any]] = []
-        for item in items:
-            if isinstance(item, dict):
-                name = _s(item.get("name") or item.get("title"))
-                desc = _s(item.get("description") or item.get("role"))
-                if name:
-                    lines.append({"text": name, "bold": False, "bullet": False})
-                if desc:
-                    lines.append({"text": desc, "bold": False, "bullet": True})
-            else:
-                text = _s(item)
-                if text:
-                    lines.append({"text": text, "bold": False, "bullet": False})
-        return lines or None
-
-    return None
 
 
 def _build_translation_payload(context: Dict[str, Any]) -> Dict[str, Any]:
@@ -660,21 +340,31 @@ def _normalize_header_text(value: str) -> str:
     return normalized
 
 
-# Section keyword sets — sourced from the unified taxonomy so synonyms
-# stay aligned with template_tagger and cv_generator_fallback.  We expose
-# the *normalized* (accent-stripped, lowercased) form here because every
-# call site below normalizes its own input via _normalize_header_text.
-from app.services.cv_section_taxonomy import (
-    SECTION_KEYWORDS_NORMALIZED as _CANON_NORMALIZED,
-)
-
 _SECTION_KEYWORDS = {
-    section: set(_CANON_NORMALIZED[section])
-    for section in (
-        "experience", "education", "projects", "certifications",
-        "skills", "summary", "contact", "languages", "awards",
-    )
-    if section in _CANON_NORMALIZED
+    "experience": {
+        "experience", "experience professionnelle", "work experience", "employment",
+        "parcours", "emploi", "poste", "fonctions", "carriere", "career",
+    },
+    "education": {
+        "education", "formation", "formation academique", "experience academique", "academique",
+        "diplome", "etudes", "etudes superieures", "scolarite",
+        "academic", "academics", "qualification",
+    },
+    "projects": {
+        "projets", "projects", "project", "realisations", "missions",
+        "key projects", "notable projects",
+    },
+    "certifications": {
+        "certificat", "certification", "certifications", "certificate", "licenses", "licence",
+    },
+    "skills": {
+        "competences", "skills", "competencies", "expertise",
+        "technologies", "outils", "tech stack",
+    },
+    "summary": {"profil", "summary", "resume", "synthese", "presentation", "about", "overview"},
+    "contact": {"contact", "coordonnees", "informations personnelles", "contact info"},
+    "languages": {"langues", "languages", "idiomas", "idiomes"},
+    "awards": {"distinctions", "awards", "recompenses", "honors", "prix"},
 }
 
 
@@ -828,9 +518,9 @@ def _analyze_authoring_rules_docx(docx_path: str, note: Optional[str] = None) ->
                     col_map[str(col_idx)] = "date_range"
                 elif tokens & {"institution", "ecole", "universite", "school", "college"}:
                     col_map[str(col_idx)] = "institution"
-                elif tokens & {"diplome", "degree", "diploma"}:
+                elif tokens & {"diplome", "degree", "diploma", "formation"}:
                     col_map[str(col_idx)] = "degree"
-                elif tokens & {"specialite", "specialisation", "field", "filiere", "domaine"}:
+                elif tokens & {"specialite", "specialisation", "field", "filiere", "domaine", "etudes"}:
                     col_map[str(col_idx)] = "fieldOfStudy"
             elif inferred_section == "certifications":
                 if tokens & {"certificat", "certification", "certificate"}:
@@ -909,8 +599,13 @@ def _postprocess_annexe9_tables(docx_path: str, context: Dict[str, Any]) -> None
         while len(table.rows) > 1:
             table._tbl.remove(table.rows[1]._tr)
 
-        # No data — keep header row only
+        # Add a base row to preserve table layout
         if not items:
+            row = table.add_row().cells
+            row[0].text = "N/A"
+            row[1].text = "N/A"
+            row[2].text = "N/A"
+            row[3].text = "N/A"
             continue
 
         for item in items:
@@ -933,7 +628,7 @@ def _clear_table_rows(table: Any) -> None:
         table._tbl.remove(table.rows[1]._tr)
 
 
-def _safe_text(value: Any, fallback: str = "") -> str:
+def _safe_text(value: Any, fallback: str = "N/A") -> str:
     text = str(value).strip() if value is not None else ""
     return text if text else fallback
 
@@ -953,94 +648,6 @@ def _docx_contains_jinja(doc: DocxDocument) -> bool:
                 if _has_tag(cell.text or ""):
                     return True
     return False
-
-
-def _fill_common_placeholders(doc: DocxDocument, context: Dict[str, Any]) -> None:
-    placeholder_re = re.compile(r"^[\.\s]{2,}$")
-    phone_re = re.compile(r"(?:\+?\d[\d\s().\-/]{7,}\d)")
-    email_re = re.compile(r"[\w.+\- ]+@[\w\-]+\.[\w.\-]+")
-    linkedin_re = re.compile(r"(?:https?://)?(?:www\.)?linkedin\.com/\S+", re.IGNORECASE)
-    placeholder_count = 0
-    header_name_done = False
-    header_title_done = False
-
-    def _replace_contact_line(text: str) -> Optional[str]:
-        norm = _normalize_header_text(text)
-        if norm.startswith("tel"):
-            val = context.get('phone') or ''
-            return f"Tel : {val}" if val else None
-        if norm.startswith("email"):
-            val = context.get('email') or ''
-            return f"Email : {val}" if val else None
-        if norm.startswith("adresse"):
-            val = context.get('address') or ''
-            return f"Adresse : {val}" if val else None
-        if norm.startswith("nom") and "prenom" in norm:
-            val = context.get('full_name') or ''
-            return f"Nom et Prenom : {val}" if val else None
-        return None
-
-    def _replace_header_value_line(text: str) -> Optional[str]:
-        nonlocal header_name_done, header_title_done
-        clean = (text or "").strip()
-        if not clean:
-            return None
-
-        # Skip synthetic merged paragraphs that concatenate multiple header runs.
-        if len(clean) > 140:
-            return None
-
-        if linkedin_re.search(clean):
-            return _safe_text(context.get("linkedin"))
-
-        if email_re.search(clean):
-            email_value = _safe_text(context.get("email"))
-            address_value = str(context.get("address") or "").strip()
-            return f"{email_value} {address_value}".strip() if address_value else email_value
-
-        digits = re.sub(r"\D", "", clean)
-        if phone_re.search(clean) and len(digits) >= 8 and "@" not in clean:
-            return _safe_text(context.get("phone"))
-
-        norm = _normalize_header_text(clean)
-        if norm in {
-            "competences",
-            "experience professionnelle",
-            "formation",
-            "langues",
-            "references",
-        }:
-            return None
-
-        # Uppercase value lines in headers are often NAME and TITLE.
-        ascii_upper = "".join(
-            ch for ch in unicodedata.normalize("NFD", clean)
-            if unicodedata.category(ch) != "Mn"
-        ).upper()
-        if re.fullmatch(r"[A-Z'\-\s]{4,}", ascii_upper):
-            words = [w for w in clean.split() if w]
-            if 1 < len(words) <= 7:
-                title_markers = (
-                    "ingenieur",
-                    "consultant",
-                    "manager",
-                    "charge",
-                    "chef",
-                    "responsable",
-                    "developer",
-                    "architect",
-                    "analyst",
-                    "projet",
-                    "project",
-                )
-                looks_like_title = any(marker in norm for marker in title_markers)
-                if not header_name_done and not looks_like_title:
-                    header_name_done = True
-                    return _safe_text(context.get("full_name"))
-                if not header_title_done:
-                    header_title_done = True
-                    return _safe_text(context.get("current_position"))
-        return None
 
     _SYMBOL_FONTS = frozenset({
         'font awesome', 'fontawesome', 'wingdings', 'wingdings 2', 'wingdings 3',
@@ -1089,128 +696,77 @@ def _fill_common_placeholders(doc: DocxDocument, context: Dict[str, Any]) -> Non
             para.text = new_text
             return
 
-        # Identify icon and text runs
-        icon_runs = [r for r in para.runs if _run_is_icon(r)]
-        text_runs = [r for r in para.runs if not _run_is_icon(r)]
-        first_text_run = text_runs[0] if text_runs else para.runs[0]
+def _fill_common_placeholders(doc: DocxDocument, context: Dict[str, Any]) -> None:
+    placeholder_re = re.compile(r"^[\\.·•…\\s]{2,}$")
+    placeholder_count = 0
 
-        try:
-            bold = first_text_run.bold
-            italic = first_text_run.italic
-            font_name = first_text_run.font.name
-            font_size = first_text_run.font.size
-        except Exception:
-            bold = italic = None
-            font_name = None
-            font_size = None
-        try:
-            font_color = (
-                first_text_run.font.color.rgb
-                if first_text_run.font.color and first_text_run.font.color.type
-                else None
-            )
-        except Exception:
-            font_color = None
+    def _replace_contact_line(text: str) -> Optional[str]:
+        norm = _normalize_header_text(text)
+        if norm.startswith("tel"):
+            return f"Tél : {context.get('phone') or 'N/A'}"
+        if norm.startswith("email"):
+            return f"Email : {context.get('email') or 'N/A'}"
+        if norm.startswith("adresse"):
+            return f"Adresse : {context.get('address') or 'N/A'}"
+        if norm.startswith("nom") and "prenom" in norm:
+            return f"Nom et Prénom : {context.get('full_name') or 'N/A'}"
+        return None
 
-        if icon_runs and new_text:
-            # Clear only non-icon runs; preserve icon runs intact
-            for r in text_runs:
-                r.text = ""
-            if text_runs:
-                text_runs[0].text = new_text
-                if bold is not None:
-                    text_runs[0].bold = bold
-                if italic is not None:
-                    text_runs[0].italic = italic
-                if font_name:
-                    text_runs[0].font.name = font_name
-                if font_size:
-                    text_runs[0].font.size = font_size
-                if font_color:
-                    from docx.shared import RGBColor  # noqa: F401
-                    text_runs[0].font.color.rgb = font_color
-            else:
-                run = para.add_run(new_text)
-                if bold is not None:
-                    run.bold = bold
-                if italic is not None:
-                    run.italic = italic
-                if font_name:
-                    run.font.name = font_name
-                if font_size:
-                    run.font.size = font_size
-                if font_color:
-                    from docx.shared import RGBColor  # noqa: F401
-                    run.font.color.rgb = font_color
-        elif not new_text:
-            # Empty replacement — clear all non-icon runs, keep icons intact
-            for r in text_runs:
-                r.text = ""
-        else:
-            # No icon runs — full replacement, preserve first-run format
-            para.clear()
-            run = para.add_run(new_text)
-            if bold is not None:
-                run.bold = bold
-            if italic is not None:
-                run.italic = italic
-            if font_name:
-                run.font.name = font_name
-            if font_size:
-                run.font.size = font_size
-            if font_color:
-                from docx.shared import RGBColor  # noqa: F401
-                run.font.color.rgb = font_color
-
-    def _process_paragraphs(paragraphs, header_mode: bool = False):
+    def _process_paragraphs(paragraphs):
         nonlocal placeholder_count
         for para in paragraphs:
             text = (para.text or "").strip()
             if not text:
                 continue
             replacement = _replace_contact_line(text)
-            if replacement is None and header_mode:
-                replacement = _replace_header_value_line(text)
-            if replacement is not None:
-                _set_para_text_preserving_format(para, replacement)
+            if replacement:
+                para.text = replacement
                 continue
             if placeholder_re.match(text):
                 placeholder_count += 1
                 if placeholder_count == 1:
-                    _set_para_text_preserving_format(para, context.get("full_name") or "")
+                    para.text = _safe_text(context.get("full_name"))
                 elif placeholder_count == 2:
-                    _set_para_text_preserving_format(para, context.get("current_position") or "")
+                    para.text = _safe_text(context.get("current_position"))
                 else:
-                    # Additional dotted lines with no data — clear them
-                    _set_para_text_preserving_format(para, "")
+                    # Treat additional dotted lines as N/A per user request
+                    para.text = "N/A"
 
-    def _process_tables(tables, header_mode: bool = False):
+    def _process_tables(tables):
         for table in tables:
             for row in table.rows:
                 for cell in row.cells:
-                    _process_paragraphs(cell.paragraphs, header_mode=header_mode)
+                    _process_paragraphs(cell.paragraphs)
 
     # Process document body
-    _process_paragraphs(doc.paragraphs, header_mode=False)
-    _process_tables(doc.tables, header_mode=False)
+    _process_paragraphs(doc.paragraphs)
+    _process_tables(doc.tables)
 
     # Process headers and footers across all sections
     for section in doc.sections:
         # Standard, first-page, and even-page headers
         for header in [section.header, section.first_page_header, section.even_page_header]:
             if header:
-                _process_paragraphs(header.paragraphs, header_mode=True)
-                _process_tables(header.tables, header_mode=True)
+                _process_paragraphs(header.paragraphs)
+                _process_tables(header.tables)
         # Standard, first-page, and even-page footers
         for footer in [section.footer, section.first_page_footer, section.even_page_footer]:
             if footer:
-                _process_paragraphs(footer.paragraphs, header_mode=True)
-                _process_tables(footer.tables, header_mode=True)
+                _process_paragraphs(footer.paragraphs)
+                _process_tables(footer.tables)
 
-def _resolve_rule_value(section: str, field: str, item: Dict[str, Any]) -> str:
+
+def _resolve_rule_value(section: str, field: str, item: Any) -> str:
     field = field or ""
+    
+    # Defensive: if item is a string (e.g. from a simple list of skills or certifications),
+    # return it directly if the field is empty or looks like a name/skill field.
+    if isinstance(item, str):
+        if not field or field in {"name", "skill", "label", "title", "certification_name"}:
+            return item
+        return ""
     if field == "date_range":
-        return str(item.get("date_range") or "")
+        return str(item.get("date_range") or item.get("dates") or item.get("periode") or "")
     if field == "year":
         start = item.get("startDate") or ""
         end = item.get("endDate") or ""
@@ -1220,11 +776,11 @@ def _resolve_rule_value(section: str, field: str, item: Dict[str, Any]) -> str:
     # Standard mappings
     if section == "experience":
         if field == "companyName":
-            return str(item.get("companyName") or "")
+            return str(item.get("companyName") or item.get("company") or item.get("organisme") or "")
         if field == "jobTitle":
-            return str(item.get("jobTitle") or "")
+            return str(item.get("jobTitle") or item.get("title") or item.get("role") or "")
         if field == "duration":
-            return str(item.get("duration") or "")
+            return str(item.get("duration") or item.get("dates") or "")
     if section == "projects":
         if field in {"displayTitle", "name"}:
             return str(item.get("displayTitle") or item.get("name") or "")
@@ -1234,10 +790,10 @@ def _resolve_rule_value(section: str, field: str, item: Dict[str, Any]) -> str:
             return str(item.get("duration") or "")
     if section == "education":
         if field == "institution":
-            return str(item.get("institution") or item.get("school") or "")
+            return str(item.get("institution") or item.get("school") or item.get("universite") or item.get("ecole") or "")
         if field == "degree":
-            degree = item.get("degree") or ""
-            field_of = item.get("fieldOfStudy") or item.get("field") or ""
+            degree = item.get("degree") or item.get("diplome") or ""
+            field_of = item.get("fieldOfStudy") or item.get("field") or item.get("specialite") or ""
             return str(f"{degree} - {field_of}".strip(" -")) if field_of else str(degree)
         if field == "fieldOfStudy":
             return str(item.get("fieldOfStudy") or item.get("field") or "")
@@ -1289,7 +845,9 @@ def _render_from_authoring_rules(
         col_count = len(table.columns)
 
         if not items:
-            # No data for this section — leave table with header row only
+            row = table.add_row().cells
+            for col_idx in range(col_count):
+                row[col_idx].text = "N/A"
             continue
 
         for item in items:
@@ -1311,17 +869,121 @@ def _expand_context_with_aliases(context: Dict[str, Any]) -> Dict[str, Any]:
     first_name, last_name = _split_full_name(full_name)
     expanded.setdefault("first_name", first_name)
     expanded.setdefault("last_name", last_name)
-    # Section aliases commonly used in community CV templates.
-    expanded.setdefault("experience", expanded.get("work_experiences", []))
-    expanded.setdefault("experiences", expanded.get("work_experiences", []))
-    expanded.setdefault("education", expanded.get("educations", []))
-    expanded.setdefault("formation", expanded.get("educations", []))
 
     for alias, canonical in DOCX_ALIASES.items():
         if alias not in expanded and canonical in expanded:
             expanded[alias] = expanded[canonical]
     return expanded
 
+
+def generate_cv_document(
+    profile: Dict[str, Any],
+    template_path: str,
+    output_dir: str,
+    output_formats: List[str],
+    target_language: Optional[str] = None,
+    translate: bool = True,
+    filename_prefix: Optional[str] = None,
+    cached_field_mapping: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """Generate a CV document from a template and profile data.
+
+    Args:
+        cached_field_mapping: Previously computed PDF field mapping to reuse.
+            When provided the heuristic + LLM analysis is skipped.
+
+    Returns:
+        dict with ``docx_path``, ``pdf_path``, and ``field_mapping``
+        (the computed mapping to cache on the template).
+    """
+    if not os.path.exists(template_path):
+        raise FileNotFoundError(f"Template not found: {template_path}")
+
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    context = _build_context(profile)
+    if translate and target_language:
+        payload = _build_translation_payload(context)
+        translated = translate_json_payload(payload, target_language)
+        context = _apply_translations(context, translated)
+
+        # Translate description_lines in a dedicated pass for better coverage.
+        lines_payload = {
+            "work_experience_lines": [
+                exp.get("description_lines", []) for exp in context.get("work_experiences", [])
+            ],
+            "project_lines": [
+                proj.get("description_lines", []) for proj in context.get("projects", [])
+            ],
+        }
+        translated_lines = translate_json_payload(lines_payload, target_language)
+        we_lines = translated_lines.get("work_experience_lines") if isinstance(translated_lines, dict) else None
+        if isinstance(we_lines, list):
+            for idx, exp in enumerate(context.get("work_experiences", [])):
+                if idx < len(we_lines) and isinstance(we_lines[idx], list):
+                    exp["description_lines"] = _normalize_lines(we_lines[idx])
+                elif idx < len(we_lines) and we_lines[idx] is not None:
+                    exp["description_lines"] = _normalize_lines(we_lines[idx])
+
+    # Set the open-ended label after translation so it matches target language.
+    if target_language:
+        lang = target_language.lower()
+        if lang.startswith("fr"):
+            context["open_end_label"] = "Aujourd'hui"
+        elif lang.startswith("en"):
+            context["open_end_label"] = "Present"
+        elif lang.startswith("es"):
+            context["open_end_label"] = "Actualidad"
+        elif lang.startswith("de"):
+            context["open_end_label"] = "Heute"
+        elif lang.startswith("it"):
+            context["open_end_label"] = "Presente"
+        elif lang.startswith("ar"):
+            context["open_end_label"] = "حاليًا"
+        else:
+            context["open_end_label"] = "Present"
+
+    # Derive last degree fields when available.
+    if not context.get("last_degree") and not context.get("last_degree_year"):
+        degree, year = _derive_last_degree(context)
+        context["last_degree"] = degree
+        context["last_degree_year"] = year
+
+    # Precompute date ranges for table-friendly templates.
+    open_end_label = context.get("open_end_label") or "Present"
+    for exp in context.get("work_experiences", []) or []:
+        start = exp.get("startDate") or ""
+        end = exp.get("endDate") or ""
+        if start and not end:
+            end = open_end_label
+        if start and end:
+            exp["date_range"] = f"{start} - {end}"
+        else:
+            exp["date_range"] = str(start or end or "")
+
+    for proj in context.get("projects", []) or []:
+        start = proj.get("startDate") or ""
+        end = proj.get("endDate") or ""
+        if start and not end:
+            end = open_end_label
+        if start and end:
+            proj["date_range"] = f"{start} - {end}"
+        else:
+            proj["date_range"] = str(start or end or "")
+
+    for edu in context.get("educations", []) or []:
+        start = edu.get("startDate") or ""
+        end = edu.get("endDate") or edu.get("graduationDate") or ""
+        if start and not end:
+            end = open_end_label
+        if start and end:
+            edu["date_range"] = f"{start} - {end}"
+        else:
+            edu["date_range"] = str(start or end or edu.get("year") or "")
+
+    prefix = filename_prefix or _safe_filename(context.get("full_name") or "cv")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    base_name = f"{prefix}_{timestamp}"
 
 def standardize_template(
     template_path: str,
@@ -1352,90 +1014,101 @@ def standardize_template(
     if "pdf" not in output_formats:
         output_formats.append("pdf")
 
-    if template_ext != ".docx":
-        # For PDFs, first try to use the overlay method which preserves the original layout.
-        # If it's scanned, we might try to build a DOCX from it first.
-        is_scanned = is_pdf_scanned(template_path)
-        
-        if is_scanned and os.getenv("CV_TEMPLATE_DOCX_FROM_SCAN", "1") != "0":
+    # If the template is a PDF, convert it to DOCX so DocxTemplate can expand
+    # Jinja tags and lists. For scanned PDFs, run OCR rebuild instead.
+    if is_pdf_scanned(template_path):
+        docx_template_path = None
+        if os.getenv("CV_TEMPLATE_DOCX_FROM_SCAN", "1") != "0":
             docx_template_path = build_docx_template_from_scanned_pdf(
                 template_path,
                 output_dir=os.path.dirname(template_path),
             )
-            if docx_template_path:
-                logger.info(f"Using auto-generated DOCX template for scanned PDF: {docx_template_path}")
-                return {
-                    "template_path": docx_template_path,
-                    "template_ext": ".docx",
-                    "auto_template_used": True,
-                    "temp_dir": None,
-                    "matched_template_path": None,
-                    "response": None,
-                }
 
-        # Attempt PDF text overlay (works for both native and scanned PDFs)
-        overlay_mapping = None
-        if isinstance(cached_field_mapping, dict):
-            overlay_mapping = cached_field_mapping.get("overlay")
-            if overlay_mapping is None and (
-                cached_field_mapping.get("fields") or cached_field_mapping.get("tables")
-            ):
-                overlay_mapping = cached_field_mapping
-
-        if overlay_mapping is None and os.getenv("CV_TEMPLATE_OVERLAY_AUTO", "1") != "0":
-            overlay_mapping = build_auto_overlay_mapping(template_path, context)
-
-        if overlay_mapping and (overlay_mapping.get("fields") or overlay_mapping.get("tables")):
-            prefix = _safe_filename(context.get("full_name") or "cv")
-            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            base_name = f"{prefix}_{timestamp}"
-            pdf_path = os.path.join(output_dir, f"{base_name}.pdf")
-            logger.info(f"Using overlay mode for PDF: {template_path}")
-            apply_pdf_overlay(template_path, pdf_path, context, overlay_mapping)
+        if docx_template_path:
+            logger.info(f"Using auto-generated DOCX template: {docx_template_path}")
             return {
-                "template_path": template_path,
-                "template_ext": ".pdf",
-                "auto_template_used": False,
+                "template_path": docx_template_path,
+                "template_ext": ".docx",
+                "auto_template_used": True,
                 "temp_dir": None,
                 "matched_template_path": None,
-                "response": {
-                    "docx_path": None,
-                    "pdf_path": pdf_path,
-                    "field_mapping": {"overlay": overlay_mapping},
-                },
+                "response": None,
             }
-
-        # If overlay didn't find any fields, handle fallback based on whether it's scanned or native
-        if is_scanned:
-            logger.info(f"Scanned PDF detected but no overlay found, running OCR rebuild: {template_path}")
-            template_path = rebuild_scanned_template(template_path)
-            template_ext = ".docx"
         else:
-            # Native PDF: MUST use pdf2docx. OCR rebuild is only for scanned PDFs —
-            # applying it to a native PDF produces garbled text and unusable results.
-            logger.info(f"Converting native PDF template to DOCX using pdf2docx: {template_path}")
-            try:
-                from pdf2docx import Converter
-            except ImportError:
-                raise RuntimeError(
-                    "pdf2docx is required to convert native PDF templates but is not installed. "
-                    "Run: pip install pdf2docx  (then restart the service)."
+            if os.getenv("CV_TEMPLATE_RETRIEVE", "1") != "0":
+                min_score = 0.12
+                try:
+                    min_score = float(os.getenv("CV_TEMPLATE_RETRIEVE_MIN_SCORE", "0.12"))
+                except Exception:
+                    min_score = 0.12
+                library_dir = os.getenv("CV_TEMPLATE_LIBRARY_DIR") or os.path.dirname(template_path)
+                result = find_closest_template(
+                    template_path,
+                    templates_dir=library_dir,
+                    min_score=min_score,
+                    top_k=3,
                 )
-            temp_dir = tempfile.mkdtemp()
-            converted_docx_path = os.path.join(temp_dir, "converted_template.docx")
-            try:
-                cv = Converter(template_path)
-                cv.convert(converted_docx_path)
-                cv.close()
-                if not os.path.exists(converted_docx_path) or os.path.getsize(converted_docx_path) < 100:
-                    raise RuntimeError("pdf2docx produced an empty or missing output file.")
-                template_path = converted_docx_path
+                match = result.get("best") if isinstance(result, dict) else None
+                if match:
+                    matched_path, _score = match
+                    logger.info(f"Using retrieved template: {matched_path}")
+                    return {
+                        "template_path": matched_path,
+                        "template_ext": ".docx",
+                        "auto_template_used": False,
+                        "temp_dir": None,
+                        "matched_template_path": matched_path,
+                        "response": None,
+                    }
+
+            if template_ext != ".docx":
+                overlay_mapping = None
+                if isinstance(cached_field_mapping, dict):
+                    overlay_mapping = cached_field_mapping.get("overlay")
+                    if overlay_mapping is None and (
+                        cached_field_mapping.get("fields") or cached_field_mapping.get("tables")
+                    ):
+                        overlay_mapping = cached_field_mapping
+
+                if overlay_mapping is None and os.getenv("CV_TEMPLATE_OVERLAY_AUTO", "1") != "0":
+                    overlay_mapping = build_auto_overlay_mapping(template_path, context)
+
+                if overlay_mapping and (overlay_mapping.get("fields") or overlay_mapping.get("tables")):
+                    prefix = _safe_filename(context.get("full_name") or "cv")
+                    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                    base_name = f"{prefix}_{timestamp}"
+                    pdf_path = os.path.join(output_dir, f"{base_name}.pdf")
+                    logger.info(f"Using overlay mode for scanned PDF: {template_path}")
+                    apply_pdf_overlay(template_path, pdf_path, context, overlay_mapping)
+                    return {
+                        "template_path": template_path,
+                        "template_ext": template_ext,
+                        "response": {
+                            "docx_path": None,
+                            "pdf_path": pdf_path,
+                            "field_mapping": {"overlay": overlay_mapping},
+                        },
+                    }
+
+                logger.info(f"Scanned PDF detected, running OCR rebuild: {template_path}")
+                template_path = rebuild_scanned_template(template_path)
                 template_ext = ".docx"
-            except RuntimeError:
-                raise
-            except Exception as e:
-                logger.error(f"Failed to convert PDF template to DOCX: {e}")
-                raise RuntimeError(f"PDF to DOCX conversion failed: {e}")
+    else:
+        logger.info(f"Converting PDF template to DOCX using pdf2docx: {template_path}")
+        from pdf2docx import Converter
+
+        temp_dir = tempfile.mkdtemp()
+        converted_docx_path = os.path.join(temp_dir, "converted_template.docx")
+
+        try:
+            cv = Converter(template_path)
+            cv.convert(converted_docx_path)
+            cv.close()
+            template_path = converted_docx_path
+            template_ext = ".docx"
+        except Exception as e:
+            logger.error(f"Failed to convert PDF template to DOCX: {e}")
+            raise RuntimeError(f"PDF to DOCX conversion failed: {str(e)}")
 
     return {
         "template_path": template_path,
@@ -1571,7 +1244,7 @@ def generate_cv_document(
     matched_template_path = std_result["matched_template_path"]
 
     # Analyzer-driven rendering (no DB storage)
-    analyzer_only = os.getenv("CV_TEMPLATE_ANALYZER_ONLY", "0") != "0"
+    analyzer_only = os.getenv("CV_TEMPLATE_ANALYZER_ONLY", "1") != "0"
     if template_ext == ".docx" and os.getenv("CV_TEMPLATE_USE_ANALYZER", "1") != "0":
         try:
             doc = DocxDocument(template_path)
@@ -1600,14 +1273,19 @@ def generate_cv_document(
                         "matched_template_path": matched_template_path,
                     }
                 if analyzer_only:
-                    raise RuntimeError(
-                        "Analyzer rules were insufficient to render this template. "
-                        "Add explicit DOCX tags or adjust headers to match detected sections."
-                    )
+                    force_analyzer = os.getenv("CV_TEMPLATE_FORCE_ANALYZER", "0") == "1"
+                    if force_analyzer:
+                        raise RuntimeError(
+                            "Analyzer rules were insufficient to render this template. "
+                            "Add explicit DOCX tags or adjust headers to match detected sections."
+                        )
+                    else:
+                        logger.warning("[WARN] Analyzer rules were insufficient. Falling back to auto-tagger.")
         except Exception as exc:
-            if analyzer_only:
+            force_analyzer = os.getenv("CV_TEMPLATE_FORCE_ANALYZER", "0") == "1"
+            if force_analyzer:
                 raise
-            logger.warning(f"[WARN] Analyzer-based rendering failed: {exc}")
+            logger.warning(f"[WARN] Analyzer-based rendering failed: {exc}. Trying auto-tagger...")
 
     # --- Auto-tag if the template has no Jinja2 tags ---
     from app.services.template_tagger import auto_tag_template
@@ -1635,55 +1313,22 @@ def generate_cv_document(
     doc = DocxTemplate(template_path)
     # Expand context with aliases so flexible placeholder names work.
     render_context = _expand_context_with_aliases(context)
-
-    # --- Debug: List all variables in the template vs what we have ---
-    try:
-        template_vars = doc.get_undeclared_template_variables()
-        if template_vars:
-            logger.warning(f"[DEBUG] Template variables detected: {sorted(list(template_vars))}")
-            missing = [v for v in template_vars if v not in render_context]
-            if missing:
-                logger.warning(f"[WARN] Template contains variables NOT in context: {missing}")
-            else:
-                logger.warning("[DEBUG] All template variables are present in the rendering context.")
-    except Exception as exc:
-        logger.debug(f"[DEBUG] Could not analyze template variables: {exc}")
-
     
     # Log the exact dictionary being passed to DocxTemplate
-    logger.warning(f"[DEBUG] --- JINJA2 RENDERING START ---")
-    logger.warning(f"[DEBUG] Template path: {template_path}")
-    logger.warning(f"[DEBUG] Context keys: {sorted(list(render_context.keys()))}")
+    logger.info(f"[DEBUG] Rendering DocxTemplate with context keys: {list(render_context.keys())}")
+    for k, v in render_context.items():
+        if isinstance(v, list):
+            logger.info(f"[DEBUG] Context List '{k}': {len(v)} items")
+        else:
+            logger.info(f"[DEBUG] Context Var '{k}': {str(v)[:50]}")
 
-    # Log individual fields
-    for key in ["full_name", "email", "phone", "address", "current_position", "professional_summary", "date_range", "total_experience_years"]:
-        if key in render_context:
-            logger.warning(f"[DEBUG]   Field '{key}': {render_context[key]}")
-
-    # Log list-backed sections with summaries
-    for list_key in ["work_experiences", "educations", "projects", "skills", "languages", "certifications", "experience", "experiences", "formation"]:
-        if list_key in render_context:
-            items = render_context[list_key]
-            if not isinstance(items, list):
-                logger.warning(f"[DEBUG]   List '{list_key}' is not a list: {type(items)}")
-                continue
-            logger.warning(f"[DEBUG]   List '{list_key}': {len(items)} items")
-            # Log the context for the list items if they are dicts
-            for i, item in enumerate(items):
-                if isinstance(item, dict):
-                    # Filter out empty fields and truncate long ones for cleaner logs
-                    clean_item = {k: (str(v)[:60] + "...") if len(str(v)) > 60 else v for k, v in item.items() if v is not None}
-                    logger.warning(f"[DEBUG]     {list_key}[{i}]: {clean_item}")
-                else:
-                    logger.warning(f"[DEBUG]     {list_key}[{i}]: {item}")
-
-    logger.warning("[DEBUG] Executing doc.render()...")
+    logger.info("[DEBUG] Executing doc.render()...")
     try:
         doc.render(render_context)
-        logger.warning("[DEBUG] doc.render() finished.")
+        logger.info("[DEBUG] doc.render() finished.")
         # Apply global cleanup (handle orphaned dotted placeholders or label-based contact info)
         _fill_common_placeholders(doc, context)
-        logger.warning("[DEBUG] Global placeholder cleanup finished.")
+        logger.info("[DEBUG] Global placeholder cleanup finished.")
     except TemplateSyntaxError as exc:
         logger.error(f"[ERROR] Template syntax error during render: {exc}")
         # If auto-tagging produced a bad template, retry once with conditionals disabled.
@@ -1709,24 +1354,12 @@ def generate_cv_document(
             raise
     doc.save(docx_path)
 
-    # if auto_template_used:
-    #     try:
-    #         _postprocess_annexe9_tables(docx_path, context)
-    #         logger.warning("[DEBUG] Annexe 9 tables post-processed.")
-    #     except Exception as exc:
-    #         logger.warning(f"[WARN] Annexe 9 post-processing failed: {exc}")
-
-    try:
-        pass
-    except Exception as exc:
-        logger.warning("Post-processing overflow fixes failed (non-fatal): %s", exc)
-
-    if translate and target_language and target_language not in ("original", "orig"):
+    if auto_template_used:
         try:
-            from app.services.cv_generator_fallback import _translate_section_headings_in_docx
-            _translate_section_headings_in_docx(docx_path, target_language)
+            _postprocess_annexe9_tables(docx_path, context)
+            logger.info("[DEBUG] Annexe 9 tables post-processed.")
         except Exception as exc:
-            logger.warning("Section heading translation failed (non-fatal): %s", exc)
+            logger.warning(f"[WARN] Annexe 9 post-processing failed: {exc}")
 
     pdf_path = None
     if "pdf" in output_formats:
@@ -1848,103 +1481,6 @@ def _infer_attribute(section: str, tokens: set[str]) -> Optional[str]:
                      "competences", "technologies", "outils"}:
             return "skills"
     return None
-
-
-try:
-    from app.services.cv_generator_fallback import (
-        NS_A as _FALLBACK_NS_A,
-        NS_MC as _FALLBACK_NS_MC,
-        NS_W as _FALLBACK_NS_W,
-        NS_WPS as _FALLBACK_NS_WPS,
-        _WPS_TXBX as _FALLBACK_WPS_TXBX,
-        _build_replacements as _fallback_build_replacements,
-        _build_section_content as _fallback_build_section_content,
-        _compute_input_hash as _fallback_compute_input_hash,
-        _detect_template_mode as _fallback_detect_template_mode,
-        _detect_personal_info as _fallback_detect_personal_info,
-        _extract_all_text as _fallback_extract_all_text,
-        _fill_table_section as _fallback_fill_table_section,
-        _get_paragraph_texts as _fallback_get_paragraph_texts,
-        _identify_section_lxml as _fallback_identify_section_lxml,
-        _is_contact_field_value as _fallback_is_contact_field_value,
-        _is_mega_contact_para as _fallback_is_mega_contact_para,
-        _make_para_elem as _fallback_make_para_elem,
-        _xml_safe_text as _fallback_xml_safe_text,
-        cleanEmployeeData as _fallback_clean_employee_data,
-        process_cv as _fallback_process_cv,
-    )
-
-    _extract_all_text = _fallback_extract_all_text
-    _get_paragraph_texts = _fallback_get_paragraph_texts
-    _detect_personal_info = _fallback_detect_personal_info
-    _detect_template_mode = _fallback_detect_template_mode
-    _compute_input_hash = _fallback_compute_input_hash
-    _build_replacements = _fallback_build_replacements
-    _identify_section_lxml = _fallback_identify_section_lxml
-    _fill_table_section = _fallback_fill_table_section
-    _is_mega_contact_para = _fallback_is_mega_contact_para
-    _is_contact_field_value = _fallback_is_contact_field_value
-    _make_para_elem = _fallback_make_para_elem
-    _xml_safe_text = _fallback_xml_safe_text
-    cleanEmployeeData = _fallback_clean_employee_data
-    NS_W = _FALLBACK_NS_W
-    NS_A = _FALLBACK_NS_A
-    NS_MC = _FALLBACK_NS_MC
-    NS_WPS = _FALLBACK_NS_WPS
-    _WPS_TXBX = _FALLBACK_WPS_TXBX
-except Exception:
-    pass
-
-
-def process_cv(
-    template_path: str,
-    employee_data: Dict[str, Any],
-    output_dir: str,
-    output_pdf: bool = False,
-    debug: bool = False,
-    language: str = "original",
-    out_warnings: Optional[List[Dict[str, Any]]] = None,
-) -> str:
-    """Compatibility wrapper around the shared direct-generation runtime."""
-    if '_fallback_process_cv' in globals():
-        try:
-            return _fallback_process_cv(
-                template_path=template_path,
-                employee_data=employee_data,
-                output_dir=output_dir,
-                output_pdf=output_pdf,
-                debug=debug,
-                language=language,
-                out_warnings=out_warnings,
-            )
-        except (FileNotFoundError, ValueError):
-            raise
-        except Exception as exc:
-            if os.getenv("CV_PRIMARY_RETRY_WITH_LEGACY_GENERATOR", "1") == "0":
-                raise
-            logger.warning(
-                "Shared direct-generation runtime failed; retrying with legacy primary generator: %s",
-                exc,
-                exc_info=True,
-            )
-            if out_warnings is not None:
-                out_warnings.append({
-                    "code": "legacy_primary_retry",
-                    "message": "Shared direct-generation runtime failed; used legacy primary generator.",
-                    "details": str(exc),
-                })
-
-    result = generate_cv_document(
-        profile=employee_data,
-        template_path=template_path,
-        output_dir=output_dir,
-        output_formats=["docx", "pdf"] if output_pdf else ["docx"],
-        target_language=None if language in {"", "original", "orig"} else language,
-        translate=language not in {"", "original", "orig"},
-    )
-    if output_pdf and result.get("pdf_path"):
-        return result["pdf_path"]
-    return result["docx_path"]
 
 
 def _build_pdf_autofill_map(
@@ -2305,22 +1841,8 @@ def _build_pdf_field_map(context: Dict[str, Any]) -> Dict[str, str]:
 
 def _convert_to_pdf(docx_path: str, output_dir: str) -> str:
     """Convert DOCX to PDF using LibreOffice headless."""
-    # Use LIBREOFFICE_PATH env var (same as cv_generator_fallback._find_libreoffice)
-    _soffice = os.environ.get("LIBREOFFICE_PATH") or ""
-    if not _soffice or not os.path.exists(_soffice):
-        import sys as _sys
-        if _sys.platform == "win32":
-            for _cand in [
-                r"C:\Program Files\LibreOffice\program\soffice.exe",
-                r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
-            ]:
-                if os.path.exists(_cand):
-                    _soffice = _cand
-                    break
-        if not _soffice:
-            _soffice = "soffice"  # fallback: must be in PATH
     cmd = [
-        _soffice,
+        "soffice",
         "--headless",
         "--convert-to",
         "pdf",
