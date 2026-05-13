@@ -7086,17 +7086,30 @@ def convert_docx_to_pdf(docx_path: str, output_path: Optional[str] = None) -> Op
     subst_path = os.path.join(output_dir, f"{stem}_fs.docx")
     used_subst = _substitute_fonts_in_docx(docx_path, subst_path)
     pdf_source = subst_path if used_subst else docx_path
+    logger.info(f"[pdf] font_subst={'yes' if used_subst else 'no'}, source={os.path.basename(pdf_source)}")
 
+    lo_profile = tempfile.mkdtemp(prefix='lo_profile_')
     try:
         result = subprocess.run(
-            [soffice, "--headless", "--convert-to", "pdf", "--outdir", output_dir, pdf_source],
+            [
+                soffice,
+                f"--env:UserInstallation=file://{lo_profile}",
+                "--headless",
+                "--convert-to", "pdf:writer_pdf_Export:EmbedStandardFonts=true",
+                "--outdir", output_dir,
+                pdf_source,
+            ],
             capture_output=True, text=True, timeout=120,
         )
+        logger.info(f"[pdf] LibreOffice rc={result.returncode}")
+        if result.stdout.strip():
+            logger.info(f"[pdf] stdout: {result.stdout.strip()}")
+        if result.stderr.strip():
+            logger.warning(f"[pdf] stderr: {result.stderr.strip()[:800]}")
         if result.returncode == 0:
             pdf_name = os.path.splitext(os.path.basename(pdf_source))[0] + ".pdf"
             pdf_path = os.path.join(output_dir, pdf_name)
             if os.path.exists(pdf_path):
-                # Rename back to original stem if we used a substituted copy
                 final_pdf = os.path.join(output_dir, f"{stem}.pdf")
                 if pdf_path != final_pdf:
                     shutil.move(pdf_path, final_pdf)
@@ -7110,6 +7123,7 @@ def convert_docx_to_pdf(docx_path: str, output_path: Optional[str] = None) -> Op
     finally:
         if used_subst and os.path.exists(subst_path):
             os.remove(subst_path)
+        shutil.rmtree(lo_profile, ignore_errors=True)
 
     return None
 
