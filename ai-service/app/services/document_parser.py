@@ -15,7 +15,7 @@ from datetime import datetime, date
 import fitz  # PyMuPDF
 from app.models.scoring import ParsedPV, ParsedTrainingSheet, DocumentType
 from app.config import settings
-from app.utils.llm import parse_json_object
+from app.utils.llm import parse_json_object, get_llm_client, get_scoring_model, is_llm_available
 
 logger = logging.getLogger(__name__)
 
@@ -440,12 +440,11 @@ class DocumentParser:
     def _llm_infer_pv(self, text: str, current: ParsedPV) -> ParsedPV:
         """Use Groq LLM to infer missing PV fields from the raw text."""
         try:
-            if not settings.GROQ_API_KEY:
-                logger.warning("GROQ_API_KEY not set — skipping LLM inference for PV")
+            if not is_llm_available():
+                logger.warning("LLM provider not configured — skipping LLM inference for PV")
                 return current
 
-            from groq import Groq
-            client = Groq(api_key=settings.GROQ_API_KEY, timeout=settings.GROQ_TIMEOUT_SECONDS)
+            client = get_llm_client()
 
             prompt = (
                 "Tu es un assistant qui extrait des informations de documents administratifs tunisiens.\n"
@@ -467,7 +466,7 @@ class DocumentParser:
             )
 
             response = client.chat.completions.create(
-                model=settings.GROQ_SCORING_MODEL,
+                model=get_scoring_model(),
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
             )
@@ -518,12 +517,11 @@ class DocumentParser:
     def _llm_infer_training(self, text: str, current: ParsedTrainingSheet) -> ParsedTrainingSheet:
         """Use LLM to infer missing training sheet fields from the raw text."""
         try:
-            if not settings.GROQ_API_KEY:
-                logger.warning("GROQ_API_KEY not set — skipping LLM inference for training sheet")
+            if not is_llm_available():
+                logger.warning("LLM provider not configured — skipping LLM inference for training sheet")
                 return current
 
-            from groq import Groq
-            client = Groq(api_key=settings.GROQ_API_KEY, timeout=settings.GROQ_TIMEOUT_SECONDS)
+            client = get_llm_client()
 
             prompt = (
                 "Tu es un assistant qui extrait des informations de feuilles de présence de formation.\n"
@@ -540,7 +538,7 @@ class DocumentParser:
             )
 
             response = client.chat.completions.create(
-                model=settings.GROQ_SCORING_MODEL,
+                model=get_scoring_model(),
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
             )
