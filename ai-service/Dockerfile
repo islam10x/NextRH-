@@ -17,8 +17,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-crosextra-caladea \
     fonts-crosextra-carlito \
     fonts-open-sans \
-    fonts-roboto \
-    fonts-lato \
     wkhtmltopdf \
     libxrender1 \
     libfontconfig1 \
