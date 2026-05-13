@@ -6981,11 +6981,22 @@ def _generate_with_replacement(
 
 _FONT_SUBSTITUTIONS: Dict[str, str] = {
     # Resolve Office theme font placeholders to explicit font names
-    # so LibreOffice uses the real installed Microsoft fonts
     '+mj-lt': 'Cambria',
     '+mj-cs': 'Cambria',
     '+mn-lt': 'Calibri',
     '+mn-cs': 'Calibri',
+    # Premium Microsoft 365 fonts → free equivalents (visually similar)
+    'Georgia Pro':           'Georgia',
+    'Georgia Pro Light':     'Georgia',
+    'Georgia Pro Cond':      'Georgia',
+    'Gill Sans Nova Light':  'Open Sans Light',
+    'Gill Sans Nova':        'Open Sans',
+    'Gill Sans Nova Cond':   'Open Sans Condensed',
+    'Gill Sans MT':          'Open Sans',
+    'Bahnschrift':           'Open Sans',
+    'Bahnschrift Light':     'Open Sans Light',
+    # Note: Open Sans, Roboto, Lato, Merriweather installed via apt
+    # if a template uses Merriweather it will fall through (fc-list match)
 }
 
 
