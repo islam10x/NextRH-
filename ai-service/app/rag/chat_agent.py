@@ -13,7 +13,7 @@ import re
 import unicodedata
 from typing import Dict, Iterable
 
-from langchain_classic.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.documents import Document as LCDocument
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate

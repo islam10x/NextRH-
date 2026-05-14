@@ -27,7 +27,6 @@ langchain-ollama
 langchain-openai
 langchain-core
 langchain-community
-langchain-classic
 openai
 opentelemetry-api
 opentelemetry-sdk

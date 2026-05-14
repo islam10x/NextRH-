@@ -2933,8 +2933,11 @@ def _build_section_content(
             raw_dates   = _strip(edu.get('dates') or edu.get('end_date'))
             # ISO date (YYYY-MM-DD or YYYY-MM) → keep only the year
             dates = re.sub(r'^(\d{4})-\d{2}.*$', r'\1', raw_dates) if raw_dates else raw_dates
-            parts = [p for p in [dates, degree, institution] if p]
-            lines.append({'text': ' | '.join(parts), 'bold': False, 'bullet': False})
+            header = '  —  '.join(p for p in [dates, institution] if p)
+            if header:
+                lines.append({'text': header, 'bold': False, 'bullet': False, 'compact': True})
+            if degree:
+                lines.append({'text': degree, 'bold': False, 'bullet': False})
         return lines or None
 
     elif section == 'skills':
