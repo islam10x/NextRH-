@@ -2961,6 +2961,9 @@ def _build_section_content(
                 if kw.lower() not in seen:
                     skill_list.append(kw)
                     seen.add(kw.lower())
+        # If keyword extraction yielded nothing, fall back to raw cert names
+        if not skill_list and cert_names:
+            skill_list = cert_names
         text = ', '.join(skill_list) if skill_list else None
         return [{'text': text, 'bold': False, 'bullet': False}] if text else None
 
@@ -5777,7 +5780,17 @@ def _derive_deterministic_sections_to_clear(
         for canonical, keywords in _AUTO_CLEAR_SECTION_KEYWORDS.items():
             if _has_optional_section_data(employee, canonical):
                 continue
-            if any(_is_heading_label_match(text, kw) for kw in keywords):
+            # Use strict match: text must equal or START with the keyword.
+            # Word-boundary search is too broad here — e.g. "gestion" would
+            # match "Licence en gestion de projet..." which is education content.
+            t_norm = _normalize_heading_label(text)
+            matched = False
+            for kw in keywords:
+                k_norm = _normalize_heading_label(kw)
+                if t_norm == k_norm or t_norm.startswith(k_norm + ' '):
+                    matched = True
+                    break
+            if matched:
                 norm = _normalize_heading_label(text)
                 if norm and norm not in seen_norm:
                     seen_norm.add(norm)
