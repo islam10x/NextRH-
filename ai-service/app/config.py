@@ -47,13 +47,17 @@ class Settings(BaseSettings):
     # Comma-separated candidate roots for employee metadata.json files.
     RAG_METADATA_ROOTS: str = "backend/local-storage,backend/file-storage/CV_Database,/app/file-storage/CV_Database"
 
-    # Groq LLM for CV generation
+    # Legacy cloud-model settings kept for backward compatibility. Local runtime
+    # now prefers LOCAL_* or auto-detected Ollama models.
     GROQ_API_KEY: str = ""
     GROQ_CV_MODEL: str = "llama-3.3-70b-versatile"
     GROQ_SCORING_MODEL: str = "llama-3.3-70b-versatile"
     GROQ_TIMEOUT_SECONDS: float = 15.0  # per-request timeout for Groq API calls
     GROQ_SUMMARY_TEMPERATURE: float = 0.3
     GROQ_PAIRS_TEMPERATURE: float = 0.2
+    # Local model overrides (Ollama). If empty, runtime falls back to auto-detected local models.
+    LOCAL_CV_MODEL: str = ""
+    LOCAL_SCORING_MODEL: str = ""
 
     # APILayer Resume Parser — https://apilayer.com/marketplace/resume_parser-api
     APILAYER_API_KEY: str = ""

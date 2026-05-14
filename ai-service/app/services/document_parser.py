@@ -15,7 +15,7 @@ from datetime import datetime, date
 import fitz  # PyMuPDF
 from app.models.scoring import ParsedPV, ParsedTrainingSheet, DocumentType
 from app.config import settings
-from app.utils.llm import parse_json_object
+from app.utils.llm import parse_json_object, call_local_chat
 
 logger = logging.getLogger(__name__)
 
@@ -438,15 +438,8 @@ class DocumentParser:
         )
 
     def _llm_infer_pv(self, text: str, current: ParsedPV) -> ParsedPV:
-        """Use Groq LLM to infer missing PV fields from the raw text."""
+        """Use local LLM to infer missing PV fields from the raw text."""
         try:
-            if not settings.GROQ_API_KEY:
-                logger.warning("GROQ_API_KEY not set — skipping LLM inference for PV")
-                return current
-
-            from groq import Groq
-            client = Groq(api_key=settings.GROQ_API_KEY, timeout=settings.GROQ_TIMEOUT_SECONDS)
-
             prompt = (
                 "Tu es un assistant qui extrait des informations de documents administratifs tunisiens.\n"
                 "Voici le texte extrait d'un PV (Attestation de Bonne Exécution).\n"
@@ -466,12 +459,18 @@ class DocumentParser:
                 f"Texte du document :\n{text[:3000]}"
             )
 
-            response = client.chat.completions.create(
-                model=settings.GROQ_SCORING_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
+            preferred_model = (
+                str(settings.LOCAL_SCORING_MODEL or "").strip()
+                or str(settings.GROQ_SCORING_MODEL or "").strip()
             )
-            raw = response.choices[0].message.content or ""
+            raw = call_local_chat(
+                messages=[{"role": "user", "content": prompt}],
+                model=preferred_model or None,
+                temperature=0.0,
+                timeout=settings.GROQ_TIMEOUT_SECONDS,
+                max_tokens=1000,
+                disable_streaming=True,
+            )
             data = parse_json_object(raw)
 
             if not data:
@@ -518,13 +517,6 @@ class DocumentParser:
     def _llm_infer_training(self, text: str, current: ParsedTrainingSheet) -> ParsedTrainingSheet:
         """Use LLM to infer missing training sheet fields from the raw text."""
         try:
-            if not settings.GROQ_API_KEY:
-                logger.warning("GROQ_API_KEY not set — skipping LLM inference for training sheet")
-                return current
-
-            from groq import Groq
-            client = Groq(api_key=settings.GROQ_API_KEY, timeout=settings.GROQ_TIMEOUT_SECONDS)
-
             prompt = (
                 "Tu es un assistant qui extrait des informations de feuilles de présence de formation.\n"
                 "Voici le texte extrait d'une feuille de présence.\n"
@@ -539,12 +531,18 @@ class DocumentParser:
                 f"Texte du document :\n{text[:3000]}"
             )
 
-            response = client.chat.completions.create(
-                model=settings.GROQ_SCORING_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
+            preferred_model = (
+                str(settings.LOCAL_SCORING_MODEL or "").strip()
+                or str(settings.GROQ_SCORING_MODEL or "").strip()
             )
-            raw = response.choices[0].message.content or ""
+            raw = call_local_chat(
+                messages=[{"role": "user", "content": prompt}],
+                model=preferred_model or None,
+                temperature=0.0,
+                timeout=settings.GROQ_TIMEOUT_SECONDS,
+                max_tokens=1000,
+                disable_streaming=True,
+            )
             data = parse_json_object(raw)
 
             if not data:
