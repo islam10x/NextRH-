@@ -452,54 +452,66 @@ const CVGenerationPage: React.FC = () => {
                 Aucun employé actif trouvé. Assurez-vous que les employés ont importé leur CV.
               </div>
             ) : (
-              <Popover open={employeePopoverOpen} onOpenChange={setEmployeePopoverOpen}>
+              <Popover open={employeePopoverOpen} onOpenChange={(open) => {
+                setEmployeePopoverOpen(open);
+                if (!open) setEmployeeSearch('');
+              }}>
                 <PopoverTrigger asChild>
                   <button
                     type="button"
                     disabled={isGenerating}
                     className={cn(
                       'flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background',
-                      'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2',
+                      'hover:bg-accent/50 transition-colors',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                       'disabled:cursor-not-allowed disabled:opacity-50',
                       !selectedEmployee && 'text-muted-foreground'
                     )}
                   >
-                    {selectedEmployee
-                      ? (() => {
-                          const emp = employees.find(e => e.user_id === selectedEmployee);
-                          return emp ? ([emp.firstName, emp.lastName].filter(Boolean).join(' ') || emp.email) : 'Sélectionner un employé';
-                        })()
-                      : 'Sélectionner un employé'}
+                    <span className="truncate">
+                      {selectedEmployee
+                        ? (() => {
+                            const emp = employees.find(e => e.user_id === selectedEmployee);
+                            return emp ? ([emp.firstName, emp.lastName].filter(Boolean).join(' ') || emp.email) : 'Sélectionner un employé';
+                          })()
+                        : 'Sélectionner un employé'}
+                    </span>
                     <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                   </button>
                 </PopoverTrigger>
-                <PopoverContent className="w-full p-0" align="start">
+                <PopoverContent
+                  className="p-0"
+                  align="start"
+                  style={{ width: 'var(--radix-popover-trigger-width)' }}
+                >
                   <div className="p-2 border-b">
                     <Input
-                      placeholder="Rechercher un employé..."
+                      placeholder="Rechercher par nom ou email…"
                       value={employeeSearch}
                       onChange={e => setEmployeeSearch(e.target.value)}
-                      className="h-8"
+                      className="h-8 text-sm"
                       autoFocus
                     />
                   </div>
-                  <div className="max-h-60 overflow-y-auto">
-                    {employees
-                      .filter(emp => {
+                  <div className="max-h-56 overflow-y-auto">
+                    {(() => {
+                      const q = employeeSearch.toLowerCase();
+                      const filtered = employees.filter(emp => {
                         const name = [emp.firstName, emp.lastName].filter(Boolean).join(' ').toLowerCase();
-                        const email = (emp.email || '').toLowerCase();
-                        const q = employeeSearch.toLowerCase();
-                        return name.includes(q) || email.includes(q);
-                      })
-                      .map(emp => {
+                        return name.includes(q) || (emp.email || '').toLowerCase().includes(q);
+                      });
+                      if (filtered.length === 0)
+                        return <p className="py-6 text-center text-sm text-muted-foreground">Aucun résultat</p>;
+                      return filtered.map(emp => {
                         const label = [emp.firstName, emp.lastName].filter(Boolean).join(' ') || emp.email;
+                        const isSelected = selectedEmployee === emp.user_id;
                         return (
                           <button
                             key={emp.user_id}
                             type="button"
                             className={cn(
-                              'flex w-full items-center px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground cursor-pointer',
-                              selectedEmployee === emp.user_id && 'bg-accent font-medium'
+                              'flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground transition-colors',
+                              isSelected && 'bg-accent/60 font-medium'
                             )}
                             onClick={() => {
                               setSelectedEmployee(emp.user_id);
@@ -508,18 +520,12 @@ const CVGenerationPage: React.FC = () => {
                               resetGeneration();
                             }}
                           >
+                            <Check className={cn('h-4 w-4 shrink-0', isSelected ? 'opacity-100' : 'opacity-0')} />
                             {label}
                           </button>
                         );
-                      })}
-                    {employees.filter(emp => {
-                      const name = [emp.firstName, emp.lastName].filter(Boolean).join(' ').toLowerCase();
-                      const email = (emp.email || '').toLowerCase();
-                      const q = employeeSearch.toLowerCase();
-                      return name.includes(q) || email.includes(q);
-                    }).length === 0 && (
-                      <p className="px-3 py-4 text-sm text-muted-foreground text-center">Aucun résultat</p>
-                    )}
+                      });
+                    })()}
                   </div>
                 </PopoverContent>
               </Popover>
