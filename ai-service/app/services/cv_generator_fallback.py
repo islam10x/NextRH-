@@ -27,9 +27,9 @@ from docx import Document
 from docx.text.paragraph import Paragraph as DocxParagraph
 from docxtpl import DocxTemplate
 from PIL import Image
-from groq import Groq
 
 from app.config import settings
+from app.utils.llm import call_local_chat, parse_json_object
 from app.services.cv_validation import validate_employee_data, ValidationReport
 from app.services.cv_generation_context import GenerationContext
 from app.services.cv_errors import (
@@ -2692,13 +2692,34 @@ def _language_instruction(language: Optional[str]) -> str:
     return "Write in the same language as the profile/template data."
 
 
+def _call_cv_local_llm(
+    messages: List[Dict[str, str]],
+    *,
+    temperature: float = 0.0,
+    max_tokens: int = 1024,
+) -> str:
+    preferred_model = (
+        str(settings.LOCAL_CV_MODEL or "").strip()
+        or str(settings.TRANSLATION_MODEL or "").strip()
+        or str(settings.GROQ_CV_MODEL or "").strip()
+    )
+    return call_local_chat(
+        messages=messages,
+        model=preferred_model or None,
+        temperature=temperature,
+        timeout=settings.GROQ_TIMEOUT_SECONDS,
+        max_tokens=max_tokens,
+        disable_streaming=True,
+    )
+
+
 def _groq_generate_skills(
     employee: Dict[str, Any],
-    api_key: str,
+    api_key: Optional[str] = None,
     preferred_language: Optional[str] = None,
 ) -> Optional[str]:
     """
-    Ask Groq to synthesize a concise skills paragraph from the employee's
+    Ask the local LLM to synthesize a concise skills paragraph from the employee's
     full profile (skills array, certifications, education, projects).
     Returns a single comma-separated string, or None on failure.
     """
@@ -2735,32 +2756,29 @@ def _groq_generate_skills(
     )
 
     try:
-        client = Groq(api_key=api_key, timeout=settings.GROQ_TIMEOUT_SECONDS)
-        resp = client.chat.completions.create(
-            model=settings.GROQ_CV_MODEL,
-            messages=[{"role": "user", "content": prompt}],
+        text = _call_cv_local_llm(
+            [{"role": "user", "content": prompt}],
             temperature=settings.GROQ_PAIRS_TEMPERATURE,
             max_tokens=200,
-        )
-        text = (resp.choices[0].message.content or '').strip()
+        ).strip()
         # Strip any stray markdown
         text = re.sub(r'^```[^\n]*\n?', '', text)
         text = re.sub(r'\n?```$', '', text).strip()
         if text:
-            logger.info(f"Groq skills synthesis: {text[:120]}")
+            logger.info(f"Local skills synthesis: {text[:120]}")
             return text
     except Exception as exc:
-        logger.warning(f"Groq skills synthesis failed: {exc}")
+        logger.warning(f"Local skills synthesis failed: {exc}")
     return None
 
 
 def _groq_generate_summary(
     employee: Dict[str, Any],
-    api_key: str,
+    api_key: Optional[str] = None,
     preferred_language: Optional[str] = None,
 ) -> Optional[str]:
     """
-    Ask Groq to generate a professional summary paragraph for the employee.
+    Ask the local LLM to generate a professional summary paragraph for the employee.
 
     Used when the template contained a summary/objective block but the employee
     record has no pre-written summary.  Returns a short paragraph (3–4 sentences,
@@ -2798,22 +2816,19 @@ def _groq_generate_summary(
     )
 
     try:
-        client = Groq(api_key=api_key, timeout=settings.GROQ_TIMEOUT_SECONDS)
-        resp = client.chat.completions.create(
-            model=settings.GROQ_CV_MODEL,
-            messages=[{"role": "user", "content": prompt}],
+        text = _call_cv_local_llm(
+            [{"role": "user", "content": prompt}],
             temperature=settings.GROQ_SUMMARY_TEMPERATURE,
             max_tokens=200,
-        )
-        text = (resp.choices[0].message.content or '').strip()
+        ).strip()
         text = re.sub(r'^```[^\n]*\n?', '', text)
         text = re.sub(r'\n?```$', '', text).strip()
         if text:
-            logger.info(f"Groq summary generation: {text[:120]}")
+            logger.info(f"Local summary generation: {text[:120]}")
             return text
     except Exception as exc:
-        logger.warning(f"Groq summary generation failed: {exc}")
-    # Deterministic fallback: build summary from structured data when Groq is unavailable
+        logger.warning(f"Local summary generation failed: {exc}")
+    # Deterministic fallback: build summary from structured data when LLM is unavailable
     title     = (employee.get('title') or '').strip()
     exp       = employee.get('experience') or []
     companies = [
@@ -2856,13 +2871,11 @@ def _build_section_content(
     if section == 'summary':
         text = _strip(employee.get('summary'))
         if not text:
-            # Attempt Groq generation when no pre-written summary is in the profile
-            api_key = settings.GROQ_API_KEY
-            if api_key:
-                generated = _groq_generate_summary(employee, api_key, preferred_language)
-                if generated:
-                    text = generated
-                    logger.info("[_build_section_content] Groq summary injected")
+            # Attempt local LLM generation when no pre-written summary is in the profile
+            generated = _groq_generate_summary(employee, None, preferred_language)
+            if generated:
+                text = generated
+                logger.info("[_build_section_content] Local summary injected")
         return [{'text': text, 'bold': False, 'bullet': False}] if text else None
 
     elif section == 'experience':
@@ -2931,10 +2944,9 @@ def _build_section_content(
         projs  = employee.get('projects') or []
         if not skills and not certs and not projs:
             return None
-        # Try Groq synthesis first; fall back to formatted list
-        api_key = settings.GROQ_API_KEY
-        if api_key and (certs or projs):
-            synthesized = _groq_generate_skills(employee, api_key, preferred_language)
+        # Try local LLM synthesis first; fall back to formatted list
+        if certs or projs:
+            synthesized = _groq_generate_skills(employee, None, preferred_language)
             if synthesized:
                 return [{'text': synthesized, 'bold': False, 'bullet': False}]
         # Fallback: build from skills array + tech keywords extracted from cert names
@@ -5536,17 +5548,15 @@ def _build_context_from_employee(
     ctx["linkedin"] = employee.get("linkedin") or ""
     
     ctx["summary"] = employee.get("summary") or ""
-    # Generate summary via Groq for placeholder templates when none is provided
+    # Generate summary via local LLM for placeholder templates when none is provided
     if not ctx["summary"]:
-        api_key = settings.GROQ_API_KEY
-        if api_key:
-            try:
-                generated = _groq_generate_summary(employee, api_key, preferred_language)
-                if generated:
-                    ctx["summary"] = generated
-                    logger.info("[_build_context] Groq summary injected")
-            except Exception as exc:
-                logger.warning(f"[_build_context] Groq summary generation failed: {exc}")
+        try:
+            generated = _groq_generate_summary(employee, None, preferred_language)
+            if generated:
+                ctx["summary"] = generated
+                logger.info("[_build_context] Local summary injected")
+        except Exception as exc:
+            logger.warning(f"[_build_context] Local summary generation failed: {exc}")
 
     ctx["skills"] = employee.get("skills") or []
     ctx["skills_text"] = ", ".join(str(s) for s in ctx["skills"] if s)
@@ -5889,62 +5899,53 @@ def _ai_get_replacements(
         paragraphs = []
     full_text = template_text
 
-    api_key = settings.GROQ_API_KEY
     parsed: Any = None
 
-    if not api_key:
-        logger.warning("GROQ_API_KEY not set — falling back to deterministic detection")
-    else:
-        # Use prioritized text instead of a blind character truncation.
-        # This guarantees Groq always sees the contact block even in long templates.
-        trunc_text = _build_groq_input_text(full_text, paragraphs, max_chars=5500)
+    # Use prioritized text instead of a blind character truncation.
+    # This guarantees the LLM sees the contact block even in long templates.
+    trunc_text = _build_groq_input_text(full_text, paragraphs, max_chars=5500)
 
-        # Build a list of sections the employee actually has data for, so the AI
-        # knows not to include them in sections_to_clear
-        _populated: List[str] = []
-        if employee.get('summary'):
-            _populated.append('summary/profile/objective')
-        if employee.get('experience') and len(employee['experience']) > 0:
-            _populated.append('experience/work history')
-        if employee.get('education') and len(employee['education']) > 0:
-            _populated.append('education/formation')
-        if employee.get('skills') and len(employee['skills']) > 0:
-            _populated.append('skills/compétences')
-        if employee.get('projects') and len(employee['projects']) > 0:
-            _populated.append('projects/key projects')
-        if employee.get('certifications') and len(employee['certifications']) > 0:
-            _populated.append('certifications')
-        if employee.get('languages') and len(employee['languages']) > 0:
-            _populated.append('languages/langues')
-        if employee.get('interests') and len(employee['interests']) > 0:
-            _populated.append("interests/centres d'intérêt")
-        populated_sections_str = ', '.join(_populated) if _populated else 'see employee JSON'
+    # Build a list of sections the employee actually has data for, so the AI
+    # knows not to include them in sections_to_clear
+    _populated: List[str] = []
+    if employee.get('summary'):
+        _populated.append('summary/profile/objective')
+    if employee.get('experience') and len(employee['experience']) > 0:
+        _populated.append('experience/work history')
+    if employee.get('education') and len(employee['education']) > 0:
+        _populated.append('education/formation')
+    if employee.get('skills') and len(employee['skills']) > 0:
+        _populated.append('skills/compétences')
+    if employee.get('projects') and len(employee['projects']) > 0:
+        _populated.append('projects/key projects')
+    if employee.get('certifications') and len(employee['certifications']) > 0:
+        _populated.append('certifications')
+    if employee.get('languages') and len(employee['languages']) > 0:
+        _populated.append('languages/langues')
+    if employee.get('interests') and len(employee['interests']) > 0:
+        _populated.append("interests/centres d'intérêt")
+    populated_sections_str = ', '.join(_populated) if _populated else 'see employee JSON'
 
-        language_hint = _language_instruction(preferred_language)
-        prompt = _AI_PROMPT.format(
-            template_text=trunc_text,
-            employee_json=json.dumps(employee, ensure_ascii=False, indent=2),
-            populated_sections=populated_sections_str,
-            language_hint=language_hint,
-        )
+    language_hint = _language_instruction(preferred_language)
+    prompt = _AI_PROMPT.format(
+        template_text=trunc_text,
+        employee_json=json.dumps(employee, ensure_ascii=False, indent=2),
+        populated_sections=populated_sections_str,
+        language_hint=language_hint,
+    )
 
-        client = Groq(api_key=api_key, timeout=settings.GROQ_TIMEOUT_SECONDS)
-        try:
-            response = client.chat.completions.create(
-                model=settings.GROQ_CV_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
-                max_tokens=1200,
-                response_format={"type": "json_object"},
-            )
-            raw = (response.choices[0].message.content or '').strip()
-            logger.info(f"Groq raw response: {raw[:600]}")
-            try:
-                parsed = json.loads(raw)
-            except json.JSONDecodeError as exc:
-                logger.error(f"Could not parse Groq JSON response: {exc}\nRaw: {raw[:300]}")
-        except Exception as exc:
-            logger.error(f"Groq API call failed: {exc}")
+    try:
+        raw = _call_cv_local_llm(
+            [{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=1200,
+        ).strip()
+        logger.info(f"Local AI raw response: {raw[:600]}")
+        parsed = parse_json_object(raw)
+        if parsed is None:
+            logger.error("Could not parse local AI JSON response. Raw preview: %s", raw[:300])
+    except Exception as exc:
+        logger.error(f"Local AI call failed: {exc}")
 
     # ── Extract replacement pairs ──────────────────────────────────────
     if parsed is not None:
@@ -6821,22 +6822,15 @@ def _generate_with_replacement(
     if not employee.get('summary'):
         with gen_ctx.phase("summary_generation") as p:
             try:
-                api_key = settings.GROQ_API_KEY
-                if not api_key:
-                    p.status = "skipped"
-                    p.message = "GROQ_API_KEY not set — using deterministic fallback"
-                    logger.info("[gen] GROQ_API_KEY not set — summary will use fallback")
-                    summary = None
-                else:
-                    summary = _groq_generate_summary(employee, api_key, preferred_language)
+                summary = _groq_generate_summary(employee, None, preferred_language)
                 if summary:
                     employee = dict(employee)
                     employee['summary'] = summary
                     p.message = f"Generated ({len(summary)} chars)"
-                    logger.info("[gen] Summary pre-generated (Groq or fallback)")
+                    logger.info("[gen] Summary pre-generated (local or deterministic fallback)")
                 else:
                     p.status = "skipped"
-                    p.message = "No API key or generation returned empty"
+                    p.message = "Generation returned empty — deterministic flow will continue"
             except Exception as exc:
                 p.status = "failed"
                 p.error = str(exc)

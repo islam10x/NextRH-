@@ -10,7 +10,7 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import settings
-from app.api import parsing, rag, generation
+from app.api import parsing, rag, generation, scoring
 from app.utils.logger import logger
 from app.rag.models import init_rag_schema
 
@@ -33,7 +33,7 @@ FastAPIInstrumentor.instrument_app(app)
 app.include_router(parsing.router, prefix=f"{settings.API_V1_STR}/parsing", tags=["parsing"])
 app.include_router(rag.router, prefix=f"{settings.API_V1_STR}/rag", tags=["rag"])
 app.include_router(generation.router, prefix=f"{settings.API_V1_STR}/generation", tags=["generation"])
-# app.include_router(scoring.router, prefix=f"{settings.API_V1_STR}/scoring", tags=["scoring"])
+app.include_router(scoring.router, prefix=f"{settings.API_V1_STR}/scoring", tags=["scoring"])
 
 @app.on_event("startup")
 async def startup_event():

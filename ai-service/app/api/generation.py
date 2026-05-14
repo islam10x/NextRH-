@@ -310,13 +310,13 @@ def _run_fallback_generation(
 
     fallback_warnings: List[Dict[str, Any]] = []
 
-    # Apply Rania's Groq-powered translation pipeline (translate_cv_best_effort)
+    # Apply translation pipeline (translate_cv_best_effort)
     # before rendering. Only the supported languages (en/fr) are translated;
     # 'original'/unsupported codes pass through unchanged.
     lang = (language or "original").strip().lower()
     should_translate_headings = bool(lang) and lang in CV_TRANSLATION_SUPPORTED_LANGUAGES
     if should_translate_headings:
-        logger.info("Translating employee data to '%s' via Groq (cv_translation)", lang)
+        logger.info("Translating employee data to '%s' via local translation pipeline", lang)
         try:
             employee_data = translate_cv_best_effort(employee_data, lang)
         except Exception as exc:
@@ -793,7 +793,7 @@ async def generate_cv(
             pre_warnings = []
 
         if engine_mode == "fallback":
-            # Rania's Advanced AI engine — lxml + Groq pattern-based replacement.
+            # Advanced AI engine — lxml + local model pattern-based replacement.
             result = _run_fallback_generation(
                 template_path=template_path,
                 output_dir=temp_dir,
@@ -837,7 +837,7 @@ async def generate_cv(
                 cached_field_mapping=cached_mapping,
             )
 
-        # Merge engine-side warnings (e.g. unfilled fields, Groq unavailable
+        # Merge engine-side warnings (e.g. unfilled fields, local model unavailable
         # from the fallback engine) with pre-flight analysis warnings.
         engine_warnings = result.get("warnings") if isinstance(result, dict) else None
         merged_warnings = list(pre_warnings)
