@@ -737,21 +737,10 @@ def translate_cv_best_effort(cv_data: Dict[str, Any], target_lang: str) -> Dict[
         return cv_data
 
     source = deepcopy(cv_data)
-    semantic = translate_cv_structured({
-        "target_language": target_lang,
-        "cv_data": source,
-    })
-    semantic = _merge_translated_cv_data(source, semantic)
-
-    if semantic != source:
-        return semantic
-
     if not _has_translatable_content(source):
-        return semantic
+        return source
 
-    logger.info(
-        "translate_cv_best_effort: semantic translation produced no changes for %s; trying field fallback.",
-        target_lang,
-    )
+    # Skip whole-document semantic call (too slow for local 1.5b model).
+    # Go directly to chunked field-by-field translation.
     fallback = translate_cv_data(deepcopy(source), target_lang)
     return _merge_translated_cv_data(source, fallback)
