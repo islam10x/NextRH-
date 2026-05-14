@@ -1798,10 +1798,10 @@ export class CvService {
         const aiUrl = `${this.aiServiceBaseUrl}/api/v1/generation/cv`;
         this.logger.log(`Calling AI generation service: ${aiUrl} (format: ${outputFormat})`);
 
-        // 180s timeout: complex templates with Groq calls can take up to ~30s,
-        // but LibreOffice PDF conversion can take longer on cold start.
+        // 300s timeout: local Ollama inference on CPU can take 60-120s per call
+        // with up to 3 sequential LLM calls plus LibreOffice PDF conversion.
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 180_000);
+        const timeout = setTimeout(() => controller.abort(), 300_000);
 
         let aiResponse: globalThis.Response;
         try {
