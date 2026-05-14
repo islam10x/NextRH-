@@ -64,7 +64,7 @@ services:
       - RAG_METADATA_ROOTS=/app/file-storage/CV_Database
       - RAG_CHAT_MODEL=${RAG_CHAT_MODEL:-qwen2.5:1.5b-instruct}
       - RAG_CHAT_TIMEOUT_SECONDS=${RAG_CHAT_TIMEOUT_SECONDS:-30}
-      - LOCAL_CV_MODEL=${LOCAL_CV_MODEL:-qwen2.5:7b}
+      - LOCAL_CV_MODEL=${LOCAL_CV_MODEL:-qwen2.5:1.5b-instruct}
       - GROQ_API_KEY=
       - APILAYER_API_KEY=
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://cv-otel-collector:4317
