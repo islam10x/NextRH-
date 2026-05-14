@@ -198,54 +198,44 @@ def _extract_json(raw: str) -> Dict[str, str]:
     return json.loads(candidate)
 
 
-def _translate_batch(texts: List[str], target_lang: str, context: str) -> List[str]:
-    """Translate a list of strings via a single local LLM call.
+_BATCH_SIZE = 5  # small models handle small JSON reliably
 
-    Falls back to per-item translation when the batch JSON cannot be parsed.
-    Returns original texts on complete failure.
-    """
+
+def _translate_chunk(chunk: List[str], offset: int, lang_name: str, target_lang: str) -> List[str]:
+    """Translate a small chunk of texts, returning originals on failure."""
+    input_map = {str(offset + i): t for i, t in enumerate(chunk)}
+    prompt = (
+        f"Translate each JSON value to {lang_name}. CV context.\n"
+        "Translate: job titles, degrees, summaries, descriptions.\n"
+        "Keep unchanged: company/institution names, technical terms, dates, emails, names.\n"
+        "Return ONLY valid JSON with the exact same integer keys. No extra text.\n\n"
+        + json.dumps(input_map, ensure_ascii=False)
+    )
+    try:
+        raw = _call_translation_llm(
+            [{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=1024,
+        )
+        result_map = _extract_json(raw)
+        return [str(result_map.get(str(offset + i), chunk[i])) for i in range(len(chunk))]
+    except Exception as exc:
+        logger.warning("Chunk translation failed (%s) — keeping originals.", exc)
+        return list(chunk)
+
+
+def _translate_batch(texts: List[str], target_lang: str, context: str) -> List[str]:
+    """Translate texts in small chunks so the local LLM produces reliable JSON."""
     if not texts:
         return texts
 
     lang_name = _LANG_NAMES.get(target_lang, target_lang)
-    input_map = {str(i): t for i, t in enumerate(texts)}
-
-    prompt = (
-        f"You are a professional CV translator. Translate each JSON value to {lang_name}.\n"
-        f"Context: {context}\n\n"
-        "ALWAYS translate:\n"
-        "  • Job titles, position names, role descriptions (e.g. 'Administrateur' → 'Administrator', "
-        "'Chef de projet' → 'Project Manager', 'Ingénieur' → 'Engineer')\n"
-        "  • Degree / diploma names, field-of-study descriptions\n"
-        "  • Summaries, descriptions, skill labels\n\n"
-        "LEAVE UNCHANGED:\n"
-        "  • Company names, brand names, institution names\n"
-        "  • Technical terms: programming languages, frameworks, tool names, acronyms\n"
-        "  • Contact data: emails, phone numbers, URLs\n"
-        "  • Date strings and numeric values\n"
-        "  • Personal names\n"
-        "\nPreserve newlines inside strings.\n"
-        "Return ONLY a valid JSON object with the exact same integer keys. "
-        "No markdown fences, no extra text, no trailing commas.\n\n"
-        + json.dumps(input_map, ensure_ascii=False)
-    )
-
-    try:
-        raw = _call_translation_llm(
-            [{"role": "user", "content": prompt}],
-            temperature=0.05,
-            max_tokens=4096,
-        )
-        result_map = _extract_json(raw)
-        out = [str(result_map.get(str(i), texts[i])) for i in range(len(texts))]
-        logger.info("Local batch translated %d item(s) → %s", len(texts), target_lang)
-        return out
-    except (json.JSONDecodeError, ValueError) as exc:
-        logger.warning("Local batch JSON parse failed (%s) — falling back to per-item.", exc)
-        return _translate_items_individually(texts, target_lang, lang_name)
-    except Exception as exc:
-        logger.warning("Local batch call failed (%s) — using originals.", exc)
-        return texts
+    result: List[str] = []
+    for i in range(0, len(texts), _BATCH_SIZE):
+        chunk = texts[i: i + _BATCH_SIZE]
+        result.extend(_translate_chunk(chunk, i, lang_name, target_lang))
+    logger.info("Batch translated %d item(s) → %s", len(texts), target_lang)
+    return result
 
 
 def _translate_items_individually(
