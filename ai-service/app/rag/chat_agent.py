@@ -13,7 +13,26 @@ import re
 import unicodedata
 from typing import Dict, Iterable
 
-from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableLambda
+
+
+def create_stuff_documents_chain(llm, prompt, *, document_prompt=None, document_separator="\n\n"):
+    _doc_prompt = document_prompt or PromptTemplate.from_template("{page_content}")
+    _parser = StrOutputParser()
+
+    def _format_docs(inputs: dict) -> dict:
+        docs = inputs.get("context") or []
+        parts = []
+        for doc in docs:
+            meta = dict(doc.metadata or {})
+            try:
+                parts.append(_doc_prompt.format(page_content=doc.page_content, **meta))
+            except Exception:
+                parts.append(doc.page_content)
+        return {**inputs, "context": document_separator.join(parts)}
+
+    return RunnableLambda(_format_docs) | prompt | llm | _parser
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.documents import Document as LCDocument
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
