@@ -6205,6 +6205,12 @@ def _clear_template_sections(docx_path: str, sections_to_clear: List[str]) -> in
                 cell_text = ''.join(
                     t.text or '' for t in child.iter(f'{{{W}}}t')
                 ).strip()
+                # Section headings are always short. Long cell texts are content
+                # paragraphs that must never be matched as headings — otherwise
+                # e.g. "...de la Communication (STIC)..." would be cleared when
+                # sections_to_clear contains "Communication".
+                if len(cell_text) > 60:
+                    continue
                 for label in sections_to_clear:
                     if _label_match(cell_text, label):
                         # Clear all subsequent paragraphs in this cell up to the
@@ -6246,6 +6252,8 @@ def _clear_template_sections(docx_path: str, sections_to_clear: List[str]) -> in
                         cell_text = ''.join(
                             t.text or '' for t in child.iter(f'{{{W}}}t')
                         ).strip()
+                        if len(cell_text) > 60:
+                            continue
                         for label in sections_to_clear:
                             if _label_match(cell_text, label):
                                 for content_p in tc_children[h_idx + 1:]:
