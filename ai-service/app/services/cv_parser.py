@@ -1,11 +1,11 @@
 import os
 import json
-import httpx
 from typing import Any, Dict, List, Optional, Union
 from app.parsers.pdf_parser import PDFParser
 from app.parsers.docx_parser import DocxParser
 from app.parsers.template_parser import TemplateCVParser
 from app.config import settings
+from app.utils.llm import call_local_chat, parse_json_object
 from app.utils.logger import logger
 from fastapi import UploadFile
 
@@ -142,6 +142,54 @@ def _merge_apilayer(base: Dict[str, Any], api: Dict[str, Any]) -> Dict[str, Any]
     return merged
 
 
+def _local_resume_enrichment(raw_text: str) -> Dict[str, Any]:
+    """Best-effort local enrichment that mimics APILayer's response shape."""
+    text = (raw_text or "").strip()
+    if not text:
+        return {}
+
+    excerpt = text[:12000]
+    prompt = (
+        "Extract CV data from the text and return ONLY a valid JSON object.\n"
+        "Use this schema (leave unknown fields as empty strings/null/[]):\n"
+        "{\n"
+        '  "name": "", "email": "", "phone": "", "address": "",\n'
+        '  "city": "", "state": "", "country": "", "linkedin": "",\n'
+        '  "social_links": [{"url": ""}],\n'
+        '  "objective": "", "summary": "", "professional_summary": "",\n'
+        '  "skills": [""],\n'
+        '  "experience": [{"title": "", "position": "", "company": "", "organization": "", '
+        '"date_start": "", "date_end": "", "description": ""}],\n'
+        '  "education": [{"degree": "", "name": "", "institution": "", "school": "", "graduation_date": ""}],\n'
+        '  "languages": [""]\n'
+        "}\n"
+        "Rules:\n"
+        "- Do not invent data.\n"
+        "- Keep company and institution names unchanged.\n"
+        "- Return JSON only, no markdown.\n\n"
+        f"CV text:\n{excerpt}"
+    )
+
+    preferred_model = (
+        str(settings.LOCAL_CV_MODEL or "").strip()
+        or str(settings.TRANSLATION_MODEL or "").strip()
+        or str(settings.GROQ_CV_MODEL or "").strip()
+    )
+    raw = call_local_chat(
+        messages=[{"role": "user", "content": prompt}],
+        model=preferred_model or None,
+        temperature=0.0,
+        timeout=settings.GROQ_TIMEOUT_SECONDS * 2,
+        max_tokens=2200,
+        disable_streaming=True,
+    )
+
+    parsed = parse_json_object(raw)
+    if not isinstance(parsed, dict):
+        return {}
+    return parsed
+
+
 class CVParserService:
     def __init__(self):
         self.pdf_parser = PDFParser()
@@ -154,8 +202,8 @@ class CVParserService:
 
         Pipeline:
           1. TemplateCVParser  — deterministic regex/layout parser (primary)
-          2. APILayer Resume Parser  — enriches fields the primary parser missed
-          3. Merge: primary takes priority, APILayer fills gaps
+          2. Local LLM enrichment — fills fields the primary parser missed
+          3. Merge: primary takes priority, local enrichment fills gaps
         """
         filename = file.filename
         content_type = file.content_type
@@ -175,33 +223,25 @@ class CVParserService:
             # ── Step 1: Deterministic template parser ─────────────────
             structured_data = self.template_parser.parse(temp_path)
 
-            # ── Step 2: APILayer enrichment (best-effort) ─────────────
-            apilayer_key = settings.APILAYER_API_KEY
-            if apilayer_key and filename.lower().endswith((".docx", ".pdf")):
+            # ── Step 2: Local LLM enrichment (best-effort) ─────────────
+            if filename.lower().endswith((".docx", ".pdf")):
                 try:
-                    import requests as _req
-                    resp = _req.post(
-                        "https://api.apilayer.com/resume_parser/upload",
-                        headers={
-                            "Content-Type": "application/octet-stream",
-                            "apikey": apilayer_key,
-                        },
-                        data=content,
-                        timeout=30,
-                    )
-                    if resp.ok:
-                        api_parsed = resp.json()
-                        logger.info(
-                            "APILayer raw response:\n%s",
-                            json.dumps(api_parsed, ensure_ascii=False, indent=2)[:2000],
-                        )
-                        structured_data = _merge_apilayer(structured_data, api_parsed)
+                    if filename.lower().endswith(".pdf"):
+                        raw_text = self.pdf_parser.parse(temp_path)
                     else:
-                        logger.warning(
-                            f"APILayer returned HTTP {resp.status_code} — using parser-only result"
+                        raw_text = self.docx_parser.parse(temp_path)
+
+                    local_parsed = _local_resume_enrichment(raw_text)
+                    if local_parsed:
+                        logger.info(
+                            "Local enrichment raw response:\n%s",
+                            json.dumps(local_parsed, ensure_ascii=False, indent=2)[:2000],
                         )
+                        structured_data = _merge_apilayer(structured_data, local_parsed)
+                    else:
+                        logger.warning("Local enrichment returned empty result — using parser-only result")
                 except Exception as exc:
-                    logger.warning(f"APILayer call failed ({exc}) — using parser-only result")
+                    logger.warning(f"Local enrichment failed ({exc}) — using parser-only result")
 
             # ── Step 3: Metadata ──────────────────────────────────────
             metadata = {}

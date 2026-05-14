@@ -1,7 +1,7 @@
 """
-CV Translation Service (Groq-powered)
-======================================
-Uses the Groq LLM to:
+CV Translation Service (Local Ollama-powered)
+=============================================
+Uses a local Ollama LLM to:
 
     1. Translate employee-data text fields in a single batch call before rendering.
     2. Post-process the generated DOCX to translate section headings that are
@@ -24,6 +24,7 @@ from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.config import settings
+from app.utils.llm import call_local_chat
 
 logger = logging.getLogger("ai_service.translation")
 
@@ -152,12 +153,27 @@ def _merge_translated_cv_data(source: Dict[str, Any], translated: Dict[str, Any]
     return _merge_translated_value(source, translated)
 
 
-# ─── Groq helpers ────────────────────────────────────────────────────────────
+# ─── Local LLM helpers ───────────────────────────────────────────────────────
 
-def _groq_client():
-    from groq import Groq
-    # 4× the per-request timeout: translation batches can be large
-    return Groq(api_key=settings.GROQ_API_KEY, timeout=settings.GROQ_TIMEOUT_SECONDS * 4)
+def _call_translation_llm(
+    messages: List[Dict[str, str]],
+    *,
+    temperature: float = 0.0,
+    max_tokens: int = 1024,
+) -> str:
+    preferred_model = (
+        str(settings.TRANSLATION_MODEL or "").strip()
+        or str(settings.LOCAL_CV_MODEL or "").strip()
+        or str(settings.GROQ_CV_MODEL or "").strip()
+    )
+    return call_local_chat(
+        messages=messages,
+        model=preferred_model or None,
+        temperature=temperature,
+        timeout=settings.GROQ_TIMEOUT_SECONDS * 4,
+        max_tokens=max_tokens,
+        disable_streaming=True,
+    )
 
 
 def _extract_json(raw: str) -> Dict[str, str]:
@@ -183,7 +199,7 @@ def _extract_json(raw: str) -> Dict[str, str]:
 
 
 def _translate_batch(texts: List[str], target_lang: str, context: str) -> List[str]:
-    """Translate a list of strings via a single Groq call.
+    """Translate a list of strings via a single local LLM call.
 
     Falls back to per-item translation when the batch JSON cannot be parsed.
     Returns original texts on complete failure.
@@ -215,36 +231,28 @@ def _translate_batch(texts: List[str], target_lang: str, context: str) -> List[s
     )
 
     try:
-        client = _groq_client()
-        resp = client.chat.completions.create(
-            model=settings.GROQ_CV_MODEL,
-            messages=[{"role": "user", "content": prompt}],
+        raw = _call_translation_llm(
+            [{"role": "user", "content": prompt}],
             temperature=0.05,
             max_tokens=4096,
         )
-        raw = resp.choices[0].message.content or ""
         result_map = _extract_json(raw)
         out = [str(result_map.get(str(i), texts[i])) for i in range(len(texts))]
-        logger.info("Groq batch translated %d item(s) → %s", len(texts), target_lang)
+        logger.info("Local batch translated %d item(s) → %s", len(texts), target_lang)
         return out
     except (json.JSONDecodeError, ValueError) as exc:
-        logger.warning("Groq batch JSON parse failed (%s) — falling back to per-item.", exc)
+        logger.warning("Local batch JSON parse failed (%s) — falling back to per-item.", exc)
         return _translate_items_individually(texts, target_lang, lang_name)
     except Exception as exc:
-        logger.warning("Groq batch call failed (%s) — using originals.", exc)
+        logger.warning("Local batch call failed (%s) — using originals.", exc)
         return texts
 
 
 def _translate_items_individually(
     texts: List[str], target_lang: str, lang_name: str
 ) -> List[str]:
-    """Per-item fallback: one Groq call per text.  Used when batch JSON fails."""
+    """Per-item fallback: one local LLM call per text."""
     results: List[str] = list(texts)
-    try:
-        client = _groq_client()
-    except Exception as exc:
-        logger.warning("Groq client init failed in per-item fallback (%s).", exc)
-        return results
 
     for i, text in enumerate(texts):
         if not text or not text.strip():
@@ -256,13 +264,12 @@ def _translate_items_individually(
             f"{text}"
         )
         try:
-            resp = client.chat.completions.create(
-                model=settings.GROQ_CV_MODEL,
-                messages=[{"role": "user", "content": prompt}],
+            translated_text = _call_translation_llm(
+                [{"role": "user", "content": prompt}],
                 temperature=0.05,
                 max_tokens=1024,
             )
-            results[i] = (resp.choices[0].message.content or text).strip()
+            results[i] = (translated_text or text).strip()
         except Exception as exc:
             logger.warning("Per-item translation %d failed (%s) — keeping original.", i, exc)
     return results
@@ -301,7 +308,7 @@ def _collect_short_paragraphs(root) -> List[Tuple[str, str]]:
 def translate_docx_headings(docx_path: str, target_lang: str) -> None:
     """Post-process the generated DOCX in-place.
 
-    Extracts all short paragraphs, sends them to Groq with instructions to
+    Extracts all short paragraphs, sends them to a local LLM with instructions to
     translate only the ones that are section labels/headings (the LLM decides),
     and applies replacements back to every matching paragraph in the document
     (including textbox copies).
@@ -327,7 +334,7 @@ def translate_docx_headings(docx_path: str, target_lang: str) -> None:
             logger.debug("No heading candidates found in DOCX.")
             return
 
-        # Build input for Groq: ask it to translate ONLY section headings
+        # Build input for the local LLM: ask it to translate ONLY section headings
         orig_texts = [orig for _, orig in candidates]
         input_map = {str(i): t for i, t in enumerate(orig_texts)}
 
@@ -346,20 +353,17 @@ def translate_docx_headings(docx_path: str, target_lang: str) -> None:
         )
 
         try:
-            client = _groq_client()
-            resp = client.chat.completions.create(
-                model=settings.GROQ_CV_MODEL,
-                messages=[{"role": "user", "content": prompt}],
+            raw = _call_translation_llm(
+                [{"role": "user", "content": prompt}],
                 temperature=0.0,
                 max_tokens=2048,
             )
-            raw = resp.choices[0].message.content or ""
             result_map = _extract_json(raw)
         except (json.JSONDecodeError, ValueError) as exc:
             logger.warning("Heading translation JSON parse failed (%s).", exc)
             return
         except Exception as exc:
-            logger.warning("Heading translation Groq call failed (%s).", exc)
+            logger.warning("Heading translation local LLM call failed (%s).", exc)
             return
 
         # Build replacement dict: original_text → translated (only where changed)
@@ -371,7 +375,7 @@ def translate_docx_headings(docx_path: str, target_lang: str) -> None:
                 logger.debug("Heading: %r → %r", orig, translated)
 
         if not replacement_map:
-            logger.debug("Groq produced no heading changes.")
+            logger.debug("Local LLM produced no heading changes.")
             return
 
         # Apply to ALL matching paragraphs (including textbox copies)
@@ -445,9 +449,9 @@ def translate_cv_data(employee_data: Dict[str, Any], target_lang: str) -> Dict[s
     Empty fields are NEVER fabricated — if a value is absent or blank in
     the source data it stays absent/blank in the output.
 
-    All fields are collected into a single batch and translated in one Groq
-    call.  Falls back to per-item translation when batch JSON fails, and falls
-    back to originals on complete Groq failure.
+    All fields are collected into a single batch and translated in one local
+    LLM call. Falls back to per-item translation when batch JSON fails, and
+    falls back to originals on complete LLM failure.
     """
     if not target_lang or target_lang not in SUPPORTED_LANGUAGES:
         return employee_data
@@ -643,7 +647,7 @@ No markdown fences, no explanations, no extra text, no trailing commas.
 
 
 def translate_cv_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Semantic multilingual CV translation via a single Groq call.
+    """Semantic multilingual CV translation via a single local LLM call.
 
     Accepts the structured payload::
 
@@ -664,8 +668,8 @@ def translate_cv_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
     * Input can be written in **any** language — the LLM performs semantic
       understanding first, then produces clean professional output in
       *target_language*.
-    * Uses a **single** Groq call for the whole CV (fast & coherent).
-    * Falls back to the raw ``cv_data`` on any Groq failure so the caller
+    * Uses a **single** local LLM call for the whole CV (fast & coherent).
+    * Falls back to the raw ``cv_data`` on any LLM failure so the caller
       always receives a usable result.
 
     Returns
@@ -698,17 +702,14 @@ def translate_cv_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     try:
-        client = _groq_client()
-        resp = client.chat.completions.create(
-            model=settings.GROQ_CV_MODEL,
-            messages=[
+        raw = _call_translation_llm(
+            [
                 {"role": "system", "content": _SEMANTIC_SYSTEM_PROMPT},
-                {"role": "user",   "content": user_prompt},
+                {"role": "user", "content": user_prompt},
             ],
             temperature=0.05,
             max_tokens=4096,
         )
-        raw = resp.choices[0].message.content or ""
         translated_data = _extract_json(raw)
         translated_data = _merge_translated_cv_data(cv_data, translated_data)
 
@@ -728,7 +729,7 @@ def translate_cv_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
         return cv_data
     except Exception as exc:
         logger.warning(
-            "translate_cv_structured: Groq call failed (%s) — returning original cv_data.", exc
+            "translate_cv_structured: local LLM call failed (%s) — returning original cv_data.", exc
         )
         return cv_data
 
@@ -739,7 +740,7 @@ def translate_cv_best_effort(cv_data: Dict[str, Any], target_lang: str) -> Dict[
     Strategy:
       1. Try the semantic whole-document translator for coherence.
       2. If it makes no changes, fall back to the field-batch translator to avoid
-         returning an untranslated CV on partial Groq failures.
+         returning an untranslated CV on partial local LLM failures.
       3. Always preserve the original CV structure and protected identifiers.
     """
     if not target_lang or target_lang not in SUPPORTED_LANGUAGES:

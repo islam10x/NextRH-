@@ -3,7 +3,7 @@ import json
 import urllib.request
 import time
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from app.config import settings
 
 LLM_MODEL = "qwen2.5:1.5b-instruct"
@@ -102,6 +102,96 @@ def build_rag_chat_llm(temperature: float = 0.0, timeout: float | None = None):
         num_ctx=8192,
     )
     return llm, model_name, "ollama"
+
+
+def call_local_chat(
+    messages: List[Dict[str, str]],
+    model: Optional[str] = None,
+    temperature: float = 0.0,
+    timeout: float | None = None,
+    max_tokens: int | None = None,
+    disable_streaming: bool = True,
+) -> str:
+    """Invoke a local Ollama chat model with Groq-like simple inputs.
+
+    The helper accepts a list of dict messages:
+      [{"role": "system"|"user"|"assistant", "content": "..."}]
+
+    It attempts the preferred model first, then falls back to the strongest
+    available local instruct model.
+    """
+    if not messages:
+        return ""
+
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+    from langchain_ollama import ChatOllama
+
+    lc_messages = []
+    for msg in messages:
+        role = str((msg or {}).get("role") or "user").strip().lower()
+        content = str((msg or {}).get("content") or "").strip()
+        if not content:
+            continue
+        if role == "system":
+            lc_messages.append(SystemMessage(content=content))
+        elif role == "assistant":
+            lc_messages.append(AIMessage(content=content))
+        else:
+            lc_messages.append(HumanMessage(content=content))
+
+    if not lc_messages:
+        return ""
+
+    configured_model = str(model or "").strip()
+    fallback_model = resolve_llm_model()
+    model_candidates: list[str] = []
+    if configured_model:
+        model_candidates.append(configured_model)
+    if fallback_model and fallback_model not in model_candidates:
+        model_candidates.append(fallback_model)
+
+    last_error: Exception | None = None
+    for candidate_model in model_candidates:
+        try:
+            client_kwargs: dict[str, float] = {}
+            if isinstance(timeout, (int, float)) and float(timeout) > 0:
+                client_kwargs["timeout"] = float(timeout)
+
+            generation_kwargs: dict[str, int] = {}
+            if isinstance(max_tokens, int) and max_tokens > 0:
+                generation_kwargs["num_predict"] = int(max_tokens)
+
+            llm = ChatOllama(
+                model=candidate_model,
+                base_url=settings.OLLAMA_URL,
+                temperature=temperature,
+                client_kwargs=client_kwargs,
+                disable_streaming=disable_streaming,
+                num_ctx=8192,
+                **generation_kwargs,
+            )
+            response = llm.invoke(lc_messages)
+            content = getattr(response, "content", "")
+            if isinstance(content, list):
+                content = "".join(
+                    part.get("text", "") if isinstance(part, dict) else str(part)
+                    for part in content
+                )
+            text = str(content or "").strip()
+            if configured_model and candidate_model != configured_model:
+                logger.warning(
+                    "Preferred local model '%s' unavailable, used '%s' instead.",
+                    configured_model,
+                    candidate_model,
+                )
+            return text
+        except Exception as exc:
+            last_error = exc
+            logger.warning("Local LLM call failed with model '%s': %s", candidate_model, exc)
+
+    if last_error is not None:
+        raise last_error
+    return ""
 
 def parse_json_object(raw_text: str) -> Optional[Dict[str, Any]]:
     """Robustly parse a JSON object from text, finding the first valid {} block.
