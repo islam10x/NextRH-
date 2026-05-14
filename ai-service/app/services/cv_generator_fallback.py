@@ -6149,6 +6149,8 @@ def _clear_template_sections(docx_path: str, sections_to_clear: List[str]) -> in
                     if child.tag != f'{{{W}}}p':
                         continue
                     texts = ''.join(t.text or '' for t in child.iter(f'{{{W}}}t')).strip()
+                    if len(texts) > 60:
+                        continue
                     if _label_match(texts, label):
                         # Found heading — remove it and its safe content range
                         current_body = list(body)
