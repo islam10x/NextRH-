@@ -67,6 +67,7 @@ services:
       - LOCAL_CV_MODEL=${LOCAL_CV_MODEL:-qwen2.5:1.5b-instruct}
       - GROQ_API_KEY=
       - APILAYER_API_KEY=
+      - GROQ_TIMEOUT_SECONDS=120
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://cv-otel-collector:4317
       - OTEL_SERVICE_NAME=ai-service
     volumes:
