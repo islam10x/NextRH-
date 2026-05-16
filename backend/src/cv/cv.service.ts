@@ -833,7 +833,7 @@ export class CvService {
                     profile: profile,
                     project: project,
                     description: projectDesc,
-                    role: this.normalizeProjectRole(projectData.role) || 'Contributor'
+                    role: this.normalizeProjectRole(projectData.role) || 'contributor'
                 });
                 await this.participantRepository.save(participant);
                 processedProjectIds.add(project.project_id);
@@ -1563,11 +1563,40 @@ export class CvService {
             return null;
         }
 
+        const normalized = text.toLowerCase();
+
+        if (
+            normalized === 'project_lead' ||
+            /(?:\bproject\b.*\blead\b|\blead\b.*\bproject\b|\bchef(?:fe)?\s+de\s+projet\b)/i.test(normalized)
+        ) {
+            return 'project_lead';
+        }
+
+        if (
+            normalized === 'technical_lead' ||
+            /(?:\btech(?:nical|nique)?\b.*\blead\b|\blead\b.*\btech(?:nical|nique)?\b|\bchef(?:fe)?\s+de\s+projet\s+tech(?:nique)?\b)/i.test(
+                normalized,
+            )
+        ) {
+            return 'technical_lead';
+        }
+
+        if (
+            normalized === 'contributor' ||
+            normalized === 'contributeur' ||
+            normalized.includes('contributor') ||
+            normalized.includes('contributeur')
+        ) {
+            return 'contributor';
+        }
+
+        // The role column is an enum in production, so unknown free-text roles
+        // must gracefully fall back to a valid enum value.
         if (text.split(/\s+/).length > 6 && /[.!?]/.test(text)) {
             return null;
         }
 
-        return text;
+        return 'contributor';
     }
 
     private normalizeEducationEntry(input: {
