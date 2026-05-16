@@ -2951,6 +2951,7 @@ def _build_section_content(
         if certs or projs:
             synthesized = _groq_generate_skills(employee, None, preferred_language)
             if synthesized:
+                synthesized = synthesized.lstrip('-•●– ').strip()
                 return [{'text': synthesized, 'bold': False, 'bullet': False}]
         # Fallback: build from skills array + tech keywords extracted from cert names
         skill_list = [str(s) for s in skills if s]
