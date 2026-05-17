@@ -116,6 +116,12 @@ class TemplateCVParser:
             "education": [],
             "projects": [],
         }
+        cert_anchor_pattern = re.compile(
+            r"(?i)\b("
+            r"certified|certification|certificate|certificat|associate|professional|"
+            r"network|routing|switching|cisco|ccna|ccnp|dell|hp|kemp|acfe|acps|acsr"
+            r")\b"
+        )
 
         try:
             doc = docx.Document(file_path)
@@ -173,8 +179,21 @@ class TemplateCVParser:
                     re.search(r"\b(project|projects|projet|projets|description|mission)\b", cell_norm)
                     for cell_norm in header_cells_norm
                 )
+                data_rows_preview = rows[1:] if len(rows) > 1 else rows
+                has_cert_content = any(
+                    cert_anchor_pattern.search(
+                        self._normalize_for_match(" ".join(cell for cell in row if cell))
+                    )
+                    for row in data_rows_preview
+                )
+                has_training_header = (
+                    ("periode" in header_norm or "period" in header_norm)
+                    and ("formation" in header_norm or "training" in header_norm)
+                )
                 if has_period_col and has_client_col and has_project_col:
                     table_type = "projects"
+                elif has_training_header and has_cert_content:
+                    table_type = "certifications"
                 elif current_section in {"experience", "certifications", "education", "projects"}:
                     table_type = current_section
             if not table_type:
@@ -183,17 +202,29 @@ class TemplateCVParser:
             data_rows = rows[1:] if header_norm else rows
             if table_type == "certifications":
                 for row in data_rows:
-                    name = self._clean_text(row[0] if len(row) > 0 else "")
-                    date_raw = self._clean_text(row[1] if len(row) > 1 else "")
+                    first_cell = self._clean_text(row[0] if len(row) > 0 else "")
+                    second_cell = self._clean_text(row[1] if len(row) > 1 else "")
+                    first_date = self._extract_date_token(first_cell)
+                    first_has_anchor = bool(cert_anchor_pattern.search(self._normalize_for_match(first_cell)))
+                    second_has_anchor = bool(cert_anchor_pattern.search(self._normalize_for_match(second_cell)))
+
+                    # "Formation professionnelle" rows can include non-cert training entries.
+                    if first_date and not first_has_anchor and not second_has_anchor:
+                        continue
+
+                    # Training tables can use [period, certification name].
+                    if first_date and second_has_anchor and not first_has_anchor:
+                        name = second_cell
+                        date_raw = first_cell
+                    else:
+                        name = first_cell
+                        date_raw = second_cell
+
+                    name = self._collapse_repeated_phrase(self._strip_date_noise_from_cert_name(name))
                     if not name or self._is_cert_header_or_column_line(name):
                         continue
 
-                    full_date = ""
-                    full_match = re.search(r"\b\d{1,2}[/-]\d{1,2}[/-](?:19|20)\d{2}\b", date_raw)
-                    if full_match:
-                        full_date = full_match.group(0)
-                    else:
-                        full_date = self._extract_month_year(date_raw) or date_raw
+                    full_date = self._extract_date_token(date_raw) or self._extract_month_year(date_raw) or date_raw
 
                     extracted["certifications"].append(
                         {
@@ -393,9 +424,88 @@ class TemplateCVParser:
 
         value = self.BULLET_RE.sub(" ", value)
         value = re.sub(r"\s+", " ", value).strip()
-        value = re.sub(r"^[\-\u2013\u2014,:;|\u00ab\u00bb\"']+", "", value).strip()
-        value = re.sub(r"[\-\u2013\u2014,:;|\u00ab\u00bb\"']+$", "", value).strip()
+        value = re.sub(r"^[\-\u2013\u2014,:;|\u00ab\u00bb']+", "", value).strip()
+        value = re.sub(r"[\-\u2013\u2014,:;|\u00ab\u00bb']+$", "", value).strip()
         return value
+
+    def _collapse_repeated_phrase(self, value: str) -> str:
+        """Collapse duplicated sentence fragments caused by wrapped table extraction."""
+        cleaned = self._clean_text(value)
+        if not cleaned:
+            return ""
+
+        sentence_parts = [self._clean_text(part) for part in re.split(r"[.;]", cleaned) if self._clean_text(part)]
+        if len(sentence_parts) >= 2:
+            first = sentence_parts[0]
+            second = sentence_parts[1]
+            first_norm = self._normalize_for_match(first)
+            second_norm = self._normalize_for_match(second)
+            if first_norm.startswith(second_norm) or second_norm.startswith(first_norm):
+                longer = first if len(first) >= len(second) else second
+                remainder = sentence_parts[2:]
+                if remainder:
+                    return self._clean_text(" ".join([longer] + remainder))
+                return longer
+
+        return cleaned
+
+    def _extract_date_token(self, line: str) -> Optional[str]:
+        """Extract a date token from a line (full date preferred over year-only)."""
+        if not line:
+            return None
+
+        patterns = [
+            r"\b\d{1,2}[/-]\d{1,2}[/-](?:19|20)\d{2}\b",
+            rf"(?i)\b{self.MONTH_RE}\s+\d{{1,2}}[/-](?:19|20)\d{{2}}\b",
+            rf"(?i)\b{self.MONTH_RE}\s+\d{{1,2}},?\s*(?:19|20)\d{{2}}\b",
+            rf"(?i)\b{self.MONTH_RE}\s+(?:19|20)\d{{2}}\b",
+            r"\b\d{1,2}[/-](?:19|20)\d{2}\b",
+            r"\b(?:19|20)\d{2}\b",
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, line)
+            if match:
+                return self._clean_text(match.group(0))
+        return None
+
+    def _strip_date_noise_from_cert_name(self, value: str) -> str:
+        """Remove trailing date fragments accidentally glued to certification names."""
+        cleaned = self._clean_text(value)
+        if not cleaned:
+            return ""
+
+        patterns = [
+            r"\b\d{1,2}[/-]\d{1,2}[/-](?:19|20)\d{2}\b",
+            r"\b\d{1,2}[/-](?:19|20)\d{2}\b",
+            rf"(?i)\b{self.MONTH_RE}\s+\d{{1,2}},?\s*(?:19|20)\d{{2}}\b",
+            rf"(?i)\b{self.MONTH_RE}\s+(?:19|20)\d{{2}}\b",
+            r"\b(?:19|20)\d{2}\b",
+        ]
+        for pattern in patterns:
+            cleaned = self._clean_text(re.sub(pattern, " ", cleaned))
+
+        # Remove dangling month/day tokens after date stripping (e.g. "Novembre 9")
+        cleaned = self._clean_text(
+            re.sub(rf"(?i)\b{self.MONTH_RE}\b\s*\d{{1,2}}?$", " ", cleaned)
+        )
+        return cleaned
+
+    def _looks_like_date_only(self, value: str) -> bool:
+        cleaned = self._clean_text(value)
+        if not cleaned:
+            return False
+        token = self._extract_date_token(cleaned)
+        if not token:
+            return False
+        remainder = self._clean_text(cleaned.replace(token, "", 1))
+        if not remainder:
+            return True
+        remainder_norm = self._normalize_for_match(remainder)
+        # Keep date-only shards out of cert names.
+        return bool(
+            re.fullmatch(rf"(?:{self.MONTH_RE}|\d{{1,2}}|[-/]+)", remainder_norm, re.IGNORECASE)
+        )
     def _match_keyword(self, line: str, keyword: str) -> bool:
         line_norm = self._normalize_for_match(line)
         keyword_norm = self._normalize_for_match(keyword)
@@ -813,6 +923,8 @@ class TemplateCVParser:
         has_date_col = bool(re.search(r"\b(date|obtention|obtained)\b", line_norm))
         if has_cert_col and has_date_col:
             return True
+        if re.fullmatch(r"date(?:\s+d[' ]?obtention|\s+obtention|\s+obtained)?", line_norm):
+            return True
 
         return False
 
@@ -863,6 +975,40 @@ class TemplateCVParser:
                         last_name = " ".join(words[1:])
                         break
 
+        # Reorder probable "LAST FIRST" headers using email hint for uppercase-style names.
+        email = self._extract_email(text)
+        candidate_tokens = [t for t in ([first_name] + last_name.split()) if t]
+        if email and len(candidate_tokens) >= 2 and candidate_tokens[0].isupper():
+            local_part = email.split("@", 1)[0].strip().lower()
+            local_tokens = [token for token in re.split(r"[._-]+", local_part) if token]
+            first_initial = local_tokens[0][0] if local_tokens else ""
+
+            if first_initial:
+                lead_idx = -1
+                for idx, token in enumerate(candidate_tokens[1:], start=1):
+                    token_norm = self._normalize_for_match(token)
+                    if token_norm.startswith(first_initial):
+                        lead_idx = idx
+                        break
+
+                if lead_idx != -1:
+                    reordered = [candidate_tokens[lead_idx]] + [
+                        token for idx, token in enumerate(candidate_tokens) if idx != lead_idx
+                    ]
+                    first_name = reordered[0]
+                    last_name = " ".join(reordered[1:])
+        elif email and len(candidate_tokens) >= 3:
+            local_part = email.split("@", 1)[0].strip().lower()
+            local_tokens = [token for token in re.split(r"[._-]+", local_part) if token]
+            if len(local_tokens) >= 2:
+                surname_norm = self._normalize_for_match(local_tokens[-1]).replace(" ", "")
+                first_token_norm = self._normalize_for_match(candidate_tokens[0]).replace(" ", "")
+                first_two_norm = self._normalize_for_match("".join(candidate_tokens[:2])).replace(" ", "")
+                # Handle "Surname Middle First" while preserving compound surnames like "Bou Amor".
+                if first_token_norm == surname_norm and first_two_norm != surname_norm:
+                    first_name = " ".join(candidate_tokens[1:])
+                    last_name = candidate_tokens[0]
+
         return first_name, last_name
 
     def _extract_email(self, text: str) -> str:
@@ -882,7 +1028,7 @@ class TemplateCVParser:
                     return email.strip()
         return ""
 
-    def _extract_phone(self, text: str) -> str:
+    def _extract_phone_legacy(self, text: str) -> str:
         """Extract phone number."""
         patterns = [
             r"T[ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©e]l(?:[ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¾ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©e]phone)?\s*:\s*([\+\d\s\-\(\)]+)",
@@ -899,6 +1045,59 @@ class TemplateCVParser:
                 digits = re.sub(r"\D", "", phone)
                 if len(digits) >= 8:
                     return phone
+        return ""
+
+    def _extract_phone(self, text: str) -> str:
+        """Extract phone number using resilient header-first heuristics."""
+        number_pattern = re.compile(r"(?<!\d)(?:\+\s*\d[\d\s().-]{6,}\d|\d[\d\s().-]{6,}\d)(?!\d)")
+
+        def normalize_candidate(raw_value: str) -> str:
+            candidate = self._clean_text(raw_value.replace("\xa0", " "))
+            candidate = re.sub(r"[^\d+()\-\s./]", "", candidate)
+            candidate = candidate.replace("(", " ").replace(")", " ")
+            candidate = re.sub(r"\s+", " ", candidate).strip(" .;,:-")
+            if not candidate:
+                return ""
+            if candidate.count("+") > 1:
+                return ""
+            if "+" in candidate and not candidate.lstrip().startswith("+"):
+                return ""
+
+            # Common false positives: year ranges and date fragments.
+            compact = candidate.replace(" ", "")
+            if re.fullmatch(r"(?:19|20)\d{2}[-/](?:19|20)\d{2}", compact):
+                return ""
+            if "/" in candidate and re.search(r"\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b", candidate):
+                return ""
+
+            digits = re.sub(r"\D", "", candidate)
+            if len(digits) < 8 or len(digits) > 15:
+                return ""
+            return candidate
+
+        lines = [line for line in text.replace("\xa0", " ").splitlines() if line.strip()]
+
+        # Prefer header-area lines (where "Tél : ..." lives in template CVs).
+        for line in lines[:60]:
+            line_clean = self._clean_text(line)
+            line_norm = self._normalize_for_match(line_clean)
+            if "fax" in line_norm:
+                continue
+
+            has_label = bool(re.search(r"\b(tel|telephone|phone|mobile|gsm|contact)\b", line_norm))
+            if not has_label and ":" not in line_clean:
+                continue
+
+            for match in number_pattern.finditer(line_clean):
+                phone = normalize_candidate(match.group(0))
+                if phone:
+                    return phone
+
+        # Fallback: anywhere in text.
+        for match in number_pattern.finditer(text.replace("\xa0", " ")):
+            phone = normalize_candidate(match.group(0))
+            if phone:
+                return phone
         return ""
 
     def _extract_address(self, text: str) -> str:
@@ -1301,7 +1500,7 @@ class TemplateCVParser:
                             joined = self._clean_text(" ".join(cell for cell in row if cell))
                             if not joined:
                                 continue
-                            if self._extract_month_year(joined):
+                            if self._extract_date_token(joined):
                                 date_like_rows += 1
                             if cert_anchor_pattern.search(joined) or cert_code_pattern.search(joined):
                                 cert_like_rows += 1
@@ -1339,20 +1538,22 @@ class TemplateCVParser:
                                     continue
 
                                 if date_col_idx >= 0 and idx == date_col_idx:
-                                    detected = self._extract_month_year(cell)
+                                    detected = self._extract_date_token(cell)
                                     if detected:
                                         date = detected
                                         remainder = self._clean_text(cell.replace(detected, "", 1))
-                                        if remainder:
+                                        if remainder and not self._looks_like_date_only(remainder):
                                             name_parts.append(remainder)
                                     else:
                                         name_parts.append(cell)
                                     continue
 
-                                detected = self._extract_month_year(cell)
+                                detected = self._extract_date_token(cell)
                                 if detected and not date:
                                     remainder = self._clean_text(cell.replace(detected, "", 1))
-                                    if remainder and len(remainder.split()) <= 3:
+                                    if remainder and self._looks_like_date_only(remainder):
+                                        date = detected
+                                    elif remainder and len(remainder.split()) <= 3:
                                         name_parts.append(remainder)
                                         date = detected
                                     elif not remainder:
@@ -1364,7 +1565,10 @@ class TemplateCVParser:
                                 name_parts.append(cell)
 
                             name = self._clean_text(" ".join(name_parts))
+                            name = self._collapse_repeated_phrase(self._strip_date_noise_from_cert_name(name))
                             if not name:
+                                continue
+                            if self._looks_like_date_only(name):
                                 continue
                             cert_rows.append({"name": name, "date_obtained": date})
         except Exception:
@@ -1463,9 +1667,15 @@ class TemplateCVParser:
             if self._is_cert_header_or_column_line(line):
                 continue
 
-            date_str = self._extract_month_year(line)
+            date_str = self._extract_date_token(line)
             if date_str:
-                cert_name = self._clean_text(line.replace(date_str, "", 1))
+                cert_name = self._collapse_repeated_phrase(
+                    self._strip_date_noise_from_cert_name(
+                        self._clean_text(line.replace(date_str, "", 1))
+                    )
+                )
+                if self._looks_like_date_only(cert_name):
+                    cert_name = ""
                 if pending_name:
                     if certifications and should_attach_to_previous_cert(pending_name, certifications[-1]["name"]):
                         certifications[-1]["name"] = self._clean_text(
@@ -1484,6 +1694,10 @@ class TemplateCVParser:
 
             if certifications and not pending_name and should_attach_to_previous_cert(line, certifications[-1]["name"]):
                 certifications[-1]["name"] = self._clean_text(f"{certifications[-1]['name']} {line}")
+                continue
+
+            line = self._collapse_repeated_phrase(self._strip_date_noise_from_cert_name(line))
+            if not line or self._looks_like_date_only(line):
                 continue
 
             if pending_name:
@@ -1506,8 +1720,11 @@ class TemplateCVParser:
 
         for cert in certifications:
             name = self._clean_text(cert.get("name", ""))
+            name = self._collapse_repeated_phrase(self._strip_date_noise_from_cert_name(name))
             date_obtained = self._clean_text(cert.get("date_obtained", ""))
             if not name:
+                continue
+            if self._looks_like_date_only(name):
                 continue
             if self._is_cert_header_or_column_line(name):
                 continue
@@ -1778,7 +1995,25 @@ class TemplateCVParser:
             table_education = self._extract_education_from_tables(file_path)
             
         if table_education:
-            return table_education
+            normalized_table_education: List[Dict[str, str]] = []
+            for edu in table_education:
+                end_date = self._clean_text(edu.get("end_date", ""))
+                institution = self._collapse_repeated_phrase(self._clean_text(edu.get("institution", "")))
+                degree = self._collapse_repeated_phrase(self._clean_text(edu.get("degree", "")))
+                institution = self._clean_text(re.sub(r"(?i)\b(et|and|de|du|des|d')\s*$", "", institution))
+                degree = self._clean_text(re.sub(r"(?i)\b(et|and|de|du|des|d')\s*$", "", degree))
+                if not end_date:
+                    continue
+                if not institution and not degree:
+                    continue
+                normalized_table_education.append(
+                    {
+                        "end_date": end_date,
+                        "institution": institution,
+                        "degree": degree,
+                    }
+                )
+            return normalized_table_education
 
         if not section_lines:
             return []
@@ -2043,6 +2278,10 @@ class TemplateCVParser:
             end_date = self._clean_text(edu.get("end_date", ""))
             institution = self._clean_text(edu.get("institution", ""))
             degree = self._clean_text(edu.get("degree", ""))
+            institution = self._collapse_repeated_phrase(institution)
+            degree = self._collapse_repeated_phrase(degree)
+            institution = self._clean_text(re.sub(r"(?i)\b(et|and|de|du|des|d')\s*$", "", institution))
+            degree = self._clean_text(re.sub(r"(?i)\b(et|and|de|du|des|d')\s*$", "", degree))
 
             if institution and not degree:
                 split_institution, split_degree = self._split_institution_and_degree(institution)
