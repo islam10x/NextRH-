@@ -533,19 +533,38 @@ class TemplateCVParser:
         return None
 
     def _extract_date_from_line(self, line: str) -> Optional[str]:
-        present_pattern = r"(?:present|pr(?:[eéè\u00e9\ufffd]|&eacute;)sent|current|aujourd['’\u2019]?hui|en\s+cours|[àa]\s+ce\s+jour|maintenant|now)"
-        dash_or_to = rf"(?:{self.DASH_RE}|[àa\ufffd]|to|-|jusqu['’\u2019\ufffd]?\s*[aà\ufffd]?)"
-        
+        cleaned = self._clean_text(line)
+        if not cleaned:
+            return None
+
+        # Include common month abbreviations used in CV tables (e.g. Jan, Fev/Fev, Sept).
+        month_token = (
+            r"(?:janv?(?:ier)?|january|jan|"
+            r"f(?:ev|[^\W\d_]v)(?:rier)?|feb(?:ruary)?|"
+            r"mars|march|mar|"
+            r"avr(?:il)?|april|apr|"
+            r"mai|may|"
+            r"juin|june|jun|"
+            r"juil(?:let)?|july|jul|"
+            r"ao(?:ut|[^\W\d_]t)|aug(?:ust)?|"
+            r"sept(?:embre)?|sep(?:tember)?|"
+            r"oct(?:obre|ober)?|"
+            r"nov(?:embre|ember)?|"
+            r"d(?:ec|[^\W\d_]c)(?:embre)?|dec(?:ember)?)\.?"
+        )
+        present_pattern = r"(?:present|pr(?:e|[^\W\d_])sent|current|aujourd(?:['’\u2019]?\s*)?hui|en\s+cours|a\s+ce\s+jour|maintenant|now)"
+        dash_or_to = rf"(?:{self.DASH_RE}|[aà\u00e0]|to|-|jusqu['’\u2019]?\s*[aà\u00e0]?)"
+
         date_patterns = [
-            rf"(?i)\b(?:depuis|since)\s+{self.MONTH_RE}\s+\d{{4}}\b",
+            rf"(?i)\b(?:depuis|since)\s+{month_token}\s+\d{{4}}\b",
             rf"(?i)\b\d{{1,2}}/\d{{1,2}}/\d{{4}}\s*{dash_or_to}\s*(?:\d{{1,2}}/\d{{1,2}}/\d{{4}}|\d{{1,2}}/\d{{4}}|\d{{4}}|{present_pattern})\b",
-            rf"(?i)\b{self.MONTH_RE}\s+\d{{4}}\s*{dash_or_to}\s*(?:{self.MONTH_RE}\s+\d{{4}}|\d{{4}}|{present_pattern})\b",
-            rf"(?i)\b{self.MONTH_RE}\s+\d{{4}}\s*{dash_or_to}\s*{self.MONTH_RE}\b",
+            rf"(?i)\b{month_token}\s+\d{{4}}\s*{dash_or_to}\s*(?:{month_token}\s+\d{{4}}|\d{{4}}|{present_pattern})\b",
+            rf"(?i)\b{month_token}\s+\d{{4}}\s*{dash_or_to}\s*{month_token}\b",
             rf"(?i)\b\d{{1,2}}/\d{{4}}\s*{dash_or_to}\s*(?:\d{{1,2}}/\d{{4}}|\d{{4}}|{present_pattern})\b",
             rf"(?i)\b\d{{4}}\s*{dash_or_to}\s*(?:\d{{4}}|{present_pattern})\b",
             rf"\b\d{{4}}\s*{self.DASH_RE}\s*\d{{4}}\b",
             rf"(?i)\b\d{{1,2}}/\d{{1,2}}/\d{{4}}\b",
-            rf"(?i)\b{self.MONTH_RE}\s+\d{{4}}\b",
+            rf"(?i)\b{month_token}\s+\d{{4}}\b",
             rf"(?i)\b(?:depuis|since)\s+\d{{1,2}}/\d{{4}}\b",
             rf"(?i)\b(?:depuis|since)\s+\d{{4}}\b",
             r"\b\d{1,2}/\d{4}\b",
@@ -553,17 +572,10 @@ class TemplateCVParser:
         ]
 
         for pattern in date_patterns:
-            match = re.search(pattern, line)
+            match = re.search(pattern, cleaned)
             if match:
-                date_str = match.group(0).strip()
-                # If the date is followed by a connector, include it
-                remaining = line[match.end():].strip()
-                connector_match = re.match(rf"^{dash_or_to}", remaining, re.IGNORECASE)
-                if connector_match:
-                    date_str += " " + connector_match.group(0).strip()
-                return date_str
+                return self._clean_text(match.group(0))
         return None
-
     def _split_company_and_title(self, value: str) -> Tuple[str, str]:
         if not value:
             return "", ""

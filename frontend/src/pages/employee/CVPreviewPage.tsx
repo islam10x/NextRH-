@@ -252,22 +252,17 @@ const CVPreviewPage: React.FC = () => {
         profile.projects.forEach((project, index) => {
           if (index > 0) checkPageBreak(25);
 
-          // Project title
+          const projectDescription = (project.description ?? '').trim();
           const hasInvalidName = !project.name || project.name.toLowerCase() === 'unknown project';
-          let displayTitle: string;
-          if (!hasInvalidName) {
-            displayTitle = project.name;
-          } else if (project.generatedTitle) {
-            displayTitle = project.generatedTitle;
-          } else {
-            const words = (project.description ?? '').trim().split(/\s+/);
-            displayTitle = words.slice(0, 8).join(' ') + (words.length > 8 ? '...' : '') || 'Projet sans titre';
-          }
+          const fallbackTitle = !hasInvalidName
+            ? project.name
+            : project.generatedTitle || 'Projet sans description';
+          const mainProjectText = projectDescription || fallbackTitle;
 
           pdf.setFont('helvetica', 'bold');
           pdf.setFontSize(12);
           pdf.setTextColor(31, 41, 55);
-          const titleHeight = addText(displayTitle, margin, yPosition);
+          const titleHeight = addText(mainProjectText, margin, yPosition);
 
           // Project date range (right aligned)
           const projectDateText = formatDateRange(project.startDate, project.endDate);
@@ -281,23 +276,13 @@ const CVPreviewPage: React.FC = () => {
 
           yPosition += titleHeight + 2;
 
-          // Role and client
-          if (project.role || project.client) {
+          // Keep client info, but remove role from project preview/export.
+          if (project.client) {
             pdf.setFont('helvetica', 'normal');
             pdf.setFontSize(11);
             pdf.setTextColor(59, 130, 246);
-            const roleText = [project.role, project.client].filter(Boolean).join(' • ');
-            const roleHeight = addText(roleText, margin, yPosition);
-            yPosition += roleHeight + 2;
-          }
-
-          // Description
-          if (project.description) {
-            pdf.setFont('helvetica', 'normal');
-            pdf.setFontSize(10);
-            pdf.setTextColor(75, 85, 99);
-            const descHeight = addText(project.description, margin, yPosition);
-            yPosition += descHeight + 4;
+            const clientHeight = addText(project.client, margin, yPosition);
+            yPosition += clientHeight + 4;
           }
 
           // Skills
@@ -698,25 +683,20 @@ const CVPreviewPage: React.FC = () => {
 const ProjectItem: React.FC<{ project: CvProfile['projects'][0] }> = ({
   project,
 }) => {
+  const projectDescription = (project.description ?? '').trim();
   const hasInvalidName = !project.name || project.name.toLowerCase() === 'unknown project';
 
-  // Display order: valid name > AI-generated title > truncated description fallback
-  let displayTitle: string;
-  if (!hasInvalidName) {
-    displayTitle = project.name;
-  } else if (project.generatedTitle) {
-    displayTitle = project.generatedTitle;
-  } else {
-    const words = (project.description ?? '').trim().split(/\s+/);
-    displayTitle = words.slice(0, 8).join(' ') + (words.length > 8 ? '...' : '') || 'Projet sans titre';
-  }
+  // Show description as the main project entry text in CV preview.
+  const fallbackTitle = !hasInvalidName
+    ? project.name
+    : project.generatedTitle || 'Projet sans description';
+  const mainProjectText = projectDescription || fallbackTitle;
 
   return (
     <div className="border-l-2 border-primary/30 pl-4">
       <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-1">
         <div>
-          <h3 className="font-semibold text-foreground">{displayTitle}</h3>
-          {project.role && <p className="text-sm text-primary">{project.role}</p>}
+          <h3 className="font-semibold text-foreground">{mainProjectText}</h3>
           {project.client && <p className="text-sm text-muted-foreground">{project.client}</p>}
         </div>
         {formatDateRange(project.startDate, project.endDate) && (
@@ -726,9 +706,6 @@ const ProjectItem: React.FC<{ project: CvProfile['projects'][0] }> = ({
           </span>
         )}
       </div>
-      {project.description && (
-        <p className="mt-2 text-sm text-muted-foreground">{project.description}</p>
-      )}
       {project.skills.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mt-2">
           {project.skills.map((s) => (
