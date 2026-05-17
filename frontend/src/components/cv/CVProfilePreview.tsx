@@ -216,27 +216,18 @@ export const CVProfilePreview: React.FC<CVProfilePreviewProps> = ({ profile, cla
 const ProjectItem: React.FC<{ project: CvProfile['projects'][0] }> = ({
   project,
 }) => {
-  const hasInvalidName = !project.name || project.name.toLowerCase() === 'unknown project';
-
-  let displayTitle: string;
-  if (!hasInvalidName) {
-    displayTitle = project.name;
-  } else if (project.generatedTitle) {
-    displayTitle = project.generatedTitle;
-  } else {
-    const words = (project.description ?? '').trim().split(/\s+/);
-    displayTitle = words.slice(0, 8).join(' ') + (words.length > 8 ? '...' : '') || 'Untitled Project';
-  }
-
   return (
     <div className="border-l-2 border-primary/20 pl-4 py-1">
       <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-1">
-        <div className="flex-1">
-          <h3 className="font-semibold text-sm text-foreground">{displayTitle}</h3>
-          <div className="flex gap-2 text-xs">
-            {project.role && <span className="text-primary font-medium">{project.role}</span>}
-            {project.client && <span className="text-muted-foreground">• {project.client}</span>}
-          </div>
+        <div className="flex-1 pr-4">
+          {project.description && (
+            <p className="text-sm text-foreground leading-relaxed whitespace-pre-line">{project.description}</p>
+          )}
+          {project.client && (
+            <div className="flex gap-2 text-xs mt-1">
+              <span className="text-muted-foreground">{project.client}</span>
+            </div>
+          )}
         </div>
         {formatDateRange(project.startDate, project.endDate) && (
           <span className="text-xs text-muted-foreground flex items-center gap-1.5 shrink-0 bg-muted px-3 py-1 rounded">
@@ -245,9 +236,6 @@ const ProjectItem: React.FC<{ project: CvProfile['projects'][0] }> = ({
           </span>
         )}
       </div>
-      {project.description && (
-        <p className="mt-3 text-sm text-muted-foreground leading-relaxed">{project.description}</p>
-      )}
       {project.skills.length > 0 && (
         <div className="flex flex-wrap gap-2 mt-3">
           {project.skills.map((s) => (
