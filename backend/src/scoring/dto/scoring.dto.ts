@@ -118,3 +118,11 @@ export class ScoreInternalEvaluationDto {
   @Max(20)
   score: number;
 }
+
+export class ScoreInternalProjectDto {
+  @IsUUID()
+  projectId: string;
+
+  @IsArray()
+  profileEvaluations: Array<{ profileId: string; score: number }>;
+}

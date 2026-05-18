@@ -29,6 +29,7 @@ import {
   ComputeTeamScoresDto,
   ScoreExternalEvaluationDto,
   ScoreInternalEvaluationDto,
+  ScoreInternalProjectDto,
 } from './dto/scoring.dto';
 
 @Controller('scoring')
@@ -233,6 +234,15 @@ export class ScoringController {
   ) {
     const managerId = req.user?.id || req.user?.userId || req.user?.user_id;
     return this.scoringService.scoreInternalEvaluation(recordId, managerId, dto.score);
+  }
+
+  // ── Internal project scoring (no PV needed) ──────────────────────────
+
+  @Post('score-internal-project')
+  @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
+  async scoreInternalProject(@Body() dto: ScoreInternalProjectDto, @Req() req: any) {
+    const managerId = req.user?.id || req.user?.userId || req.user?.user_id;
+    return this.scoringService.scoreInternalProject(managerId, dto.projectId, dto.profileEvaluations);
   }
 
   // ── List projects for PV selector ─────────────────────────────────────

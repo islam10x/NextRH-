@@ -351,6 +351,14 @@ export const scoringService = {
     return res.data;
   },
 
+  async scoreInternalProject(
+    projectId: string,
+    profileEvaluations: Array<{ profileId: string; score: number }>,
+  ) {
+    const res = await api.post('/scoring/score-internal-project', { projectId, profileEvaluations });
+    return res.data;
+  },
+
   async listProjects(): Promise<AvailableProject[]> {
     const res = await api.get('/scoring/projects');
     return res.data || [];

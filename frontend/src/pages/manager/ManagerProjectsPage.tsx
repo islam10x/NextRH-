@@ -26,7 +26,7 @@ import { projectService, CrossTeamRequest, OwnedProjectLite } from '@/services/p
 import { teamService, ExternalTeamLite } from '@/services/team.service';
 import { scoringService, AvailableProject } from '@/services/scoring.service';
 import { Project } from '@/types';
-import { Briefcase, BriefcaseBusiness, Building2, Calendar, CalendarClock, Inbox, Search, Send, Upload, UserRound, Users } from 'lucide-react';
+import { Briefcase, BriefcaseBusiness, Building2, Calendar, CalendarClock, ClipboardCheck, Inbox, Search, Send, Upload, UserRound, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { EmptyState } from '@/components/common/EmptyState';
 import { useSearchParams } from 'react-router-dom';
@@ -53,10 +53,24 @@ const statusVariant = (status: string): 'secondary' | 'default' | 'destructive' 
 };
 
 const statusBadgeClass: Record<string, string> = {
-  pending: 'border border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-50',
-  approved: 'border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-50',
-  rejected: 'border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-50',
+  pending: 'border border-sky-200 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 hover:bg-sky-50 dark:hover:bg-sky-950/40',
+  approved: 'border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40',
+  rejected: 'border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40',
 };
+
+const complexityLabel: Record<string, string> = {
+  low: 'Faible',
+  medium: 'Moyenne',
+  high: 'Élevée',
+};
+
+const complexityBadgeClass: Record<string, string> = {
+  low: 'border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300',
+  medium: 'border-sky-200 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300',
+  high: 'border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300',
+};
+
+const complexityCeiling: Record<string, number> = { low: 45, medium: 65, high: 85 };
 
 const getApiErrorMessage = (error: unknown, fallback: string) => {
   if (
@@ -102,6 +116,8 @@ const ManagerProjectsPage: React.FC = () => {
   const [creatingRequest, setCreatingRequest] = useState(false);
   const [selectedIncomingProfiles, setSelectedIncomingProfiles] = useState<Record<string, string>>({});
   const [processingRequestId, setProcessingRequestId] = useState<string | null>(null);
+
+  // ── PV upload dialog (external projects only) ─────────────────────────
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadProjectId, setUploadProjectId] = useState('');
@@ -111,16 +127,45 @@ const ManagerProjectsPage: React.FC = () => {
   const [uploadContributions, setUploadContributions] = useState<Record<string, string>>({});
   const [uploading, setUploading] = useState(false);
   const [availableProjects, setAvailableProjects] = useState<AvailableProject[]>([]);
+
+  // ── Internal project evaluation dialog ───────────────────────────────
+  const [internalEvalOpen, setInternalEvalOpen] = useState(false);
+  const [internalEvalProjectId, setInternalEvalProjectId] = useState('');
+  const [internalEvalScores, setInternalEvalScores] = useState<Record<string, string>>({});
+  const [submittingInternalEval, setSubmittingInternalEval] = useState(false);
+
   const [activeTab, setActiveTab] = useState<'projects' | 'cross-team'>(
     searchParams.get('tab') === 'cross-team' ? 'cross-team' : 'projects',
   );
   const tabQuery = searchParams.get('tab');
   const requestIdQuery = searchParams.get('requestId');
+
+  // External projects for PV upload
+  const externalProjects = useMemo(
+    () => availableProjects.filter((p) => p.projectType === 'external'),
+    [availableProjects],
+  );
+
+  // Internal projects for evaluation dialog
+  const internalProjects = useMemo(
+    () => availableProjects.filter((p) => p.projectType === 'internal'),
+    [availableProjects],
+  );
+
   const selectedUploadProject = useMemo(
-    () => availableProjects.find((project) => project.project_id === uploadProjectId),
-    [availableProjects, uploadProjectId],
+    () => externalProjects.find((p) => p.project_id === uploadProjectId),
+    [externalProjects, uploadProjectId],
   );
   const selectedUploadParticipants = useMemo(() => selectedUploadProject?.participants || [], [selectedUploadProject]);
+
+  const selectedInternalProject = useMemo(
+    () => internalProjects.find((p) => p.project_id === internalEvalProjectId),
+    [internalProjects, internalEvalProjectId],
+  );
+  const internalProjectParticipants = useMemo(
+    () => selectedInternalProject?.participants || [],
+    [selectedInternalProject],
+  );
 
   const loadMembers = async () => {
     setLoadingMembers(true);
@@ -176,7 +221,6 @@ const ManagerProjectsPage: React.FC = () => {
     setActiveTab('projects');
   }, [tabQuery]);
 
-  // When a requestId is provided (from notification click), highlight and scroll to the matching request card.
   useEffect(() => {
     if (!requestIdQuery) return;
     const el = document.getElementById(`request-${requestIdQuery}`);
@@ -279,16 +323,34 @@ const ManagerProjectsPage: React.FC = () => {
   const pendingOutgoingCount = outgoingRequests.filter((request) => request.status === 'pending').length;
   const approvedOutgoingCount = outgoingRequests.filter((request) => request.status === 'approved').length;
 
-  // Score progress for PV upload: count how many internal participants still need a score
-  const internalParticipants = selectedUploadParticipants.filter((p) => p.assignmentType === 'internal');
-  const scoredCount = internalParticipants.filter((p) => {
+  // PV upload: score progress for internal participants
+  const pvInternalParticipants = selectedUploadParticipants.filter((p) => p.assignmentType === 'internal');
+  const pvScoredCount = pvInternalParticipants.filter((p) => {
     const v = uploadScores[p.profileId];
     return v !== undefined && v !== '' && Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 20;
   }).length;
-  const allScoresEntered = internalParticipants.length === 0 || scoredCount === internalParticipants.length;
-  const canUpload = !uploading && allScoresEntered;
+  const pvAllScoresEntered = pvInternalParticipants.length === 0 || pvScoredCount === pvInternalParticipants.length;
+  const canUpload = !uploading && pvAllScoresEntered;
 
-  const openUploadDialog = async () => {
+  // Internal eval: score progress
+  const internalScoredCount = internalProjectParticipants.filter((p) => {
+    const v = internalEvalScores[p.profileId];
+    return v !== undefined && v !== '' && Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 20;
+  }).length;
+  const internalAllScoresEntered =
+    internalProjectParticipants.length > 0 && internalScoredCount === internalProjectParticipants.length;
+
+  const loadAvailableProjects = async () => {
+    try {
+      const projects = await scoringService.listProjects();
+      setAvailableProjects(projects);
+    } catch (error: unknown) {
+      setAvailableProjects([]);
+      toast.error(getApiErrorMessage(error, 'Impossible de charger les projets'));
+    }
+  };
+
+  const openPvUploadDialog = async () => {
     setUploadOpen(true);
     setUploadFile(null);
     setUploadProjectId('');
@@ -296,21 +358,22 @@ const ManagerProjectsPage: React.FC = () => {
     setUploadProfileIds([]);
     setUploadScores({});
     setUploadContributions({});
-    try {
-      const projects = await scoringService.listProjects();
-      setAvailableProjects(projects);
-    } catch (error: unknown) {
-      setAvailableProjects([]);
-      toast.error(getApiErrorMessage(error, 'Impossible de charger les projets pour l\'import du PV'));
-    }
+    await loadAvailableProjects();
+  };
+
+  const openInternalEvalDialog = async () => {
+    setInternalEvalOpen(true);
+    setInternalEvalProjectId('');
+    setInternalEvalScores({});
+    await loadAvailableProjects();
   };
 
   const handleUploadProjectChange = (projectId: string) => {
     setUploadProjectId(projectId);
     setUploadScores({});
     setUploadContributions({});
-    const selected = availableProjects.find((project) => project.project_id === projectId);
-    const participantIds = (selected?.participants || []).map((participant) => participant.profileId);
+    const selected = externalProjects.find((p) => p.project_id === projectId);
+    const participantIds = (selected?.participants || []).map((p) => p.profileId);
     setUploadProfileIds(participantIds);
     const nextComplexity = (selected?.complexity || 'medium').toLowerCase();
     if (nextComplexity === 'low' || nextComplexity === 'high') {
@@ -318,6 +381,11 @@ const ManagerProjectsPage: React.FC = () => {
       return;
     }
     setUploadComplexity('medium');
+  };
+
+  const handleInternalEvalProjectChange = (projectId: string) => {
+    setInternalEvalProjectId(projectId);
+    setInternalEvalScores({});
   };
 
   const handleUploadPv = async () => {
@@ -329,17 +397,13 @@ const ManagerProjectsPage: React.FC = () => {
       toast.error('Sélectionnez un projet');
       return;
     }
-    if (!uploadComplexity) {
-      toast.error('Sélectionnez la complexité du projet');
-      return;
-    }
     if (uploadProfileIds.length === 0) {
       toast.error('Sélectionnez au moins un participant.');
       return;
     }
 
     const participantsById = new Map(
-      selectedUploadParticipants.map((participant) => [participant.profileId, participant]),
+      selectedUploadParticipants.map((p) => [p.profileId, p]),
     );
 
     for (const profileId of uploadProfileIds) {
@@ -406,6 +470,39 @@ const ManagerProjectsPage: React.FC = () => {
       toast.error(getApiErrorMessage(error, 'Échec de l\'import du PV'));
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleSubmitInternalEval = async () => {
+    if (!internalEvalProjectId) {
+      toast.error('Sélectionnez un projet interne.');
+      return;
+    }
+    if (internalProjectParticipants.length === 0) {
+      toast.error('Ce projet n\'a aucun participant.');
+      return;
+    }
+    if (!internalAllScoresEntered) {
+      toast.error('Saisissez un score pour chaque participant avant de valider.');
+      return;
+    }
+
+    const profileEvaluations = internalProjectParticipants.map((p) => ({
+      profileId: p.profileId,
+      score: Number(internalEvalScores[p.profileId]),
+    }));
+
+    setSubmittingInternalEval(true);
+    try {
+      const result = await scoringService.scoreInternalProject(internalEvalProjectId, profileEvaluations);
+      toast.success(result.message || 'Évaluations enregistrées avec succès');
+      setInternalEvalOpen(false);
+      await loadAll();
+      window.dispatchEvent(new Event('scoring:updated'));
+    } catch (error: unknown) {
+      toast.error(getApiErrorMessage(error, 'Échec de l\'évaluation'));
+    } finally {
+      setSubmittingInternalEval(false);
     }
   };
 
@@ -539,7 +636,12 @@ const ManagerProjectsPage: React.FC = () => {
           <p className="text-muted-foreground">Gérez les projets internes/externes et les assignations inter-équipes.</p>
         </div>
         <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
-          <Button variant="outline" className="w-full sm:w-auto" onClick={openUploadDialog}>
+          {/* Internal project evaluation — no PV required */}
+          <Button variant="outline" className="w-full sm:w-auto" onClick={openInternalEvalDialog}>
+            <ClipboardCheck className="mr-2 h-4 w-4" /> Évaluer projet interne
+          </Button>
+          {/* PV upload — external projects only */}
+          <Button variant="outline" className="w-full sm:w-auto" onClick={openPvUploadDialog}>
             <Upload className="mr-2 h-4 w-4" /> Importer PV
           </Button>
           <Dialog
@@ -818,30 +920,30 @@ const ManagerProjectsPage: React.FC = () => {
 
         <TabsContent value="cross-team" className="space-y-4">
           <div className="grid gap-4 md:grid-cols-3">
-            <Card className="border-slate-200 bg-white shadow-sm">
+            <Card className="border-slate-200 dark:border-border bg-white dark:bg-card shadow-sm">
               <CardContent className="p-5">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Demandes reçues en attente</p>
-                <p className="mt-2 text-3xl font-semibold text-slate-900">{pendingIncomingCount}</p>
-                <p className="mt-1 text-sm text-slate-600">Demandes en attente d'une décision de votre équipe.</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Demandes reçues en attente</p>
+                <p className="mt-2 text-3xl font-semibold text-slate-900 dark:text-slate-100">{pendingIncomingCount}</p>
+                <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">Demandes en attente d'une décision de votre équipe.</p>
               </CardContent>
             </Card>
-            <Card className="border-slate-200 bg-white shadow-sm">
+            <Card className="border-slate-200 dark:border-border bg-white dark:bg-card shadow-sm">
               <CardContent className="p-5">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Demandes envoyées en attente</p>
-                <p className="mt-2 text-3xl font-semibold text-slate-900">{pendingOutgoingCount}</p>
-                <p className="mt-1 text-sm text-slate-600">Demandes envoyées encore en attente de confirmation.</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Demandes envoyées en attente</p>
+                <p className="mt-2 text-3xl font-semibold text-slate-900 dark:text-slate-100">{pendingOutgoingCount}</p>
+                <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">Demandes envoyées encore en attente de confirmation.</p>
               </CardContent>
             </Card>
-            <Card className="border-slate-200 bg-white shadow-sm">
+            <Card className="border-slate-200 dark:border-border bg-white dark:bg-card shadow-sm">
               <CardContent className="p-5">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Demandes envoyées approuvées</p>
-                <p className="mt-2 text-3xl font-semibold text-slate-900">{approvedOutgoingCount}</p>
-                <p className="mt-1 text-sm text-slate-600">Demandes déjà associées à un membre externe.</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Demandes envoyées approuvées</p>
+                <p className="mt-2 text-3xl font-semibold text-slate-900 dark:text-slate-100">{approvedOutgoingCount}</p>
+                <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">Demandes déjà associées à un membre externe.</p>
               </CardContent>
             </Card>
           </div>
 
-          <Card className="border-slate-200 bg-white shadow-sm">
+          <Card className="border-slate-200 dark:border-border bg-white dark:bg-card shadow-sm">
             <CardHeader>
               <CardTitle>Demander un membre externe</CardTitle>
               <CardDescription>Sélectionnez le projet, choisissez l'équipe cible, et rédigez un bref opérationnel qui rende la demande immédiatement compréhensible.</CardDescription>
@@ -889,34 +991,34 @@ const ManagerProjectsPage: React.FC = () => {
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="rounded-2xl border border-slate-200 dark:border-border bg-slate-50 dark:bg-muted/20 p-4">
                 {requestProjectId && (
-                  <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm">
+                  <div className="rounded-xl border border-slate-200 dark:border-border bg-white dark:bg-muted/20 p-4 text-sm">
                     {requestableProjects
                       .filter((project) => project.projectId === requestProjectId)
                       .map((project) => (
                         <div key={project.projectId} className="grid gap-3 md:grid-cols-3 md:items-center">
-                          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Projet</p>
+                          <div className="rounded-xl border border-slate-200 dark:border-border bg-slate-50 dark:bg-muted/20 p-3">
+                            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Projet</p>
                             <p className="font-medium">{project.projectName}</p>
                             <p className="text-muted-foreground text-sm">
                               {project.clientName || 'Aucun client'} • {project.projectType}
                             </p>
                           </div>
-                          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Assignation</p>
-                            <p className="text-sm text-slate-700">{project.startDate ? `Assigné le ${formatDate(project.startDate)}` : 'Aucune date d\'assignation'}</p>
+                          <div className="rounded-xl border border-slate-200 dark:border-border bg-slate-50 dark:bg-muted/20 p-3">
+                            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Assignation</p>
+                            <p className="text-sm text-slate-700 dark:text-slate-300">{project.startDate ? `Assigné le ${formatDate(project.startDate)}` : 'Aucune date d\'assignation'}</p>
                           </div>
-                          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Objectif de la demande</p>
-                            <p className="text-sm text-slate-700">{requestNote.trim() || 'Ajoutez un bref résumé pour que le manager destinataire puisse agir rapidement.'}</p>
+                          <div className="rounded-xl border border-slate-200 dark:border-border bg-slate-50 dark:bg-muted/20 p-3">
+                            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Objectif de la demande</p>
+                            <p className="text-sm text-slate-700 dark:text-slate-300">{requestNote.trim() || 'Ajoutez un bref résumé pour que le manager destinataire puisse agir rapidement.'}</p>
                           </div>
                         </div>
                       ))}
                   </div>
                 )}
                 {!requestProjectId && (
-                  <div className="rounded-xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
+                  <div className="rounded-xl border border-dashed border-slate-300 dark:border-border bg-white dark:bg-muted/20 p-4 text-sm text-slate-500 dark:text-slate-400">
                     Sélectionnez un projet pour prévisualiser le résumé avant de l'envoyer.
                   </div>
                 )}
@@ -928,10 +1030,10 @@ const ManagerProjectsPage: React.FC = () => {
             </CardContent>
           </Card>
 
-          <Card className="border-slate-200 bg-white shadow-sm">
+          <Card className="border-slate-200 dark:border-border bg-white dark:bg-card shadow-sm">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Inbox className="h-5 w-5 text-slate-700" />
+                <Inbox className="h-5 w-5 text-slate-700 dark:text-slate-300" />
                 Demandes reçues
               </CardTitle>
               <CardDescription>Demandes adressées à votre équipe. Chaque carte indique qui a demandé, pour quel projet, ce dont il a besoin, et l'action à effectuer.</CardDescription>
@@ -953,10 +1055,10 @@ const ManagerProjectsPage: React.FC = () => {
                       id={`request-${request.requestId}`}
                       className={`rounded-2xl border p-4 space-y-4 shadow-sm transition-all ${
                         highlighted
-                          ? 'border-amber-400 bg-amber-50/60 ring-2 ring-amber-300 ring-offset-2'
+                          ? 'border-amber-400 bg-amber-50/60 dark:bg-amber-950/20 ring-2 ring-amber-300 ring-offset-2 dark:ring-offset-background'
                           : pending
-                            ? 'border-sky-200 bg-sky-50/40'
-                            : 'border-slate-200 bg-slate-50/70 opacity-70'
+                            ? 'border-sky-200 dark:border-sky-800 bg-sky-50/40 dark:bg-sky-950/20'
+                            : 'border-slate-200 dark:border-border bg-slate-50/70 dark:bg-muted/10 opacity-70'
                       }`}
                     >
                       {pending && (
@@ -967,8 +1069,8 @@ const ManagerProjectsPage: React.FC = () => {
                       )}
                       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                         <div className="space-y-1">
-                          <p className="text-lg font-semibold text-slate-950">{request.projectName}</p>
-                          <p className="text-sm text-slate-600">Demande inter-équipes de {request.requestingTeamName}</p>
+                          <p className="text-lg font-semibold text-slate-950 dark:text-foreground">{request.projectName}</p>
+                          <p className="text-sm text-slate-600 dark:text-slate-400">Demande inter-équipes de {request.requestingTeamName}</p>
                         </div>
                         <Badge className={statusBadgeClass[request.status] || ''} variant={statusVariant(request.status)}>
                           {statusLabel[request.status] || request.status}
@@ -976,44 +1078,44 @@ const ManagerProjectsPage: React.FC = () => {
                       </div>
 
                       <div className="grid gap-3 lg:grid-cols-3">
-                        <div className="rounded-xl border border-slate-200 bg-white p-3">
-                          <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        <div className="rounded-xl border border-slate-200 dark:border-border bg-white dark:bg-muted/20 p-3">
+                          <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
                             <UserRound className="h-3.5 w-3.5" /> Manager demandeur
                           </p>
-                          <p className="font-medium text-slate-900">{request.requestingManagerName || 'Manager'}</p>
-                          <p className="text-sm text-slate-600">{request.requestingTeamName || 'Équipe'}</p>
+                          <p className="font-medium text-slate-900 dark:text-slate-100">{request.requestingManagerName || 'Manager'}</p>
+                          <p className="text-sm text-slate-600 dark:text-slate-400">{request.requestingTeamName || 'Équipe'}</p>
                         </div>
-                        <div className="rounded-xl border border-slate-200 bg-white p-3">
-                          <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        <div className="rounded-xl border border-slate-200 dark:border-border bg-white dark:bg-muted/20 p-3">
+                          <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
                             <BriefcaseBusiness className="h-3.5 w-3.5" /> Contexte du projet
                           </p>
-                          <p className="font-medium text-slate-900">{request.projectName}</p>
-                          <p className="text-sm text-slate-600">{request.clientName || 'Aucun client spécifié'}</p>
+                          <p className="font-medium text-slate-900 dark:text-slate-100">{request.projectName}</p>
+                          <p className="text-sm text-slate-600 dark:text-slate-400">{request.clientName || 'Aucun client spécifié'}</p>
                         </div>
-                        <div className="rounded-xl border border-slate-200 bg-white p-3">
-                          <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        <div className="rounded-xl border border-slate-200 dark:border-border bg-white dark:bg-muted/20 p-3">
+                          <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
                             <CalendarClock className="h-3.5 w-3.5" /> Chronologie
                           </p>
-                          <p className="text-sm text-slate-700">Demandé le {formatDate(request.createdAt)}</p>
-                          <p className="text-sm text-slate-600">{request.respondedAt ? `Répondu le ${formatDate(request.respondedAt)}` : 'En attente de votre décision'}</p>
+                          <p className="text-sm text-slate-700 dark:text-slate-300">Demandé le {formatDate(request.createdAt)}</p>
+                          <p className="text-sm text-slate-600 dark:text-slate-400">{request.respondedAt ? `Répondu le ${formatDate(request.respondedAt)}` : 'En attente de votre décision'}</p>
                         </div>
                       </div>
 
                       {request.projectDescription && (
-                        <div className="rounded-xl border border-slate-200 bg-white p-4">
-                          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Description du projet</p>
-                          <p className="text-sm text-slate-700">{request.projectDescription}</p>
+                        <div className="rounded-xl border border-slate-200 dark:border-border bg-white dark:bg-muted/20 p-4">
+                          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Description du projet</p>
+                          <p className="text-sm text-slate-700 dark:text-slate-300">{request.projectDescription}</p>
                         </div>
                       )}
                       {request.requestNote && (
-                        <div className="rounded-xl border border-slate-200 bg-white p-4">
-                          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Contribution attendue</p>
-                          <p className="text-sm text-slate-700">{request.requestNote}</p>
+                        <div className="rounded-xl border border-slate-200 dark:border-border bg-white dark:bg-muted/20 p-4">
+                          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Contribution attendue</p>
+                          <p className="text-sm text-slate-700 dark:text-slate-300">{request.requestNote}</p>
                         </div>
                       )}
                       {pending && (
-                        <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4">
-                          <p className="mb-3 text-sm font-medium text-sky-900">Choisissez un employé de votre équipe et répondez à la demande.</p>
+                        <div className="rounded-2xl border border-sky-200 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/20 p-4">
+                          <p className="mb-3 text-sm font-medium text-sky-900 dark:text-sky-200">Choisissez un employé de votre équipe et répondez à la demande.</p>
                           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                             <Select
                               value={selectedIncomingProfiles[request.requestId] || ''}
@@ -1021,7 +1123,7 @@ const ManagerProjectsPage: React.FC = () => {
                                 setSelectedIncomingProfiles((prev) => ({ ...prev, [request.requestId]: value }))
                               }
                             >
-                              <SelectTrigger className="xl:w-[340px] bg-white">
+                              <SelectTrigger className="xl:w-[340px] bg-background">
                                 <SelectValue placeholder="Sélectionner un employé de votre équipe" />
                               </SelectTrigger>
                               <SelectContent>
@@ -1053,9 +1155,9 @@ const ManagerProjectsPage: React.FC = () => {
                         </div>
                       )}
                       {!pending && request.selectedEmployeeName && (
-                        <div className="rounded-xl border border-slate-200 bg-white p-4">
-                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Employé sélectionné</p>
-                          <p className="mt-1 text-sm text-slate-700">{request.selectedEmployeeName}</p>
+                        <div className="rounded-xl border border-slate-200 dark:border-border bg-white dark:bg-muted/20 p-4">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Employé sélectionné</p>
+                          <p className="mt-1 text-sm text-slate-700 dark:text-slate-300">{request.selectedEmployeeName}</p>
                         </div>
                       )}
                     </div>
@@ -1065,10 +1167,10 @@ const ManagerProjectsPage: React.FC = () => {
             </CardContent>
           </Card>
 
-          <Card className="border-slate-200 bg-white shadow-sm">
+          <Card className="border-slate-200 dark:border-border bg-white dark:bg-card shadow-sm">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Send className="h-5 w-5 text-slate-700" />
+                <Send className="h-5 w-5 text-slate-700 dark:text-slate-300" />
                 Demandes envoyées
               </CardTitle>
               <CardDescription>Demandes déjà envoyées par votre équipe. Les cartes ci-dessous facilitent la lecture du statut, de l'employé sélectionné et de la prochaine étape.</CardDescription>
@@ -1089,16 +1191,16 @@ const ManagerProjectsPage: React.FC = () => {
                     id={`request-${request.requestId}`}
                     className={`rounded-2xl border p-4 space-y-4 shadow-sm transition-all ${
                       highlighted
-                        ? 'border-amber-400 bg-amber-50/60 ring-2 ring-amber-300 ring-offset-2'
+                        ? 'border-amber-400 bg-amber-50/60 dark:bg-amber-950/20 ring-2 ring-amber-300 ring-offset-2 dark:ring-offset-background'
                         : request.status === 'pending'
-                          ? 'border-sky-200 bg-sky-50/40'
-                          : 'border-slate-200 bg-slate-50/70'
+                          ? 'border-sky-200 dark:border-sky-800 bg-sky-50/40 dark:bg-sky-950/20'
+                          : 'border-slate-200 dark:border-border bg-slate-50/70 dark:bg-muted/10'
                     }`}
                   >
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                       <div>
-                        <p className="text-lg font-semibold text-slate-950">{request.projectName}</p>
-                        <p className="text-sm text-slate-600">Demande envoyée à {request.targetTeamName}</p>
+                        <p className="text-lg font-semibold text-slate-950 dark:text-foreground">{request.projectName}</p>
+                        <p className="text-sm text-slate-600 dark:text-slate-400">Demande envoyée à {request.targetTeamName}</p>
                       </div>
                       <Badge className={statusBadgeClass[request.status] || ''} variant={statusVariant(request.status)}>
                         {statusLabel[request.status] || request.status}
@@ -1106,39 +1208,39 @@ const ManagerProjectsPage: React.FC = () => {
                     </div>
 
                     <div className="grid gap-3 lg:grid-cols-3">
-                      <div className="rounded-xl border border-slate-200 bg-white p-3">
-                        <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <div className="rounded-xl border border-slate-200 dark:border-border bg-white dark:bg-muted/20 p-3">
+                        <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
                           <BriefcaseBusiness className="h-3.5 w-3.5" /> Projet
                         </p>
-                        <p className="font-medium text-slate-900">{request.projectName}</p>
-                        <p className="text-sm text-slate-600">{request.clientName || 'No client specified'}</p>
+                        <p className="font-medium text-slate-900 dark:text-slate-100">{request.projectName}</p>
+                        <p className="text-sm text-slate-600 dark:text-slate-400">{request.clientName || 'No client specified'}</p>
                       </div>
-                      <div className="rounded-xl border border-slate-200 bg-white p-3">
-                        <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <div className="rounded-xl border border-slate-200 dark:border-border bg-white dark:bg-muted/20 p-3">
+                        <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
                           <Users className="h-3.5 w-3.5" /> Équipe cible
                         </p>
-                        <p className="font-medium text-slate-900">{request.targetTeamName}</p>
-                        <p className="text-sm text-slate-600">{request.targetManagerName || 'Manager'}</p>
+                        <p className="font-medium text-slate-900 dark:text-slate-100">{request.targetTeamName}</p>
+                        <p className="text-sm text-slate-600 dark:text-slate-400">{request.targetManagerName || 'Manager'}</p>
                       </div>
-                      <div className="rounded-xl border border-slate-200 bg-white p-3">
-                        <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <div className="rounded-xl border border-slate-200 dark:border-border bg-white dark:bg-muted/20 p-3">
+                        <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
                           <CalendarClock className="h-3.5 w-3.5" /> Timeline
                         </p>
-                        <p className="text-sm text-slate-700">Envoyé le {formatDate(request.createdAt)}</p>
-                        <p className="text-sm text-slate-600">{request.respondedAt ? `Traité le ${formatDate(request.respondedAt)}` : 'En attente de réponse'}</p>
+                        <p className="text-sm text-slate-700 dark:text-slate-300">Envoyé le {formatDate(request.createdAt)}</p>
+                        <p className="text-sm text-slate-600 dark:text-slate-400">{request.respondedAt ? `Traité le ${formatDate(request.respondedAt)}` : 'En attente de réponse'}</p>
                       </div>
                     </div>
 
                     {request.selectedEmployeeName && (
-                      <div className="rounded-xl border border-slate-200 bg-white p-4">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Membre externe confirmé</p>
-                        <p className="mt-1 text-sm text-slate-700">{request.selectedEmployeeName}</p>
+                      <div className="rounded-xl border border-slate-200 dark:border-border bg-white dark:bg-muted/20 p-4">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Membre externe confirmé</p>
+                        <p className="mt-1 text-sm text-slate-700 dark:text-slate-300">{request.selectedEmployeeName}</p>
                       </div>
                     )}
                     {request.requestNote && (
-                      <div className="rounded-xl border border-slate-200 bg-white p-4">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Contexte de votre demande</p>
-                        <p className="mt-1 text-sm text-slate-700">{request.requestNote}</p>
+                      <div className="rounded-xl border border-slate-200 dark:border-border bg-white dark:bg-muted/20 p-4">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Contexte de votre demande</p>
+                        <p className="mt-1 text-sm text-slate-700 dark:text-slate-300">{request.requestNote}</p>
                       </div>
                     )}
                     {request.status === 'approved' && (
@@ -1147,7 +1249,7 @@ const ManagerProjectsPage: React.FC = () => {
                       </div>
                     )}
                     {request.status === 'pending' && (
-                      <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-800">
+                      <div className="rounded-xl border border-sky-200 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/20 p-4 text-sm text-sky-800">
                         Cette demande est encore en cours d'examen par l'équipe destinataire.
                       </div>
                     )}
@@ -1160,12 +1262,13 @@ const ManagerProjectsPage: React.FC = () => {
         </TabsContent>
       </Tabs>
 
+      {/* ── PV Upload Dialog — external projects only ───────────────────────── */}
       <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Importer le PV</DialogTitle>
             <DialogDescription>
-              Soumettez le PV ici et complétez toutes les saisies en une seule fois : attribuez des scores aux membres internes et décrivez les contributions des membres externes pour la révision du manager d'origine.
+              Pour les projets <strong>externes</strong> uniquement. Soumettez le PV et complétez toutes les saisies en une seule fois : attribuez des scores aux membres internes et décrivez les contributions des membres externes.
             </DialogDescription>
           </DialogHeader>
 
@@ -1175,38 +1278,24 @@ const ManagerProjectsPage: React.FC = () => {
               <Input type="file" accept=".pdf" onChange={(e) => setUploadFile(e.target.files?.[0] || null)} />
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label>Projet</Label>
-                <Select value={uploadProjectId} onValueChange={handleUploadProjectChange}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Sélectionner un projet" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableProjects.map((project) => (
+            <div className="space-y-2">
+              <Label>Projet externe</Label>
+              <Select value={uploadProjectId} onValueChange={handleUploadProjectChange}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Sélectionner un projet externe" />
+                </SelectTrigger>
+                <SelectContent>
+                  {externalProjects.length === 0 ? (
+                    <div className="px-3 py-2 text-sm text-muted-foreground">Aucun projet externe disponible</div>
+                  ) : (
+                    externalProjects.map((project) => (
                       <SelectItem key={project.project_id} value={project.project_id}>
-                        {project.projectName} ({project.projectType}){project.startDate ? ` - ${project.startDate}` : ''}
+                        {project.projectName}{project.startDate ? ` — ${project.startDate}` : ''}
                       </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Complexité du projet</Label>
-                <Select
-                  value={uploadComplexity}
-                  onValueChange={(value: 'low' | 'medium' | 'high') => setUploadComplexity(value)}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="low">Faible</SelectItem>
-                    <SelectItem value="medium">Moyenne</SelectItem>
-                    <SelectItem value="high">Élevée</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
             </div>
 
             {selectedUploadProject && (
@@ -1217,7 +1306,14 @@ const ManagerProjectsPage: React.FC = () => {
                     <p className="text-sm text-muted-foreground">{selectedUploadProject.clientName || 'Aucun client'}</p>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <Badge variant="secondary">{selectedUploadProject.projectType}</Badge>
+                    {selectedUploadProject.complexity && (
+                      <Badge
+                        variant="outline"
+                        className={complexityBadgeClass[selectedUploadProject.complexity] || ''}
+                      >
+                        Complexité : {complexityLabel[selectedUploadProject.complexity] || selectedUploadProject.complexity}
+                      </Badge>
+                    )}
                     <Badge variant="outline">
                       {selectedUploadProject.participants.length} participant{selectedUploadProject.participants.length === 1 ? '' : 's'}
                     </Badge>
@@ -1241,7 +1337,7 @@ const ManagerProjectsPage: React.FC = () => {
                     return (
                       <div key={participant.profileId} className="rounded-md border p-3 space-y-2">
                         <label className="flex items-center gap-2 text-sm">
-                          <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">inclus</span>
+                          <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700 dark:text-slate-300">inclus</span>
                           <span className="font-medium">{displayName}</span>
                           <Badge variant="outline">{participant.assignmentType}</Badge>
                           {participant.assignmentType === 'internal' ? (
@@ -1255,8 +1351,8 @@ const ManagerProjectsPage: React.FC = () => {
                           <div className="space-y-2 rounded-md border border-sky-200 bg-sky-50/70 p-3">
                             <div className="space-y-1">
                               <Label className="text-xs font-semibold text-sky-950">Score d'exécution (0–20)</Label>
-                              <p className="text-xs text-sky-900">
-                                Score × plafond de complexité du projet = contribution finale. Ex. : 16/20 sur un projet Élevé → (16/20) × 85 = 68/100.
+                              <p className="text-xs text-sky-900 dark:text-sky-200">
+                                Score × plafond de complexité = contribution finale. Ex. : 16/20 sur un projet Élevé → (16/20) × 85 = 68/100.
                               </p>
                             </div>
                             <Input
@@ -1295,13 +1391,12 @@ const ManagerProjectsPage: React.FC = () => {
           </div>
 
           <DialogFooter>
-            {internalParticipants.length > 0 && (
-              <div className={`flex-1 flex items-center gap-2 text-sm ${allScoresEntered ? 'text-emerald-700' : 'text-sky-700'}`}>
-                <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-xs font-bold text-white ${allScoresEntered ? 'bg-emerald-500' : 'bg-sky-500'}`}>
-                  {scoredCount}
+            {pvInternalParticipants.length > 0 && (
+              <div className={`flex-1 flex items-center gap-2 text-sm ${pvAllScoresEntered ? 'text-emerald-700' : 'text-sky-700'}`}>
+                <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-xs font-bold text-white ${pvAllScoresEntered ? 'bg-emerald-500' : 'bg-sky-500'}`}>
+                  {pvScoredCount}
                 </span>
-                <span>/ {internalParticipants.length} score{internalParticipants.length > 1 ? 's' : ''} d'exécution saisi{internalParticipants.length > 1 ? 's' : ''}</span>
-                {!allScoresEntered && <span className="text-xs text-sky-600">— saisissez le{internalParticipants.length - scoredCount > 1 ? 's' : ''} score{internalParticipants.length - scoredCount > 1 ? 's' : ''} restant{internalParticipants.length - scoredCount > 1 ? 's' : ''} pour débloquer l'import</span>}
+                <span>/ {pvInternalParticipants.length} score{pvInternalParticipants.length > 1 ? 's' : ''} d'exécution saisi{pvInternalParticipants.length > 1 ? 's' : ''}</span>
               </div>
             )}
             <Button variant="outline" onClick={() => setUploadOpen(false)}>
@@ -1309,6 +1404,154 @@ const ManagerProjectsPage: React.FC = () => {
             </Button>
             <Button onClick={handleUploadPv} disabled={!canUpload}>
               {uploading ? 'Import en cours...' : 'Importer le PV'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Internal Project Evaluation Dialog ─────────────────────────────── */}
+      <Dialog open={internalEvalOpen} onOpenChange={setInternalEvalOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ClipboardCheck className="h-5 w-5 text-primary" />
+              Évaluer un projet interne
+            </DialogTitle>
+            <DialogDescription>
+              Attribuez une note d'exécution (0–20) à chaque participant. Aucun PV n'est requis pour les projets internes — la complexité est définie à la création du projet.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Projet interne</Label>
+              <Select value={internalEvalProjectId} onValueChange={handleInternalEvalProjectChange}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Sélectionner un projet interne" />
+                </SelectTrigger>
+                <SelectContent>
+                  {internalProjects.length === 0 ? (
+                    <div className="px-3 py-2 text-sm text-muted-foreground">Aucun projet interne disponible</div>
+                  ) : (
+                    internalProjects.map((project) => (
+                      <SelectItem key={project.project_id} value={project.project_id}>
+                        {project.projectName}{project.complexity ? ` — ${complexityLabel[project.complexity] || project.complexity}` : ''}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {selectedInternalProject && (
+              <div className="rounded-md border bg-muted/40 p-3">
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="font-medium">{selectedInternalProject.projectName}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {selectedInternalProject.endDate
+                        ? `Date de fin : ${formatDate(selectedInternalProject.endDate)}`
+                        : 'Projet en cours'}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedInternalProject.complexity && (
+                      <Badge
+                        variant="outline"
+                        className={complexityBadgeClass[selectedInternalProject.complexity] || ''}
+                      >
+                        Complexité : {complexityLabel[selectedInternalProject.complexity] || selectedInternalProject.complexity}
+                        {' '}(plafond {complexityCeiling[selectedInternalProject.complexity] || 65}/100)
+                      </Badge>
+                    )}
+                    <Badge variant="outline">
+                      {selectedInternalProject.participants.length} participant{selectedInternalProject.participants.length === 1 ? '' : 's'}
+                    </Badge>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {internalProjectParticipants.length === 0 && internalEvalProjectId && (
+              <p className="text-sm text-muted-foreground rounded-md border border-dashed p-4 text-center">
+                Ce projet n'a aucun participant enregistré.
+              </p>
+            )}
+
+            {internalProjectParticipants.length > 0 && (
+              <div className="space-y-2">
+                <Label>Notation des participants</Label>
+                <div className="space-y-2">
+                  {internalProjectParticipants.map((participant) => {
+                    const member = members.find((m) => m.profileId === participant.profileId);
+                    const displayName = member?.name || participant.name;
+                    const complexity = selectedInternalProject?.complexity || 'medium';
+                    const ceiling = complexityCeiling[complexity] || 65;
+                    const rawScore = internalEvalScores[participant.profileId];
+                    const parsedScore = rawScore !== undefined && rawScore !== '' ? Number(rawScore) : null;
+                    const previewScore =
+                      parsedScore !== null && Number.isFinite(parsedScore) && parsedScore >= 0 && parsedScore <= 20
+                        ? ((parsedScore / 20) * ceiling).toFixed(1)
+                        : null;
+
+                    return (
+                      <div key={participant.profileId} className="rounded-md border p-3 space-y-3">
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1">
+                            <p className="font-medium text-sm">{displayName}</p>
+                          </div>
+                          {previewScore !== null && (
+                            <div className="text-xs text-emerald-700 dark:text-emerald-400 font-semibold bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-full px-2 py-0.5">
+                              → {previewScore} / {ceiling} pts
+                            </div>
+                          )}
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-semibold text-sky-900 dark:text-sky-200">Score d'exécution (0–20)</Label>
+                          <p className="text-xs text-muted-foreground">
+                            (score / 20) × {ceiling} = contribution au pilier Projets
+                          </p>
+                          <Input
+                            type="number"
+                            min={0}
+                            max={20}
+                            step={0.5}
+                            placeholder="ex. : 15"
+                            value={internalEvalScores[participant.profileId] || ''}
+                            onChange={(e) =>
+                              setInternalEvalScores((prev) => ({ ...prev, [participant.profileId]: e.target.value }))
+                            }
+                            className="max-w-[120px]"
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            {internalProjectParticipants.length > 0 && (
+              <div className={`flex-1 flex items-center gap-2 text-sm ${internalAllScoresEntered ? 'text-emerald-700' : 'text-sky-700'}`}>
+                <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-xs font-bold text-white ${internalAllScoresEntered ? 'bg-emerald-500' : 'bg-sky-500'}`}>
+                  {internalScoredCount}
+                </span>
+                <span>/ {internalProjectParticipants.length} score{internalProjectParticipants.length > 1 ? 's' : ''} saisi{internalProjectParticipants.length > 1 ? 's' : ''}</span>
+                {!internalAllScoresEntered && (
+                  <span className="text-xs text-sky-600">— saisissez tous les scores pour valider</span>
+                )}
+              </div>
+            )}
+            <Button variant="outline" onClick={() => setInternalEvalOpen(false)}>
+              Annuler
+            </Button>
+            <Button
+              onClick={handleSubmitInternalEval}
+              disabled={submittingInternalEval || !internalAllScoresEntered}
+            >
+              {submittingInternalEval ? 'Enregistrement...' : 'Valider les évaluations'}
             </Button>
           </DialogFooter>
         </DialogContent>

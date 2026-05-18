@@ -1722,6 +1722,122 @@ export class ScoringService {
     return saved;
   }
 
+  async scoreInternalProject(
+    managerUserId: string,
+    projectId: string,
+    profileEvaluations: Array<{ profileId: string; score: number }>,
+  ) {
+    if (!projectId) {
+      throw new BadRequestException('Le projet est obligatoire.');
+    }
+    if (!profileEvaluations?.length) {
+      throw new BadRequestException('Au moins une évaluation est requise.');
+    }
+
+    const project = await this.projectRepo.findOne({ where: { project_id: projectId } });
+    if (!project) {
+      throw new NotFoundException(`Projet ${projectId} non trouvé`);
+    }
+    if (project.projectType !== 'internal') {
+      throw new BadRequestException('Ce flux est réservé aux projets internes.');
+    }
+
+    const managerUser = await this.userRepo.findOne({ where: { user_id: managerUserId } });
+    const isBidManager = managerUser?.role === UserRole.BID_MANAGER;
+
+    if (!isBidManager && project.createdBy && project.createdBy !== managerUserId) {
+      throw new ForbiddenException('Vous pouvez évaluer uniquement vos propres projets.');
+    }
+
+    const profileIds = profileEvaluations.map((e) => e.profileId);
+    const participants = await this.participantRepo.find({
+      where: profileIds.map((profileId) => ({
+        project: { project_id: projectId },
+        profile: { profile_id: profileId },
+      })),
+      relations: ['profile', 'profile.user'],
+    });
+    const participantMap = new Map(participants.map((p) => [p.profile.profile_id, p]));
+
+    const currentYear = new Date().getFullYear();
+    const complexity = ((project.complexity || 'medium') as 'low' | 'medium' | 'high');
+    const completionDate = project.endDate ? new Date(project.endDate) : new Date();
+    const projectName = project.projectName;
+    const clientName = project.clientName || null;
+
+    const results: Array<{ profileId: string; employeeName: string; score: number; recordId: string }> = [];
+
+    for (const { profileId, score } of profileEvaluations) {
+      if (!Number.isFinite(score) || score < 0 || score > 20) {
+        throw new BadRequestException('Le score doit être compris entre 0 et 20.');
+      }
+      const participant = participantMap.get(profileId);
+      if (!participant) {
+        throw new BadRequestException(`Le profil ${profileId} n'est pas assigné à ce projet.`);
+      }
+
+      const existing = await this.projectRecordRepo.findOne({
+        where: { profileId, projectName, clientName: clientName || (IsNull() as any) },
+      });
+
+      let record: ProjectRecord;
+      if (existing) {
+        existing.individualScore = score as any;
+        existing.evaluationStatus = 'scored_by_own_manager';
+        existing.evaluatedByManagerId = managerUserId;
+        existing.evaluatedAt = new Date();
+        existing.complexity = complexity;
+        if (!existing.completionDate) existing.completionDate = completionDate;
+        record = await this.projectRecordRepo.save(existing);
+      } else {
+        record = await this.projectRecordRepo.save(
+          this.projectRecordRepo.create({
+            profileId,
+            projectName,
+            clientName,
+            projectDescription: project.projectDescription || null,
+            completionDate,
+            complexity,
+            pvVerified: false,
+            individualScore: score as any,
+            evaluationStatus: 'scored_by_own_manager',
+            evaluatedByManagerId: managerUserId,
+            evaluatedAt: new Date(),
+            submittedBy: managerUserId,
+            parsedData: { assignment_type: 'internal', project_name: projectName },
+          }),
+        );
+      }
+
+      await this.computeScore(profileId, currentYear);
+      if (completionDate.getFullYear() !== currentYear) {
+        await this.computeScore(profileId, completionDate.getFullYear());
+      }
+
+      const profile = participant.profile;
+      const employeeName = profile.user
+        ? `${profile.user.firstName || ''} ${profile.user.lastName || ''}`.trim() || profile.user.email
+        : profileId;
+
+      if (profile.user?.user_id) {
+        await this.notificationsService
+          .create({
+            userId: profile.user.user_id,
+            type: 'score_updated',
+            title: 'Score mis à jour',
+            message: `Votre manager a évalué votre participation au projet interne "${projectName}".`,
+            relatedEntityType: 'project_record',
+            relatedEntityId: record.record_id,
+          })
+          .catch((err) => this.logger.warn(`Internal score notification failed: ${err.message}`));
+      }
+
+      results.push({ profileId, employeeName, score, recordId: record.record_id });
+    }
+
+    return { message: `${results.length} évaluation(s) enregistrée(s) avec succès`, results };
+  }
+
   async listProjects(requestUserId: string, role?: string) {
     const query = this.participantRepo
       .createQueryBuilder('pp')
