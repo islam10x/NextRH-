@@ -583,15 +583,17 @@ const ManagerProjectsPage: React.FC = () => {
                       required
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="clientName">Client</Label>
-                    <Input
-                      id="clientName"
-                      placeholder="ex. : Nom de l'entreprise"
-                      value={clientName}
-                      onChange={(e) => setClientName(e.target.value)}
-                    />
-                  </div>
+                  {projectType === 'external' && (
+                    <div className="space-y-2">
+                      <Label htmlFor="clientName">Client <span className="text-muted-foreground font-normal">(optionnel)</span></Label>
+                      <Input
+                        id="clientName"
+                        placeholder="ex. : Nom de l'entreprise"
+                        value={clientName}
+                        onChange={(e) => setClientName(e.target.value)}
+                      />
+                    </div>
+                  )}
                   {projectType === 'internal' && (
                     <div className="space-y-2">
                       <Label htmlFor="projectComplexity">Complexité</Label>
@@ -609,26 +611,28 @@ const ManagerProjectsPage: React.FC = () => {
                   )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label htmlFor="startDate">Date de début</Label>
+                      <Label htmlFor="startDate">Date de début <span className="text-muted-foreground font-normal">(optionnel)</span></Label>
                       <Input
                         id="startDate"
                         type="date"
+                        className="dark:[color-scheme:dark]"
                         value={projectStartDate}
                         onChange={(e) => setProjectStartDate(e.target.value)}
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="endDate">Date de fin</Label>
+                      <Label htmlFor="endDate">Date de fin <span className="text-muted-foreground font-normal">(optionnel)</span></Label>
                       <Input
                         id="endDate"
                         type="date"
+                        className="dark:[color-scheme:dark]"
                         value={projectEndDate}
                         onChange={(e) => setProjectEndDate(e.target.value)}
                       />
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="technologies">Technologies</Label>
+                    <Label htmlFor="technologies">Technologies <span className="text-muted-foreground font-normal">(optionnel)</span></Label>
                     <Input
                       id="technologies"
                       placeholder="React, Node.js, AWS"
@@ -637,7 +641,7 @@ const ManagerProjectsPage: React.FC = () => {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="projectDescription">Résumé du projet</Label>
+                    <Label htmlFor="projectDescription">Résumé du projet <span className="text-muted-foreground font-normal">(optionnel)</span></Label>
                     <Textarea
                       id="projectDescription"
                       placeholder="Contexte court du projet pour l'équipe"

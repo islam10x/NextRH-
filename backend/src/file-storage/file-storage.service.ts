@@ -173,15 +173,17 @@ export class FileStorageService {
         }
 
         // 2. Fallback: Fuzzy search by name if ID fails
-        // This handles cases where the folder was created with a different ID format or manually renamed
+        // Only attempt when nameKey is non-empty — an empty nameKey matches every folder.
         try {
             const user = await this.usersService.findById(userId);
             if (user) {
                 const nameKey = [user.firstName, user.lastName].filter(Boolean).join('_').toLowerCase();
-                const fuzzyFolder = folders.find(f => f.toLowerCase().includes(nameKey));
-                if (fuzzyFolder) {
-                    this.logger.warn(`[Fuzzy Match] Found folder ${fuzzyFolder} for user ${userId} using name fallback`);
-                    return path.join(rootDir, fuzzyFolder);
+                if (nameKey) {
+                    const fuzzyFolder = folders.find(f => f.toLowerCase().includes(nameKey));
+                    if (fuzzyFolder) {
+                        this.logger.warn(`[Fuzzy Match] Found folder ${fuzzyFolder} for user ${userId} using name fallback`);
+                        return path.join(rootDir, fuzzyFolder);
+                    }
                 }
             }
         } catch (err) {

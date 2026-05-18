@@ -160,6 +160,15 @@
   }
 }
 
+/* Native date/time inputs — force dark color-scheme so browser renders them visibly */
+.dark input[type="date"],
+.dark input[type="time"],
+.dark input[type="datetime-local"],
+.dark input[type="month"],
+.dark input[type="week"] {
+  color-scheme: dark;
+}
+
 @layer utilities {
   .animate-fade-in {
     animation: fade-in 0.3s ease-out;

@@ -239,7 +239,7 @@ const ManagerTrainingsPage: React.FC = () => {
                 </div>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="dueDate">Date limite</Label>
+                <Label htmlFor="dueDate">Date limite <span className="text-muted-foreground font-normal">(optionnel)</span></Label>
                 <Popover>
                   <PopoverTrigger asChild>
                     <Button
@@ -271,7 +271,7 @@ const ManagerTrainingsPage: React.FC = () => {
                 </Popover>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="description">Description</Label>
+                <Label htmlFor="description">Description <span className="text-muted-foreground font-normal">(optionnel)</span></Label>
                 <Textarea id="description" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Contexte, objectifs..." />
               </div>
               <div className="space-y-2">

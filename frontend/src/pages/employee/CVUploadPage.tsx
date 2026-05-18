@@ -10,6 +10,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { ParsedEmployeeMetadata } from '@/types';
 import axios from 'axios';
 import { toast } from 'sonner';
+import { useNavigate } from 'react-router-dom';
 
 interface UploadedFileInfo {
   name: string;
@@ -27,6 +28,7 @@ const ALLOWED_TYPES = [
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB (keep in sync with backend)
 
 const CVUploadPage: React.FC = () => {
+  const navigate = useNavigate();
   const [dragActive, setDragActive] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<UploadStatus>('idle');
   const [progress, setProgress] = useState(0);
@@ -355,7 +357,7 @@ const CVUploadPage: React.FC = () => {
                     <Button variant="outline" onClick={handleReset}>
                       Importer un autre
                     </Button>
-                    <Button>
+                    <Button onClick={() => navigate('/employee/cv-preview')}>
                       <FileText className="h-4 w-4 mr-2" />
                       Voir le CV
                     </Button>
