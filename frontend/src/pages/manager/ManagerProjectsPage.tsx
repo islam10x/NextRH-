@@ -1278,24 +1278,42 @@ const ManagerProjectsPage: React.FC = () => {
               <Input type="file" accept=".pdf" onChange={(e) => setUploadFile(e.target.files?.[0] || null)} />
             </div>
 
-            <div className="space-y-2">
-              <Label>Projet externe</Label>
-              <Select value={uploadProjectId} onValueChange={handleUploadProjectChange}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Sélectionner un projet externe" />
-                </SelectTrigger>
-                <SelectContent>
-                  {externalProjects.length === 0 ? (
-                    <div className="px-3 py-2 text-sm text-muted-foreground">Aucun projet externe disponible</div>
-                  ) : (
-                    externalProjects.map((project) => (
-                      <SelectItem key={project.project_id} value={project.project_id}>
-                        {project.projectName}{project.startDate ? ` — ${project.startDate}` : ''}
-                      </SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Projet externe</Label>
+                <Select value={uploadProjectId} onValueChange={handleUploadProjectChange}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Sélectionner un projet externe" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {externalProjects.length === 0 ? (
+                      <div className="px-3 py-2 text-sm text-muted-foreground">Aucun projet externe disponible</div>
+                    ) : (
+                      externalProjects.map((project) => (
+                        <SelectItem key={project.project_id} value={project.project_id}>
+                          {project.projectName}{project.startDate ? ` — ${project.startDate}` : ''}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Complexité du projet</Label>
+                <Select
+                  value={uploadComplexity}
+                  onValueChange={(value: 'low' | 'medium' | 'high') => setUploadComplexity(value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="low">Faible — plafond 45/100</SelectItem>
+                    <SelectItem value="medium">Moyenne — plafond 65/100</SelectItem>
+                    <SelectItem value="high">Élevée — plafond 85/100</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
 
             {selectedUploadProject && (
