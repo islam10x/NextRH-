@@ -49,8 +49,13 @@ export class MailService {
         console.log(`[MailService] Transporter initialized for ${host}`);
     }
 
+    private getPrimaryFrontendUrl(): string {
+        const rawUrl = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173';
+        return rawUrl.split(',')[0].trim();
+    }
+
     async sendInvitationEmail(to: string, token: string, senderName?: string, senderEmail?: string) {
-        const setupUrl = `${this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173'}/auth/setup-password?token=${token}`;
+        const setupUrl = `${this.getPrimaryFrontendUrl()}/auth/setup-password?token=${token}`;
 
         // Use system email for 'From' but set display name to Team Manager
         // This ensures better deliverability (DMARC/SPF) while showing who sent it
@@ -89,7 +94,7 @@ export class MailService {
     }
 
     async sendPasswordResetEmail(to: string, token: string) {
-        const resetUrl = `${this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173'}/auth/reset-password?token=${token}`;
+        const resetUrl = `${this.getPrimaryFrontendUrl()}/auth/reset-password?token=${token}`;
         const systemFrom =
             this.configService.get<string>('MAIL_FROM_ADDRESS') ||
             this.configService.get<string>('SMTP_FROM');
@@ -133,7 +138,7 @@ export class MailService {
             this.configService.get<string>('SMTP_FROM');
         const fromDisplayName = params.managerName ? `${params.managerName} via CV Manager` : 'CV Manager';
 
-        const frontend = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173';
+        const frontend = this.getPrimaryFrontendUrl();
         const ctaUrl = params.trainingUrl || frontend + '/employee/training-projects';
         const dueLine = params.dueDate ? `<p style="margin: 6px 0;">Due date: <strong>${params.dueDate}</strong></p>` : '';
 
@@ -169,7 +174,7 @@ export class MailService {
             this.configService.get<string>('SMTP_FROM');
         const displayManagerName = managerName || 'your manager';
         const fromDisplayName = managerName ? `${managerName} via CV Manager` : 'CV Manager';
-        const frontend = this.configService.get<string>('FRONTEND_URL') || 'http://localhost:5173';
+        const frontend = this.getPrimaryFrontendUrl();
 
         const mailOptions = {
             from: `"${fromDisplayName}" <${systemFrom}>`,
