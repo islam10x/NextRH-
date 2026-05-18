@@ -240,7 +240,7 @@ const ManagerProjectsPage: React.FC = () => {
         startDate: string;
         endDate?: string;
         description: string;
-        assignees: Array<{ profileId?: string; name: string; email: string; assignmentType: 'internal' | 'external' }>;
+        assignees: Array<{ profileId?: string; name: string; email: string; assignmentType: 'internal' | 'external'; contributionDescription?: string }>;
       }
     >();
 
@@ -267,6 +267,7 @@ const ManagerProjectsPage: React.FC = () => {
                   name: assigneeName || assigneeEmail,
                   email: assigneeEmail,
                   assignmentType: project.assignmentType || 'internal',
+                  contributionDescription: project.description || '',
                 },
               ]
             : [],
@@ -284,6 +285,7 @@ const ManagerProjectsPage: React.FC = () => {
           name: assigneeName || assigneeEmail,
           email: assigneeEmail,
           assignmentType: project.assignmentType || 'internal',
+          contributionDescription: project.description || '',
         });
       }
     }
@@ -907,24 +909,26 @@ const ManagerProjectsPage: React.FC = () => {
                       </div>
 
                       {project.assignees.length > 0 && (
-                        <div className="rounded-md bg-muted/50 p-2">
-                          <p className="text-xs text-muted-foreground mb-2">Membres assignés</p>
-                          <div className="flex flex-wrap gap-2">
+                        <div className="rounded-md bg-muted/50 p-3 space-y-3">
+                          <p className="text-xs font-semibold text-muted-foreground mb-1">Membres assignés et contributions</p>
+                          <div className="flex flex-col gap-3">
                             {project.assignees.map((assignee) => (
-                              <Badge
-                                key={`${project.key}-${assignee.profileId || assignee.email}`}
-                                variant="secondary"
-                                className="font-normal"
-                              >
-                                {assignee.name} ({assignee.assignmentType})
-                              </Badge>
+                              <div key={`${project.key}-${assignee.profileId || assignee.email}`} className="space-y-1.5">
+                                <Badge
+                                  variant="secondary"
+                                  className="font-normal w-fit"
+                                >
+                                  {assignee.name} ({assignee.assignmentType})
+                                </Badge>
+                                {assignee.contributionDescription && (
+                                  <p className="text-sm text-muted-foreground line-clamp-2 pl-3 border-l-2 border-border ml-1">
+                                    {assignee.contributionDescription}
+                                  </p>
+                                )}
+                              </div>
                             ))}
                           </div>
                         </div>
-                      )}
-
-                      {project.description && (
-                        <p className="text-sm text-muted-foreground line-clamp-2">{project.description}</p>
                       )}
 
                       {project.assignees.some((assignee) => assignee.assignmentType === 'external') && (
