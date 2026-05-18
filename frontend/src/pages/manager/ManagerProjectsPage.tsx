@@ -350,7 +350,7 @@ const ManagerProjectsPage: React.FC = () => {
     }
   };
 
-  const openPvUploadDialog = async () => {
+  const openPvUploadDialog = async (preSelectProjectId?: string) => {
     setUploadOpen(true);
     setUploadFile(null);
     setUploadProjectId('');
@@ -358,14 +358,36 @@ const ManagerProjectsPage: React.FC = () => {
     setUploadProfileIds([]);
     setUploadScores({});
     setUploadContributions({});
-    await loadAvailableProjects();
+    const projects = await scoringService.listProjects();
+    setAvailableProjects(projects);
+    if (preSelectProjectId) {
+      const extProjects = projects.filter((p) => p.projectType === 'external');
+      const match = extProjects.find((p) => p.project_id === preSelectProjectId);
+      if (match) {
+        setUploadProjectId(match.project_id);
+        const participantIds = (match.participants || []).map((p) => p.profileId);
+        setUploadProfileIds(participantIds);
+        const nextComplexity = (match.complexity || 'medium').toLowerCase();
+        if (nextComplexity === 'low' || nextComplexity === 'high') {
+          setUploadComplexity(nextComplexity);
+        }
+      }
+    }
   };
 
-  const openInternalEvalDialog = async () => {
+  const openInternalEvalDialog = async (preSelectProjectId?: string) => {
     setInternalEvalOpen(true);
     setInternalEvalProjectId('');
     setInternalEvalScores({});
-    await loadAvailableProjects();
+    const projects = await scoringService.listProjects();
+    setAvailableProjects(projects);
+    if (preSelectProjectId) {
+      const intProjects = projects.filter((p) => p.projectType === 'internal');
+      const match = intProjects.find((p) => p.project_id === preSelectProjectId);
+      if (match) {
+        setInternalEvalProjectId(match.project_id);
+      }
+    }
   };
 
   const handleUploadProjectChange = (projectId: string) => {
@@ -902,7 +924,7 @@ const ManagerProjectsPage: React.FC = () => {
                       )}
 
                       {project.description && (
-                        <p className="text-sm text-muted-foreground">{project.description}</p>
+                        <p className="text-sm text-muted-foreground line-clamp-2">{project.description}</p>
                       )}
 
                       {project.assignees.some((assignee) => assignee.assignmentType === 'external') && (
@@ -910,6 +932,24 @@ const ManagerProjectsPage: React.FC = () => {
                           Vous avez demandé ce membre externe via le flux inter-équipes. Lors de l'import du PV, vous devez décrire la contribution ; le score final est soumis par le manager de l'équipe d'origine.
                         </p>
                       )}
+
+                      <div className="flex justify-end pt-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            const projectId = project.key;
+                            if ((project.projectType || 'internal') === 'external') {
+                              openPvUploadDialog(projectId);
+                            } else {
+                              openInternalEvalDialog(projectId);
+                            }
+                          }}
+                        >
+                          <ClipboardCheck className="mr-2 h-4 w-4" />
+                          Évaluer
+                        </Button>
+                      </div>
                     </div>
                   ))}
                 </div>

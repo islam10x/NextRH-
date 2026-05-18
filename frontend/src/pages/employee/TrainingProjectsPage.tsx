@@ -58,6 +58,7 @@ const TrainingProjectsPage: React.FC = () => {
   const [completionComment, setCompletionComment] = useState<string>('');
   const [completionFile, setCompletionFile] = useState<File | null>(null);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [projectRole, setProjectRole] = useState('');
   const [projectDescription, setProjectDescription] = useState('');
   const [formationFile, setFormationFile] = useState<File | null>(null);
   const [uploadingFormation, setUploadingFormation] = useState(false);
