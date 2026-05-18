@@ -341,11 +341,15 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ title, showSearch = false 
                                   ? 'font-semibold text-foreground'
                                   : 'font-medium text-foreground/90'
                               }`}
+                              title={notification.title}
                             >
                               {notification.title}
                             </span>
                           </div>
-                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                          <p 
+                            className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground"
+                            title={notification.message}
+                          >
                             {notification.message}
                           </p>
                         </div>
