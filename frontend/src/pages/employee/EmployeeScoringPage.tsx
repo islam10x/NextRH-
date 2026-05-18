@@ -35,9 +35,11 @@ const getEvaluationStatusBadge = (status?: ProjectScoreDetail['evaluation_status
     case 'pending_external_manager':
       return { label: 'En attente de validation manager', className: 'bg-amber-100 text-amber-900 hover:bg-amber-100' };
     case 'scored_by_home_manager':
-      return { label: 'Validé par le manager', className: 'bg-emerald-100 text-emerald-900 hover:bg-emerald-100' };
+      return { label: 'Validé par le manager d\'origine', className: 'bg-emerald-100 text-emerald-900 hover:bg-emerald-100' };
+    case 'scored_by_own_manager':
+      return { label: 'Évalué par le manager d\'équipe', className: 'bg-sky-100 text-sky-900 hover:bg-sky-100' };
     default:
-      return { label: 'Validé par le chef de projet', className: 'bg-sky-100 text-sky-900 hover:bg-sky-100' };
+      return { label: 'Évalué', className: 'bg-sky-100 text-sky-900 hover:bg-sky-100' };
   }
 };
 
@@ -399,8 +401,8 @@ const EmployeeScoringPage: React.FC = () => {
               <p className="font-semibold">{formationsThisYear}</p>
             </div>
             <div>
-              <p className="text-muted-foreground">Projets avec PV vérifié</p>
-              <p className="font-semibold">{verifiedProjectCount} / {projectOverview.length}</p>
+              <p className="text-muted-foreground">Projets évalués</p>
+              <p className="font-semibold">{projectRecords.length} évaluation(s)</p>
             </div>
           </div>
         </CardContent>
@@ -515,8 +517,8 @@ const EmployeeScoringPage: React.FC = () => {
             {projectRecords.length > 0 && (
               <Card>
                 <CardHeader>
-                  <CardTitle>Détail des PV importés</CardTitle>
-                  <CardDescription>PV importés par votre manager. En l'absence de note manager, un PV vérifié peut supporter un score provisoire.</CardDescription>
+                  <CardTitle>Détail des évaluations projets</CardTitle>
+                  <CardDescription>Projets évalués par votre manager (PV ou projet interne). Chaque ligne montre la contribution exacte calculée.</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <Table>
