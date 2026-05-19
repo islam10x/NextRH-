@@ -11,7 +11,7 @@ def build_rag_chat_llm(temperature: float = 0.0, timeout: float | None = None):
     """Build a LangChain chat model for RAG chatbot usage."""
     from langchain_groq import ChatGroq
 
-    model_name = settings.GROQ_CV_MODEL
+    model_name = settings.GROQ_RAG_MODEL
     kwargs: Dict[str, Any] = {
         "model": model_name,
         "api_key": settings.GROQ_API_KEY,

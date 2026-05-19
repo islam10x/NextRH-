@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     # now prefers LOCAL_* or auto-detected Ollama models.
     GROQ_API_KEY: str = ""
     GROQ_CV_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_RAG_MODEL: str = "llama-3.1-8b-instant"
     GROQ_SCORING_MODEL: str = "llama-3.3-70b-versatile"
     GROQ_TIMEOUT_SECONDS: float = 15.0  # per-request timeout for Groq API calls
     GROQ_SUMMARY_TEMPERATURE: float = 0.3

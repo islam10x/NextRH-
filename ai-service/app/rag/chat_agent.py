@@ -42,8 +42,8 @@ from langchain_ollama import OllamaEmbeddings
 from app.config import settings
 from app.utils.llm import build_rag_chat_llm, parse_json_object
 
-TOP_K = 8
-TOP_K_PER_MATCHED_EMPLOYEE = 12
+TOP_K = 5
+TOP_K_PER_MATCHED_EMPLOYEE = 8
 NO_INFO_REPLY = "I don't have that information."
 
 
@@ -736,6 +736,26 @@ def _build_structured_facts(
 
     project_ranking.sort(key=lambda item: item[1], reverse=True)
     experience_years_ranking.sort(key=lambda item: item[1], reverse=True)
+
+    _MAX_ITEMS = 6
+    _DESC_LEN = 120
+    for row in employee_rows:
+        projs = row["projects"]
+        if len(projs) > _MAX_ITEMS:
+            projs = projs[:_MAX_ITEMS]
+        for p in projs:
+            d = str(p.get("description") or "")
+            if len(d) > _DESC_LEN:
+                p["description"] = d[:_DESC_LEN] + "…"
+        row["projects"] = projs
+        exps = row["experience"]
+        if len(exps) > _MAX_ITEMS:
+            exps = exps[:_MAX_ITEMS]
+        for e in exps:
+            d = str(e.get("description") or "")
+            if len(d) > _DESC_LEN:
+                e["description"] = d[:_DESC_LEN] + "…"
+        row["experience"] = exps
 
     payload = {
         "total_employees": total_employees,
