@@ -16,8 +16,8 @@ import time
 import os
 import easyocr
 from app.config import settings
-from app.utils.llm import resolve_llm_model, parse_json_object
-from langchain_ollama import ChatOllama
+from app.utils.llm import parse_json_object
+from langchain_groq import ChatGroq
 
 logger = logging.getLogger(__name__)
 
@@ -260,12 +260,10 @@ RAW TEXT:
 """
         try:
             # We configure a timeout so a bad prompt doesn't hang the worker
-            model_name = resolve_llm_model()
-            llm = ChatOllama(
-                model=model_name,
-                base_url=settings.OLLAMA_URL,
+            llm = ChatGroq(
+                model=settings.GROQ_CV_MODEL,
+                api_key=settings.GROQ_API_KEY,
                 temperature=0.0,
-                timeout=8.0  # tighter timeout to avoid long hangs
             )
 
             invoke_start = time.perf_counter()

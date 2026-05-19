@@ -22,7 +22,9 @@ pydantic-settings
 SQLAlchemy
 psycopg[binary]
 pgvector
+groq
 langchain
+langchain-groq
 langchain-ollama
 langchain-openai
 langchain-core

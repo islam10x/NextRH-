@@ -3,20 +3,18 @@ import logging
 from typing import Any, Dict, Optional
 
 from app.config import settings
-from app.utils.llm import parse_json_object, resolve_llm_model
-from langchain_ollama import ChatOllama
+from app.utils.llm import parse_json_object
+from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
 
 logger = logging.getLogger(__name__)
 
 
 def _build_translation_llm():
-    model = (settings.TRANSLATION_MODEL or "").strip() or resolve_llm_model()
-    return ChatOllama(
-        model=model,
-        base_url=settings.OLLAMA_URL,
+    return ChatGroq(
+        model=settings.GROQ_CV_MODEL,
+        api_key=settings.GROQ_API_KEY,
         temperature=0.0,
-        disable_streaming=True,
     )
 
 

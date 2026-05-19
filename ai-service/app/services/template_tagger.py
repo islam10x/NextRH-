@@ -1656,16 +1656,14 @@ def _classify_with_ai(snippets: List[Dict[str, Any]]) -> Dict[int, str]:
 
     try:
         from app.config import settings
-        from app.utils.llm import parse_json_object, resolve_llm_model
-        from langchain_ollama import ChatOllama
+        from app.utils.llm import parse_json_object
+        from langchain_groq import ChatGroq
         from langchain_core.messages import SystemMessage, HumanMessage
 
-        model = (settings.TRANSLATION_MODEL or "").strip() or resolve_llm_model()
-        llm = ChatOllama(
-            model=model,
-            base_url=settings.OLLAMA_URL,
+        llm = ChatGroq(
+            model=settings.GROQ_CV_MODEL,
+            api_key=settings.GROQ_API_KEY,
             temperature=0.0,
-            disable_streaming=True,
         )
 
         snippet_lines = []
@@ -1808,16 +1806,14 @@ def _classify_entry_with_ai(
 
     try:
         from app.config import settings
-        from app.utils.llm import parse_json_object, resolve_llm_model
-        from langchain_ollama import ChatOllama
+        from app.utils.llm import parse_json_object
+        from langchain_groq import ChatGroq
         from langchain_core.messages import SystemMessage, HumanMessage
 
-        model = (settings.TRANSLATION_MODEL or "").strip() or resolve_llm_model()
-        llm = ChatOllama(
-            model=model,
-            base_url=settings.OLLAMA_URL,
+        llm = ChatGroq(
+            model=settings.GROQ_CV_MODEL,
+            api_key=settings.GROQ_API_KEY,
             temperature=0.0,
-            disable_streaming=True,
         )
 
         response = llm.invoke(

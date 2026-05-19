@@ -99,7 +99,7 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - ollama-data:/root/.ollama      docker exec -it cv-postgres psql -U postgres -d cv_management
+      - ollama-data:/root/.ollama
     networks:
       - cv-network
  
