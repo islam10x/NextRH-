@@ -214,6 +214,10 @@ export class UsersService {
 
     async remove(id: string): Promise<void> {
         const user = await this.findById(id);
+        
+        // Remove the user's folder from file-storage
+        await this.removeUserBaseDir(user);
+        
         await this.usersRepository.remove(user);
         try {
             await this.ragService.deleteUserVectors(user.user_id);
@@ -292,6 +296,26 @@ export class UsersService {
         const baseDir = path.join(rootDir, this.buildSafeFolderName(fallbackName, user.user_id));
         await fs.mkdir(baseDir, { recursive: true });
         return baseDir;
+    }
+
+    private async removeUserBaseDir(user: User) {
+        const rootDir = this.getStorageRoot();
+        if (!existsSync(rootDir)) return;
+
+        const userIdShort = user.user_id.replace(/-/g, '').substring(0, 8);
+        const folders = await fs.readdir(rootDir);
+        
+        let folderToDelete = folders.find((folder) => folder.endsWith(`_${userIdShort}`));
+
+        if (folderToDelete) {
+            const fullPath = path.join(rootDir, folderToDelete);
+            try {
+                await fs.rm(fullPath, { recursive: true, force: true });
+                this.logger.log(`[Folder Deletion] Successfully deleted folder ${folderToDelete} for user ${user.user_id}`);
+            } catch (error) {
+                this.logger.warn(`[Folder Deletion] Failed to delete folder ${fullPath}: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        }
     }
 
     private resolveAvatarExtension(file: Express.Multer.File) {
