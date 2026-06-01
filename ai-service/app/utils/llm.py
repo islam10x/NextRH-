@@ -8,20 +8,23 @@ logger = logging.getLogger(__name__)
 
 
 def build_rag_chat_llm(temperature: float = 0.0, timeout: float | None = None):
-    """Build a LangChain chat model for RAG chatbot usage."""
-    from langchain_groq import ChatGroq
+    """Build a LangChain chat model for RAG chatbot usage.
 
-    model_name = settings.GROQ_RAG_MODEL
+    Uses the local Ollama instance with the model specified by RAG_CHAT_MODEL.
+    """
+    from langchain_ollama import ChatOllama
+
+    model_name = settings.RAG_CHAT_MODEL
     kwargs: Dict[str, Any] = {
         "model": model_name,
-        "api_key": settings.GROQ_API_KEY,
+        "base_url": settings.OLLAMA_URL,
         "temperature": temperature,
     }
     if timeout is not None:
         kwargs["timeout"] = timeout
 
-    llm = ChatGroq(**kwargs)
-    return llm, model_name, "groq"
+    llm = ChatOllama(**kwargs)
+    return llm, model_name, "ollama"
 
 
 def call_local_chat(

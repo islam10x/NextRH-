@@ -34,6 +34,7 @@ class CertificationOCR:
             'Red Hat', 'VMware', 'Salesforce', 'Adobe', 'IBM', 'SAP',
             'Barracuda', 'BarracudaCampus', 'Fortinet', 'Palo Alto', 'Check Point',
             'Rapid7', 'Nexpose', 'Qualys', 'Tenable', 'Splunk','Sophos','NVIDIA','Coursera',
+            'SolarWinds',
             "Microsoft","Amazon Web Services","AWS","Google Cloud","Google","Oracle","IBM",
             "SAP","Salesforce","Cisco","Juniper Networks","Huawei","Nokia","Ericsson",
             "F5 Networks","VMware","Red Hat","HashiCorp","Nutanix","Docker","Kubernetes",
@@ -166,8 +167,19 @@ class CertificationOCR:
                 # Trust the LLM for the name if it provided one, as it's better at understanding context than regex
                 llm_name = llm_data.get('name')
                 if llm_name and llm_name.lower() not in ["null", "none", "", "unknown"]:
-                    # Only allow LLM to override when the current name is missing/generic.
-                    if cert_data.get('name') in [None, "", "Unknown Certification"] or self._is_generic_cert_name(cert_data.get('name', "")):
+                    current_name = cert_data.get('name') or ""
+                    current_norm = re.sub(r"[^a-z0-9]+", " ", current_name.lower()).strip()
+                    llm_norm = re.sub(r"[^a-z0-9]+", " ", str(llm_name).lower()).strip()
+                    llm_is_more_specific = (
+                        current_norm
+                        and current_norm in llm_norm
+                        and len(llm_norm) > len(current_norm) + 8
+                    )
+                    if (
+                        current_name in [None, "", "Unknown Certification"]
+                        or self._is_low_confidence_cert_name(current_name, cert_data.get('issuer'))
+                        or llm_is_more_specific
+                    ):
                         if not self._is_generic_cert_name(llm_name):
                             cert_data['name'] = llm_name
                     
@@ -260,8 +272,9 @@ RAW TEXT:
 """
         try:
             # We configure a timeout so a bad prompt doesn't hang the worker
+            model_name = settings.GROQ_CV_MODEL
             llm = ChatGroq(
-                model=settings.GROQ_CV_MODEL,
+                model=model_name,
                 api_key=settings.GROQ_API_KEY,
                 temperature=0.0,
             )
@@ -615,7 +628,12 @@ RAW TEXT:
 
         issuer = cert_data.get('issuer') or ""
         issuer_in_name = bool(issuer) and (issuer.lower() in name_lower or name_lower in issuer.lower())
-        is_suspicious_name = len(name) > 80 or len(name) < 5 or issuer_in_name
+        is_suspicious_name = (
+            len(name) > 80
+            or len(name) < 5
+            or issuer_in_name
+            or self._is_low_confidence_cert_name(name, issuer)
+        )
 
         missing_issuer = not issuer
         missing_issue_date = not issue_date
@@ -659,11 +677,152 @@ RAW TEXT:
                 return True
             return any(token in line_lower for token in ["décret", "decret", "loi n", "loi n°", "fixant", "portant", "relative"])
 
+        def _clean_candidate(value: str) -> str:
+            value = self._clean_text(value)
+            value = re.sub(r"\s+\bto\b$", "", value, flags=re.IGNORECASE).strip()
+            value = re.sub(r"\s+", " ", value)
+            return re.sub(r"[,.]$", "", value).strip()
+
+        def _looks_like_person_name(line: str) -> bool:
+            words = [w for w in re.split(r"\s+", line.strip()) if w]
+            if not 2 <= len(words) <= 3:
+                return False
+            if any(re.search(r"\d|cert|course|credential|professional|engineer|speciali|cloud|storage|security|iso", w, re.IGNORECASE) for w in words):
+                return False
+            titled = sum(1 for w in words if w[:1].isupper() or w.isupper())
+            return titled == len(words)
+
+        signal_words = [
+            "academic", "administrator", "architect", "auditor", "automation", "blade",
+            "certified", "cloud", "course", "credential", "engineer", "foundation",
+            "implementer", "iso/iec", "management", "professional", "security",
+            "server", "solutions", "specialist", "specialization", "storage",
+            "technical", "vsan", "vsphere", "access", "omniswitch", "lan",
+        ]
+        stop_words = [
+            "---", "accredits that", "alternative ocr", "candidate id", "certificate id", "certification date",
+            "course completion date", "date of completion", "expires", "held at",
+            "in recognition", "valid for", "valid from", "valid through", "valid until",
+            "verification code", "verify at", "embedded text",
+        ]
+        program_noise = [
+            "dell emc partner program",
+            "dell partner course",
+            "completion certificate",
+            "learning and enablement",
+            "partner program",
+            "training institute",
+        ]
+
+        def _has_signal(line: str) -> bool:
+            lower = line.lower()
+            return bool(
+                any(word in lower for word in signal_words)
+                or re.search(r"^(?:se\s*:|iso/iec\b|[A-Z0-9]{6,}\s*-)", line, re.IGNORECASE)
+            )
+
+        def _is_program_noise(line: str) -> bool:
+            lower = line.lower()
+            return any(token in lower for token in program_noise)
+
+        def _valid_candidate(candidate: str) -> bool:
+            candidate = _clean_candidate(candidate)
+            if not 6 <= len(candidate) <= 150:
+                return False
+            if self._is_low_confidence_cert_name(candidate, issuer_hint):
+                return False
+            return _has_signal(candidate) or bool(re.search(r"\d", candidate))
+
         # 0. Priority: <CODE> - <CERTIFICATION TITLE>
         #   Example: WAF200 - Barracuda Web Application Firewall Certified Product Specialist
         # Prefer line-based matching to avoid grabbing date ranges or signatures.
         lines = [self._clean_text(line) for line in text.splitlines() if line.strip()]
         issuer_hint = self._extract_issuer(text) or ""
+
+        if re.search(r"solar\s*v?winds?", text, re.IGNORECASE) and re.search(
+            r"certified\s+professional",
+            text,
+            re.IGNORECASE,
+        ):
+            return "SolarWinds Certified Professional"
+
+        for idx, line in enumerate(lines):
+            lower = line.lower()
+            if not line or any(token in lower for token in stop_words):
+                continue
+
+            code_line = re.match(r"^([A-Z0-9]{6,})\s*-\s*(.{6,120})$", line)
+            if code_line and not re.search(r"\b(?:id|verification|candidate|certificate)\b", lower):
+                candidate = _clean_candidate(line)
+                if _valid_candidate(candidate):
+                    return candidate
+
+            if re.match(r"^SE\s*:\s*.+Credential\s+\d{4}$", line, re.IGNORECASE):
+                candidate = _clean_candidate(line)
+                if _valid_candidate(candidate):
+                    return candidate
+
+            if re.match(r"^ISO/IEC\s+\d+.+", line, re.IGNORECASE):
+                candidate = _clean_candidate(line)
+                if _valid_candidate(candidate):
+                    return candidate
+
+            if (
+                issuer_hint
+                and issuer_hint.lower() in lower
+                and len(line.split()) <= 4
+                and idx + 1 < len(lines)
+            ):
+                next_line = _clean_candidate(lines[idx + 1])
+                if re.search(r"certified\s+professional", next_line, re.IGNORECASE):
+                    return f"{issuer_hint} Certified Professional"
+
+            context_markers = [
+                "award the title of",
+                "the title of",
+                "has successfully completed the certification course",
+                "has successfully completed the",
+                "has attended the training course",
+                "is certified",
+                "recognized as a",
+                "recognized as",
+            ]
+            if not any(marker in lower for marker in context_markers):
+                continue
+
+            collected = []
+            for nxt in lines[idx + 1: idx + 6]:
+                candidate_line = _clean_candidate(nxt)
+                candidate_lower = candidate_line.lower()
+                if not candidate_line or candidate_lower == "to":
+                    continue
+                if any(token in candidate_lower for token in stop_words):
+                    break
+                if re.search(
+                    r"\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\b.+\b\d{4}\b",
+                    candidate_lower,
+                ):
+                    break
+                if _looks_like_person_name(candidate_line) and collected:
+                    break
+                if _is_program_noise(candidate_line):
+                    continue
+                if self._is_low_confidence_cert_name(candidate_line, issuer_hint):
+                    continue
+                if not _has_signal(candidate_line) and not re.search(r"\d", candidate_line):
+                    if collected:
+                        break
+                    continue
+                collected.append(candidate_line)
+                if re.search(r"^(?:SE\s*:|ISO/IEC\b|[A-Z0-9]{6,}\s*-)", candidate_line, re.IGNORECASE):
+                    break
+                if len(collected) >= 2:
+                    break
+
+            candidate = _clean_candidate(" ".join(collected))
+            if _valid_candidate(candidate):
+                return candidate
+
         if issuer_hint:
             issuer_lower = issuer_hint.lower()
             issuer_candidates = []
@@ -764,7 +923,9 @@ RAW TEXT:
                 continue
             dash_line = re.match(r'^([A-Z]{2,}\d{1,6}|[A-Z0-9]{3,})\s*-\s*(.+)$', line)
             if dash_line:
-                candidate = dash_line.group(2).strip()
+                if re.search(r"\b(?:id|verification|candidate|certificate)\b", lower):
+                    continue
+                candidate = line.strip()
                 candidate = re.sub(r'\s+', ' ', candidate)
                 candidate = re.sub(r'[.,]$', '', candidate).strip()
                 if len(candidate) >= 10 and not self._is_generic_cert_name(candidate):
@@ -948,6 +1109,49 @@ RAW TEXT:
             "has successfully completed",
         ]
         return any(phrase in lower for phrase in generic_phrases)
+
+    def _is_low_confidence_cert_name(self, name: str, issuer: Optional[str] = None) -> bool:
+        """Detect extracted labels that are likely document boilerplate, IDs, or signer roles."""
+        if self._is_generic_cert_name(name):
+            return True
+
+        lower = self._clean_text(str(name)).lower()
+        if not lower:
+            return True
+
+        exact_noise = {
+            "recognizes",
+            "attendance record",
+            "professional",
+            "certified trainer",
+            "veeam certified trainer",
+        }
+        if lower in exact_noise:
+            return True
+
+        noisy_fragments = [
+            "continuing professional development",
+            "certification requirements",
+            "certificate requirements",
+            "candidate id",
+            "certificate id",
+            "credential id",
+            "verification code",
+            "valid through",
+            "vmwarevsp",
+            "sales professional (vsp) group",
+        ]
+        if any(fragment in lower for fragment in noisy_fragments):
+            return True
+
+        if re.search(r"\b(?:ftid|id)\s*[©:@#-]", lower):
+            return True
+
+        issuer_lower = (issuer or "").strip().lower()
+        if issuer_lower and issuer_lower in lower and any(role in lower for role in ["trainer", "ceo", "president"]):
+            return True
+
+        return False
 
     def _select_embedded_cert_name(
         self,
