@@ -12,6 +12,12 @@ jobs:
     defaults:
       run:
         working-directory: ./frontend
+    env:
+      DB_NAME: testdb
+      DB_PASSWORD: testpassword   
+      DB_USER: testuser                
+      DATABASE_URL: postgresql://testuser:testpassword@localhost:5432/testdb  
+      NODE_ENV: test   
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -40,6 +46,12 @@ jobs:
     defaults:
       run:
         working-directory: ./backend
+    env:
+      DB_NAME: testdb
+      DB_PASSWORD: testpassword   
+      DB_USER: testuser                
+      DATABASE_URL: postgresql://testuser:testpassword@localhost:5432/testdb  
+      NODE_ENV: test   
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -68,6 +80,12 @@ jobs:
     defaults:
       run:
         working-directory: ./ai-service
+    env:
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USER: testuser
+      DB_PASSWORD: testpassword
+      DB_NAME: testdb  
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
