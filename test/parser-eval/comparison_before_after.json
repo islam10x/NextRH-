@@ -1,0 +1,82 @@
+{
+  "total_cvs": 20,
+  "metrics_delta_percent": {
+    "full_name": {
+      "before": 65.0,
+      "after": 95.0,
+      "delta": 30.0
+    },
+    "email": {
+      "before": 100.0,
+      "after": 100.0,
+      "delta": 0.0
+    },
+    "phone": {
+      "before": 70.0,
+      "after": 100.0,
+      "delta": 30.0
+    },
+    "work_experience": {
+      "before": 95.0,
+      "after": 100.0,
+      "delta": 5.0
+    },
+    "education": {
+      "before": 95.0,
+      "after": 95.0,
+      "delta": 0.0
+    },
+    "skills": {
+      "before": 0.0,
+      "after": 0.0,
+      "delta": 0.0
+    },
+    "certifications": {
+      "before": 80.0,
+      "after": 95.0,
+      "delta": 15.0
+    }
+  },
+  "mismatch_count_delta": {
+    "full_name": {
+      "before": 6,
+      "after": 1,
+      "delta": -5
+    },
+    "email": {
+      "before": 0,
+      "after": 0,
+      "delta": 0
+    },
+    "phone": {
+      "before": 6,
+      "after": 0,
+      "delta": -6
+    },
+    "work_experience": {
+      "before": 0,
+      "after": 0,
+      "delta": 0
+    },
+    "education": {
+      "before": 1,
+      "after": 1,
+      "delta": 0
+    },
+    "skills": {
+      "before": 20,
+      "after": 20,
+      "delta": 0
+    },
+    "certifications": {
+      "before": 3,
+      "after": 0,
+      "delta": -3
+    }
+  },
+  "cvs_with_any_mismatch": {
+    "before": 20,
+    "after": 20,
+    "delta": 0
+  }
+}

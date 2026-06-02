@@ -1,0 +1,155 @@
+[
+  {
+    "file": "CV + DIP + CERTIF sabrine-4.pdf",
+    "certification_name": "NSE 1 Network Security Associate",
+    "issuer": "Fortinet",
+    "issuer_aliases": [
+      "Fortinet Training Institute",
+      "NSE Institute"
+    ]
+  },
+  {
+    "file": "CV + DIP + CERTIF sabrine-5.pdf",
+    "certification_name": "NSE 2 Network Security Associate",
+    "issuer": "Fortinet",
+    "issuer_aliases": [
+      "Fortinet Training Institute",
+      "NSE Institute"
+    ]
+  },
+  {
+    "file": "CV + DIP + CERTIF sabrine-6.pdf",
+    "certification_name": "NSE 3 Network Security Associate",
+    "issuer": "Fortinet",
+    "issuer_aliases": [
+      "Fortinet Training Institute",
+      "NSE Institute"
+    ]
+  },
+  {
+    "file": "CV + DIP + CERTIF sabrine-7.pdf",
+    "certification_name": "NSE 4 Network Security Professional",
+    "issuer": "Fortinet",
+    "issuer_aliases": [
+      "Fortinet Training Institute",
+      "NSE Institute"
+    ]
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-10.pdf",
+    "certification_name": "Final Exam Success - XDR Analyst",
+    "issuer": "Secureworks"
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-11.pdf",
+    "certification_name": "Palo Alto Networks Certified Network Security Engineer",
+    "certification_name_aliases": [
+      "PCNSE",
+      "as a Palo Alto Networks Certified Network: Sectirity-E Engine Bere NS ee ESS SESE"
+    ],
+    "issuer": "Palo Alto Networks",
+    "issuer_aliases": [
+      "Palo Alto"
+    ]
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-12.pdf",
+    "certification_name": "Nexpose Certified Administrator",
+    "issuer": "Rapid7"
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-13.pdf",
+    "certification_name": "Advanced Vulnerability Manager",
+    "issuer": "Rapid7"
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-14.pdf",
+    "certification_name": "Sophos Certified Engineer",
+    "issuer": "Sophos"
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-4.pdf",
+    "certification_name": "NSE 1 Network Security Associate",
+    "issuer": "Fortinet",
+    "issuer_aliases": [
+      "Fortinet Training Institute",
+      "NSE Institute"
+    ]
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-5.pdf",
+    "certification_name": "NSE 2 Network Security Associate",
+    "issuer": "Fortinet",
+    "issuer_aliases": [
+      "Fortinet Training Institute",
+      "NSE Institute"
+    ]
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-6.pdf",
+    "certification_name": "NSE 3 Network Security Associate",
+    "issuer": "Fortinet",
+    "issuer_aliases": [
+      "Fortinet Training Institute",
+      "NSE Institute"
+    ]
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-7.pdf",
+    "certification_name": "NSE 4 Network Security Professional",
+    "issuer": "Fortinet",
+    "issuer_aliases": [
+      "Fortinet Training Institute",
+      "NSE Institute"
+    ]
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-8.pdf",
+    "certification_name": "NSE 7 Network Security Architect",
+    "issuer": "Fortinet",
+    "issuer_aliases": [
+      "Fortinet Training Institute",
+      "NSE Institute"
+    ]
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-9.pdf",
+    "certification_name": "ADC200 - Barracuda Load Balancer ADC Certified Product Specialist",
+    "certification_name_aliases": [
+      "Barracuda Load Balancer ADC Certified Product Specialist"
+    ],
+    "issuer": "Barracuda",
+    "issuer_aliases": [
+      "BarracudaCampus"
+    ]
+  },
+  {
+    "file": "CV+ Diplome +Certificats  Mohamed Yferni SOPHOS-5.pdf",
+    "certification_name": "ET01 - Sophos Central Overview - Engineer",
+    "certification_name_aliases": [
+      "ETO1 - Sophes Central Overview - Engineer Feb 05, 2020 1.75 content hours"
+    ],
+    "issuer": "Sophos"
+  },
+  {
+    "file": "CV+ Diplome +Certificats  Mohamed Yferni SOPHOS-6.pdf",
+    "certification_name": "ET80 - XG Firewall v17.5 - Engineer",
+    "issuer": "Sophos"
+  },
+  {
+    "file": "CV+ Diplome +Certificats  Mohamed Yferni SOPHOS-7.pdf",
+    "certification_name": "ET80 - Sophos Firewall v18.5 - Engineer",
+    "certification_name_aliases": [
+      "ET80 - Sophos Firewall v18.5 - Engineer Feb 23, 2022 8.75 Gontent hours"
+    ],
+    "issuer": "Sophos"
+  },
+  {
+    "file": "CV+ Diplome +Certificats  Mohamed Yferni SOPHOS-8.pdf",
+    "certification_name": "Sophos Central Endpoint Protection Certified Engineer v5.0 (ET1 5)",
+    "certification_name_aliases": [
+      "Sophos Central Endpoint Protection Certified (ET1 5) Engineer v5.0"
+    ],
+    "issuer": "Sophos"
+  }
+]

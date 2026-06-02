@@ -1,0 +1,523 @@
+{
+  "total_cvs": 20,
+  "cvs_with_any_mismatch": 20,
+  "summary_mismatch_counts": {
+    "full_name": 6,
+    "email": 0,
+    "phone": 6,
+    "work_experience": 0,
+    "education": 1,
+    "skills": 20,
+    "certifications": 3
+  },
+  "details": [
+    {
+      "cv_file": "Bou_Amor_Hanine_CV (1).docx",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "aws",
+            "cloud",
+            "linux"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV  HKIMI Yesser 2024 MAJ.pdf",
+      "mismatch_count": 3,
+      "mismatches": [
+        {
+          "field": "phone",
+          "reason": "exact mismatch",
+          "gt": "98 772 871",
+          "parsed": ""
+        },
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "fortinet",
+            "réseaux",
+            "sécurité"
+          ],
+          "extra_in_parsed": []
+        },
+        {
+          "field": "certifications",
+          "reason": "no overlapping entry",
+          "gt": [
+            "Gatewatcher Certified Security Analyst",
+            "Gatewatcher Certified Security Expert",
+            "Gatewatcher Certified Security Professional",
+            "ET15- Sophos Central Endpoint and Server v2.0 ? Engineer",
+            "Sophos Certified Engineer",
+            "Sophos Certified Architect",
+            "... (+8 more)"
+          ],
+          "parsed": [
+            "Gatewatcher Certified Security Analyst 30/ Gatewatcher Certified Security Expert 30/ Gatewatcher Certified Security Professional 30/",
+            "ET15- Sophos Central Endpoint and Server v2.0 – Engineer 23/ Sophos Certified Engineer 23/",
+            "Sophos Certified Architect 02/"
+          ]
+        }
+      ]
+    },
+    {
+      "cv_file": "CV Firas Toumi 2025.pdf",
+      "mismatch_count": 4,
+      "mismatches": [
+        {
+          "field": "phone",
+          "reason": "exact mismatch",
+          "gt": "98 772 829",
+          "parsed": "+971 98 772 829"
+        },
+        {
+          "field": "education",
+          "reason": "no overlapping entry",
+          "gt": [
+            "Technicien sup?rieur en infrastructure et r?seaux d?acc?s. - CSFTK"
+          ],
+          "parsed": [
+            "Technicien supérieur en infrastructure et réseaux d’accès. Technicien supérieur en infrastructure et - CSFTK"
+          ]
+        },
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "communications unifi?es",
+            "it",
+            "r?seaux"
+          ],
+          "extra_in_parsed": []
+        },
+        {
+          "field": "certifications",
+          "reason": "no overlapping entry",
+          "gt": [
+            "XG firewall v17.5 - Engineer",
+            "Fortinet NSE1",
+            "Fortinet NSE2",
+            "3cx Basic Certified Engineer v16"
+          ],
+          "parsed": [
+            "XG firewall v17.5 - Engineer Janvier",
+            "Fortinet NSE1 Novembre 9",
+            "Fortinet NSE2 Novembre 9",
+            "3cx Basic Certified Engineer v16 Janvier"
+          ]
+        }
+      ]
+    },
+    {
+      "cv_file": "CV mohamed Yacoub.docx",
+      "mismatch_count": 2,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "réseaux",
+            "support it",
+            "sécurité"
+          ],
+          "extra_in_parsed": []
+        },
+        {
+          "field": "certifications",
+          "reason": "no overlapping entry",
+          "gt": [
+            "Cisco Certified Network Academy \"CCNA\""
+          ],
+          "parsed": [
+            "Date d’obtention"
+          ]
+        }
+      ]
+    },
+    {
+      "cv_file": "CV Mouna Belghith.docx",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "cloud",
+            "réseaux",
+            "sécurité"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV Ridha ESSADEK-Avril 2019.docx",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "collaboration",
+            "support",
+            "télécommunication"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV Sabrine ZOUABI.docx",
+      "mismatch_count": 2,
+      "mismatches": [
+        {
+          "field": "full_name",
+          "reason": "same tokens, reversed/reshuffled order",
+          "gt": "Sabrine ZOUABI",
+          "parsed": "ZOUABI sabrine"
+        },
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "it",
+            "réseaux",
+            "sécurité"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV Safa BAIDI.docx",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "cloud",
+            "réseaux",
+            "télécom"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV salah meddeb.DOCX",
+      "mismatch_count": 2,
+      "mismatches": [
+        {
+          "field": "full_name",
+          "reason": "same tokens, reversed/reshuffled order",
+          "gt": "Med Salah Meddeb",
+          "parsed": "Meddeb Med Salah"
+        },
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "it consulting",
+            "réseaux",
+            "support"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV Seif Eddine Ben Haddada 2025.docx",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "cloud",
+            "linux",
+            "systèmes"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV SEIF IMAMI VF-1-3.pdf",
+      "mismatch_count": 3,
+      "mismatches": [
+        {
+          "field": "full_name",
+          "reason": "same tokens, reversed/reshuffled order",
+          "gt": "Seif IMAMI",
+          "parsed": "IMAMI SEIF"
+        },
+        {
+          "field": "phone",
+          "reason": "exact mismatch",
+          "gt": "98 772 856",
+          "parsed": "+97152486300"
+        },
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "dell emc",
+            "infrastructure it",
+            "storage"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV Tarek KILANI _ Next Step.docx",
+      "mismatch_count": 2,
+      "mismatches": [
+        {
+          "field": "phone",
+          "reason": "exact mismatch",
+          "gt": "70 258 200",
+          "parsed": "+70258200"
+        },
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "incident response",
+            "soc",
+            "sécurité"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV Wael Moughi 2018.docx",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "it",
+            "réseaux",
+            "sécurité"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV-wiemhajjaji.DOCX",
+      "mismatch_count": 3,
+      "mismatches": [
+        {
+          "field": "full_name",
+          "reason": "same tokens, reversed/reshuffled order",
+          "gt": "Wiem HAJJAJJI",
+          "parsed": "HAJJAJJI WIEM"
+        },
+        {
+          "field": "phone",
+          "reason": "exact mismatch",
+          "gt": "98129927",
+          "parsed": "+98129927"
+        },
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 1,
+          "overlap": [],
+          "missing_from_parsed": [
+            "it",
+            "réseaux",
+            "security"
+          ],
+          "extra_in_parsed": [
+            "security consultant"
+          ]
+        }
+      ]
+    },
+    {
+      "cv_file": "CV-yasmine-HAMOUDA.DOCX",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "cybersécurité",
+            "it",
+            "soc"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV-Yassine-Bennour.pdf",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "lan/wlan",
+            "réseaux",
+            "sécurité"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV_rayhanegouissem_NS2024vrf.DOCX",
+      "mismatch_count": 2,
+      "mismatches": [
+        {
+          "field": "phone",
+          "reason": "exact mismatch",
+          "gt": "98 129 925",
+          "parsed": "+97148129925"
+        },
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "it",
+            "réseaux",
+            "sécurité"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "NS_CV_RaniaBouneb 2024.pdf",
+      "mismatch_count": 2,
+      "mismatches": [
+        {
+          "field": "full_name",
+          "reason": "same tokens, reversed/reshuffled order",
+          "gt": "Rania BOUNEB",
+          "parsed": "BOUNEB RANIA"
+        },
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "azure",
+            "systèmes",
+            "virtualisation"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "Refka_BABOURI_CV.DOCX",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "cybersécurité",
+            "siem",
+            "soc"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "WassimOmrani.DOCX",
+      "mismatch_count": 2,
+      "mismatches": [
+        {
+          "field": "full_name",
+          "reason": "same tokens, reversed/reshuffled order",
+          "gt": "Wassim Omrani",
+          "parsed": "Omrani Wassim"
+        },
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "cloud",
+            "kubernetes",
+            "linux"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    }
+  ]
+}

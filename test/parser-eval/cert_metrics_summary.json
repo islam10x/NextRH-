@@ -1,0 +1,27 @@
+{
+  "sample_size": 19,
+  "ocr_engine": "",
+  "execution_mode": "endpoint",
+  "api_url": "http://127.0.0.1:8000/api/v1/parsing/certification",
+  "llm_fallback_enabled": "server_default",
+  "files_evaluated_this_run": 19,
+  "merged_existing_results": false,
+  "metrics_percent": {
+    "certification_name": 100.0,
+    "issuer": 100.0,
+    "both_fields": 100.0
+  },
+  "counters": {
+    "certification_name": 19,
+    "issuer": 19,
+    "both_fields": 19
+  },
+  "latency_seconds": {
+    "total": 361.745,
+    "average": 19.039
+  },
+  "notes": [
+    "Ground truth covers one-page certificate PDFs listed in cert_ground_truth.json.",
+    "The two 24-page CV/diploma/certificate bundle PDFs are excluded because the certification parser expects a single certificate document."
+  ]
+}

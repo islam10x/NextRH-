@@ -1,0 +1,21 @@
+{
+  "sample_size": 20,
+  "metrics_percent": {
+    "full_name": 65.0,
+    "email": 100.0,
+    "phone": 70.0,
+    "work_experience": 95.0,
+    "education": 95.0,
+    "skills": 0.0,
+    "certifications": 80.0
+  },
+  "counters": {
+    "full_name": 13.0,
+    "email": 20.0,
+    "phone": 14.0,
+    "work_experience": 19.0,
+    "education": 19.0,
+    "skills": 0.0,
+    "certifications": 16.0
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "sample_size_queries": 10,
+  "execution_mode": "endpoint",
+  "api_url": "http://127.0.0.1:8000/api/v1/rag/chat",
+  "metrics": {
+    "retrieval_precision_at_5": 82.1,
+    "answer_groundedness": 84.2,
+    "off_topic_rejection_accuracy": 100.0
+  },
+  "target_metrics": {
+    "retrieval_precision_at_5": 87.0,
+    "answer_groundedness": 91.0,
+    "off_topic_rejection_accuracy": 100.0
+  },
+  "detailed_results": {
+    "precision_groundedness_tests": [
+      {
+        "query": "what certifications does Yasser Ben Ammar have?",
+        "answer": "Yasser Ben Ammar has the following certifications:\n\n- HCIA-AI (Huawei)\n- PCAP (Python)\n- RHCSA (Linux)\n- Fortinet Certified Associate (FCA) Azure-900\n- XDR administrator\n\nThese certifications are mentioned in his CV and work experience.",
+        "context_count": 23,
+        "precision_score": 100.0,
+        "groundedness_score": 94.1
+      },
+      {
+        "query": "what education does Aya BEN JEMAA have?",
+        "answer": "Aya BEN JEMAA has a **Diplôme National d’Ingénieur en Sciences Appliquées et en Technologie Spécialité : Réseaux informatiques et télécommunications** from the **Institut National des Sciences Appliquées et de Technologie « INSAT », Tunis**.",
+        "context_count": 22,
+        "precision_score": 100.0,
+        "groundedness_score": 100.0
+      },
+      {
+        "query": "what projects did Anouar ABDALLAH work on?",
+        "answer": "Anouar ABDALLAH worked on the following projects:\n\n1. Smart City Infrastructure\n2. Eco-Friendly Energy Solutions",
+        "context_count": 42,
+        "precision_score": 100.0,
+        "groundedness_score": 50.0
+      },
+      {
+        "query": "who has a Red Hat or RHCSA certification?",
+        "answer": "Ahmed Khalil Abidi has a Red Hat Certified Associate (RHCSA) certification. Specifically, he holds the following certifications:\n\n- **Red Hat Certified Associate (FCA) Azure-900**\n- **Red Hat Certified Associate (FCA) Azure-900**\n\nThese certifications indicate that Ahmed Khalil Abidi is proficient in using Red Hat technologies and solutions related to Azure.",
+        "context_count": 23,
+        "precision_score": 39.130434782608695,
+        "groundedness_score": 76.9
+      },
+      {
+        "query": "who is a SOC Manager?",
+        "answer": "**Amal KHALFAOUI**",
+        "context_count": 21,
+        "precision_score": 71.42857142857143,
+        "groundedness_score": 100.0
+      }
+    ],
+    "rejection_tests": [
+      {
+        "query": "what is the capital of France?",
+        "answer": "I don't have that information.",
+        "rejected_correctly": true
+      },
+      {
+        "query": "write a quicksort function in python",
+        "answer": "I don't have that information.",
+        "rejected_correctly": true
+      },
+      {
+        "query": "how to bake a chocolate cake?",
+        "answer": "I don't have that information.",
+        "rejected_correctly": true
+      },
+      {
+        "query": "what is the weather like in Tunis today?",
+        "answer": "I don't have that information.",
+        "rejected_correctly": true
+      },
+      {
+        "query": "who won the last football world cup?",
+        "answer": "I don't have that information.",
+        "rejected_correctly": true
+      }
+    ]
+  }
+}
