@@ -425,7 +425,13 @@ const AIChatPage: React.FC = () => {
         </CardContent>
         <div className="p-4 border-t">
           <form onSubmit={(e) => { e.preventDefault(); handleSend(input); }} className="flex gap-2">
-            <Input placeholder="Ask about employees..." value={input} onChange={(e) => setInput(e.target.value)} disabled={isLoading} />
+            <Input
+              placeholder="Ask about employees..."
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              disabled={isLoading}
+              maxLength={2000}
+            />
             {isLoading ? (
               <Button type="button" variant="destructive" onClick={handleCancel}>
                 <Square className="h-4 w-4" />
@@ -437,6 +443,14 @@ const AIChatPage: React.FC = () => {
               </Button>
             )}
           </form>
+          {input.length > 1800 && (
+            <p className={cn(
+              "text-xs mt-1 text-right",
+              input.length >= 2000 ? "text-destructive font-medium" : "text-muted-foreground"
+            )}>
+              {input.length} / 2000
+            </p>
+          )}
         </div>
       </Card>
     </div>

@@ -1,10 +1,10 @@
 import { MigrationInterface, QueryRunner } from "typeorm";
 
 export class AddScoringNotificationTypes1772460000000 implements MigrationInterface {
-    name = 'AddScoringNotificationTypes1772460000000'
+  name = "AddScoringNotificationTypes1772460000000";
 
-    public async up(queryRunner: QueryRunner): Promise<void> {
-        await queryRunner.query(`
+  public async up(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`
             DO $$
             BEGIN
                 IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'notification_type') THEN
@@ -27,9 +27,9 @@ export class AddScoringNotificationTypes1772460000000 implements MigrationInterf
                 END IF;
             END$$;
         `);
-    }
+  }
 
-    public async down(queryRunner: QueryRunner): Promise<void> {
-        // No safe down migration for enum value removal.
-    }
+  public async down(queryRunner: QueryRunner): Promise<void> {
+    // No safe down migration for enum value removal.
+  }
 }

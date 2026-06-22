@@ -1,10 +1,10 @@
-import { MigrationInterface, QueryRunner } from 'typeorm';
+import { MigrationInterface, QueryRunner } from "typeorm";
 
 export class AddTemplateHistoryFields1776700000000 implements MigrationInterface {
-    name = 'AddTemplateHistoryFields1776700000000';
+  name = "AddTemplateHistoryFields1776700000000";
 
-    public async up(queryRunner: QueryRunner): Promise<void> {
-        await queryRunner.query(`
+  public async up(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`
             ALTER TABLE "cv_templates"
             ADD COLUMN IF NOT EXISTS "uploaded_by" UUID NULL,
             ADD COLUMN IF NOT EXISTS "last_used_at" TIMESTAMP NULL,
@@ -12,7 +12,7 @@ export class AddTemplateHistoryFields1776700000000 implements MigrationInterface
             ADD COLUMN IF NOT EXISTS "file_hash" CHAR(64) NULL
         `);
 
-        await queryRunner.query(`
+    await queryRunner.query(`
             DO $$
             BEGIN
                 IF NOT EXISTS (
@@ -26,21 +26,21 @@ export class AddTemplateHistoryFields1776700000000 implements MigrationInterface
             END $$
         `);
 
-        // Per-user dedup index: each bid manager can only have one row per
-        // (uploaded_by, file_hash) pair so the same template uploaded twice
-        // bumps usage instead of duplicating storage.
-        await queryRunner.query(`
+    // Per-user dedup index: each bid manager can only have one row per
+    // (uploaded_by, file_hash) pair so the same template uploaded twice
+    // bumps usage instead of duplicating storage.
+    await queryRunner.query(`
             CREATE UNIQUE INDEX IF NOT EXISTS "ux_cv_templates_uploader_hash"
             ON "cv_templates" ("uploaded_by", "file_hash")
             WHERE "file_hash" IS NOT NULL AND "uploaded_by" IS NOT NULL
         `);
-    }
+  }
 
-    public async down(queryRunner: QueryRunner): Promise<void> {
-        await queryRunner.query(`
+  public async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`
             DROP INDEX IF EXISTS "ux_cv_templates_uploader_hash"
         `);
-        await queryRunner.query(`
+    await queryRunner.query(`
             ALTER TABLE "cv_templates"
             DROP CONSTRAINT IF EXISTS "fk_cv_templates_uploaded_by",
             DROP COLUMN IF EXISTS "file_hash",
@@ -48,5 +48,5 @@ export class AddTemplateHistoryFields1776700000000 implements MigrationInterface
             DROP COLUMN IF EXISTS "last_used_at",
             DROP COLUMN IF EXISTS "uploaded_by"
         `);
-    }
+  }
 }

@@ -1,4 +1,10 @@
-import { IsBoolean, IsOptional, IsString, IsUUID, ValidateIf } from 'class-validator';
+import {
+  IsBoolean,
+  IsOptional,
+  IsString,
+  IsUUID,
+  ValidateIf,
+} from "class-validator";
 
 export class RespondCrossTeamRequestDto {
   @IsBoolean()

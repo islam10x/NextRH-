@@ -12,14 +12,14 @@ import {
   UseInterceptors,
   UploadedFile,
   ParseIntPipe,
-} from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
-import { UserRole } from '../users/entities/user.entity';
-import { ScoringService } from './scoring.service';
-import { TeamsService } from '../teams/teams.service';
+} from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
+import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { RolesGuard } from "../auth/guards/roles.guard";
+import { Roles } from "../auth/decorators/roles.decorator";
+import { UserRole } from "../users/entities/user.entity";
+import { ScoringService } from "./scoring.service";
+import { TeamsService } from "../teams/teams.service";
 import {
   UploadPvDto,
   UploadTrainingSheetDto,
@@ -30,9 +30,9 @@ import {
   ScoreExternalEvaluationDto,
   ScoreInternalEvaluationDto,
   ScoreInternalProjectDto,
-} from './dto/scoring.dto';
+} from "./dto/scoring.dto";
 
-@Controller('scoring')
+@Controller("scoring")
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class ScoringController {
   constructor(
@@ -42,21 +42,18 @@ export class ScoringController {
 
   // ── PV Preview (parse only, no save) ──────────────────────────────
 
-  @Post('preview-pv')
+  @Post("preview-pv")
   @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
-  @UseInterceptors(FileInterceptor('file'))
-  async previewPv(
-    @UploadedFile() file: Express.Multer.File,
-    @Req() req: any,
-  ) {
+  @UseInterceptors(FileInterceptor("file"))
+  async previewPv(@UploadedFile() file: Express.Multer.File, @Req() req: any) {
     return this.scoringService.previewPv(file, req.user.id);
   }
 
   // ── PV Upload (Team Manager uploads for an employee) ───────────────
 
-  @Post('upload-pv')
+  @Post("upload-pv")
   @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor("file"))
   async uploadPv(
     @UploadedFile() file: Express.Multer.File,
     @Body() dto: UploadPvDto,
@@ -69,11 +66,17 @@ export class ScoringController {
         : [];
 
     if (targetProfileIds.length === 0) {
-      throw new BadRequestException('Veuillez sélectionner au moins un employé');
+      throw new BadRequestException(
+        "Veuillez sélectionner au moins un employé",
+      );
     }
 
     let parsedProfileEvaluations:
-      | Array<{ profileId: string; score?: number; contributionDescription?: string }>
+      | Array<{
+          profileId: string;
+          score?: number;
+          contributionDescription?: string;
+        }>
       | undefined;
     if (dto.profileEvaluations) {
       try {
@@ -95,22 +98,19 @@ export class ScoringController {
 
   // ── Training Sheet Upload (Employee uploads for themselves) ───────────
 
-  @Post('upload-training-sheet')
+  @Post("upload-training-sheet")
   @Roles(UserRole.EMPLOYEE, UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor("file"))
   async uploadTrainingSheet(
     @UploadedFile() file: Express.Multer.File,
     @Req() req: any,
   ) {
-    return this.scoringService.uploadTrainingSheet(
-      file,
-      req.user.id,
-    );
+    return this.scoringService.uploadTrainingSheet(file, req.user.id);
   }
 
   // ── Targets ───────────────────────────────────────────────────────────
 
-  @Post('targets')
+  @Post("targets")
   @Roles(UserRole.TEAM_MANAGER)
   async setTargets(@Body() dto: SetTargetsDto, @Req() req: any) {
     return this.scoringService.setTargets(
@@ -121,11 +121,11 @@ export class ScoringController {
     );
   }
 
-  @Get('targets/:profileId/:year')
+  @Get("targets/:profileId/:year")
   @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER, UserRole.EMPLOYEE)
   async getTargets(
-    @Param('profileId') profileId: string,
-    @Param('year', ParseIntPipe) year: number,
+    @Param("profileId") profileId: string,
+    @Param("year", ParseIntPipe) year: number,
   ) {
     return this.scoringService.getTargets(profileId, year);
   }
@@ -134,26 +134,26 @@ export class ScoringController {
 
   // ── Score Computation ─────────────────────────────────────────────────
 
-  @Post('compute')
+  @Post("compute")
   @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER, UserRole.EMPLOYEE)
   async computeScore(@Body() dto: ComputeScoreDto, @Req() req: any) {
     // If the requester is an employee, ensure they can only compute their own score
-    if (req.user.role === UserRole.EMPLOYEE && req.user.profileId !== dto.profileId) {
+    if (
+      req.user.role === UserRole.EMPLOYEE &&
+      req.user.profileId !== dto.profileId
+    ) {
       // Allow if they request their own score (profileId checking will be done here or they just pass their own)
     }
     return this.scoringService.computeScore(dto.profileId, dto.year);
   }
 
-  @Post('compute-team')
+  @Post("compute-team")
   @Roles(UserRole.TEAM_MANAGER)
-  async computeTeamScores(
-    @Body() dto: ComputeTeamScoresDto,
-    @Req() req: any,
-  ) {
+  async computeTeamScores(@Body() dto: ComputeTeamScoresDto, @Req() req: any) {
     return this.scoringService.computeTeamScores(req.user.id, dto.year);
   }
 
-  @Post('compute-all')
+  @Post("compute-all")
   @Roles(UserRole.BID_MANAGER)
   async computeAllScores(@Body() dto: ComputeTeamScoresDto) {
     return this.scoringService.computeAllScores(dto.year);
@@ -161,93 +161,105 @@ export class ScoringController {
 
   // ── Data Access ───────────────────────────────────────────────────────
 
-  @Get('score/:profileId/:year')
+  @Get("score/:profileId/:year")
   @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER, UserRole.EMPLOYEE)
   async getScore(
-    @Param('profileId') profileId: string,
-    @Param('year', ParseIntPipe) year: number,
+    @Param("profileId") profileId: string,
+    @Param("year", ParseIntPipe) year: number,
   ) {
     return this.scoringService.getEmployeeScore(profileId, year);
   }
 
-  @Get('history/:profileId')
+  @Get("history/:profileId")
   @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER, UserRole.EMPLOYEE)
-  async getScoreHistory(@Param('profileId') profileId: string) {
+  async getScoreHistory(@Param("profileId") profileId: string) {
     return this.scoringService.getScoreHistory(profileId);
   }
 
-  @Get('project-records/:profileId')
+  @Get("project-records/:profileId")
   @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER, UserRole.EMPLOYEE)
-  async getProjectRecords(@Param('profileId') profileId: string) {
+  async getProjectRecords(@Param("profileId") profileId: string) {
     return this.scoringService.getProjectRecords(profileId);
   }
 
-  @Get('training-records/:profileId')
+  @Get("training-records/:profileId")
   @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER, UserRole.EMPLOYEE)
-  async getTrainingRecords(@Param('profileId') profileId: string) {
+  async getTrainingRecords(@Param("profileId") profileId: string) {
     return this.scoringService.getTrainingRecords(profileId);
   }
 
-  @Patch('project-records/:recordId')
+  @Patch("project-records/:recordId")
   @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
   async updateProjectRecord(
-    @Param('recordId') recordId: string,
+    @Param("recordId") recordId: string,
     @Body() dto: UpdateProjectRecordDto,
   ) {
-    return this.scoringService.updateProjectRecord(
-      recordId,
-      dto.complexity,
-    );
+    return this.scoringService.updateProjectRecord(recordId, dto.complexity);
   }
 
-  @Get('external-evaluations/pending')
+  @Get("external-evaluations/pending")
   @Roles(UserRole.TEAM_MANAGER)
   async listPendingExternalEvaluations(@Req() req: any) {
     const managerId = req.user?.id || req.user?.userId || req.user?.user_id;
     return this.scoringService.listPendingExternalEvaluations(managerId);
   }
 
-  @Get('internal-evaluations/pending')
+  @Get("internal-evaluations/pending")
   @Roles(UserRole.TEAM_MANAGER)
   async listPendingInternalEvaluations(@Req() req: any) {
     const managerId = req.user?.id || req.user?.userId || req.user?.user_id;
     return this.scoringService.listPendingInternalEvaluations(managerId);
   }
 
-  @Post('external-evaluations/:recordId/score')
+  @Post("external-evaluations/:recordId/score")
   @Roles(UserRole.TEAM_MANAGER)
   async scoreExternalEvaluation(
-    @Param('recordId') recordId: string,
+    @Param("recordId") recordId: string,
     @Body() dto: ScoreExternalEvaluationDto,
     @Req() req: any,
   ) {
     const managerId = req.user?.id || req.user?.userId || req.user?.user_id;
-    return this.scoringService.scoreExternalEvaluation(recordId, managerId, dto.score);
+    return this.scoringService.scoreExternalEvaluation(
+      recordId,
+      managerId,
+      dto.score,
+    );
   }
 
-  @Post('internal-evaluations/:recordId/score')
+  @Post("internal-evaluations/:recordId/score")
   @Roles(UserRole.TEAM_MANAGER)
   async scoreInternalEvaluation(
-    @Param('recordId') recordId: string,
+    @Param("recordId") recordId: string,
     @Body() dto: ScoreInternalEvaluationDto,
     @Req() req: any,
   ) {
     const managerId = req.user?.id || req.user?.userId || req.user?.user_id;
-    return this.scoringService.scoreInternalEvaluation(recordId, managerId, dto.score);
+    return this.scoringService.scoreInternalEvaluation(
+      recordId,
+      managerId,
+      dto.score,
+    );
   }
 
   // ── Internal project scoring (no PV needed) ──────────────────────────
 
-  @Post('score-internal-project')
+  @Post("score-internal-project")
   @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
-  async scoreInternalProject(@Body() dto: ScoreInternalProjectDto, @Req() req: any) {
+  async scoreInternalProject(
+    @Body() dto: ScoreInternalProjectDto,
+    @Req() req: any,
+  ) {
     const managerId = req.user?.id || req.user?.userId || req.user?.user_id;
-    return this.scoringService.scoreInternalProject(managerId, dto.projectId, dto.profileEvaluations);
+    return this.scoringService.scoreInternalProject(
+      managerId,
+      dto.projectId,
+      dto.profileEvaluations,
+    );
   }
 
   // ── List projects for PV selector ─────────────────────────────────────
 
-  @Get('projects')
+  @Get("projects")
   @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
   async listProjects(@Req() req: any) {
     const userId = req.user?.id || req.user?.userId || req.user?.user_id;
@@ -257,19 +269,20 @@ export class ScoringController {
 
   // ── Leaderboard ───────────────────────────────────────────────────────
 
-  @Get('leaderboard')
+  @Get("leaderboard")
   @Roles(UserRole.TEAM_MANAGER, UserRole.BID_MANAGER, UserRole.EMPLOYEE)
   async getLeaderboard(
-    @Query('year', ParseIntPipe) year: number,
-    @Query('teamId') teamId?: string,
-    @Query('limit') limit?: string,
+    @Query("year", ParseIntPipe) year: number,
+    @Query("teamId") teamId?: string,
+    @Query("limit") limit?: string,
     @Req() req?: any,
   ) {
     const userId = req?.user?.id || req?.user?.userId || req?.user?.user_id;
     let effectiveTeamId = teamId;
 
     if (!effectiveTeamId && req?.user?.role === UserRole.TEAM_MANAGER) {
-      effectiveTeamId = (await this.teamsService.getTeamIdForManager(userId)) || undefined;
+      effectiveTeamId =
+        (await this.teamsService.getTeamIdForManager(userId)) || undefined;
     }
 
     return this.scoringService.getLeaderboard(

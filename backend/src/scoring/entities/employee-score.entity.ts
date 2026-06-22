@@ -5,27 +5,27 @@ import {
   ManyToOne,
   JoinColumn,
   CreateDateColumn,
-} from 'typeorm';
-import { EmployeeProfile } from '../../employees/entities/employee-profile.entity';
+} from "typeorm";
+import { EmployeeProfile } from "../../employees/entities/employee-profile.entity";
 
-@Entity('employee_scores')
+@Entity("employee_scores")
 export class EmployeeScore {
-  @PrimaryGeneratedColumn('uuid')
+  @PrimaryGeneratedColumn("uuid")
   score_id: string;
 
-  @ManyToOne(() => EmployeeProfile, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'profile_id' })
+  @ManyToOne(() => EmployeeProfile, { onDelete: "CASCADE" })
+  @JoinColumn({ name: "profile_id" })
   profile: EmployeeProfile;
 
-  @Column({ name: 'profile_id', type: 'uuid' })
+  @Column({ name: "profile_id", type: "uuid" })
   profileId: string;
 
-  @Column({ name: 'score_year', type: 'int' })
+  @Column({ name: "score_year", type: "int" })
   scoreYear: number;
 
   @Column({
-    name: 'project_score',
-    type: 'decimal',
+    name: "project_score",
+    type: "decimal",
     precision: 8,
     scale: 2,
     default: 0,
@@ -33,8 +33,8 @@ export class EmployeeScore {
   projectScore: number;
 
   @Column({
-    name: 'certification_score',
-    type: 'decimal',
+    name: "certification_score",
+    type: "decimal",
     precision: 8,
     scale: 2,
     default: 0,
@@ -42,8 +42,8 @@ export class EmployeeScore {
   certificationScore: number;
 
   @Column({
-    name: 'training_score',
-    type: 'decimal',
+    name: "training_score",
+    type: "decimal",
     precision: 8,
     scale: 2,
     default: 0,
@@ -51,8 +51,8 @@ export class EmployeeScore {
   trainingScore: number;
 
   @Column({
-    name: 'formation_score',
-    type: 'decimal',
+    name: "formation_score",
+    type: "decimal",
     precision: 8,
     scale: 2,
     default: 0,
@@ -60,31 +60,31 @@ export class EmployeeScore {
   formationScore: number;
 
   @Column({
-    name: 'final_score',
-    type: 'decimal',
+    name: "final_score",
+    type: "decimal",
     precision: 8,
     scale: 2,
     default: 0,
   })
   finalScore: number;
 
-  @Column({ name: 'rank_in_team', type: 'int', nullable: true })
+  @Column({ name: "rank_in_team", type: "int", nullable: true })
   rankInTeam: number;
 
-  @Column({ name: 'rank_global', type: 'int', nullable: true })
+  @Column({ name: "rank_global", type: "int", nullable: true })
   rankGlobal: number;
 
   @Column({
-    type: 'decimal',
+    type: "decimal",
     precision: 5,
     scale: 2,
     nullable: true,
   })
   percentile: number;
 
-  @Column({ name: 'score_details', type: 'jsonb', nullable: true })
+  @Column({ name: "score_details", type: "jsonb", nullable: true })
   scoreDetails: Record<string, any>;
 
-  @CreateDateColumn({ name: 'computed_at' })
+  @CreateDateColumn({ name: "computed_at" })
   computedAt: Date;
 }

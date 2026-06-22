@@ -6,7 +6,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import logging
 logging.basicConfig(level=logging.WARNING)
 
+import pytest
+
 from app.services.cv_generator import _extract_all_text, _detect_personal_info, _build_replacements
+
+_TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), '..', 'test_templates')
 
 EMPLOYEE = {
     'name': 'Aya BEN JEMAA',
@@ -25,6 +29,10 @@ CASES = [
     ('124-modele-cv-canadien-1-2.docx',  'LUCAS',          '555-555-5555'),
 ]
 
+@pytest.mark.skipif(
+    not os.path.isdir(_TEMPLATES_DIR),
+    reason="Fixture directory test_templates/ is not present in the repo.",
+)
 def test_regex_detection_across_templates():
     errors = []
     for fname, expected_name_part, expected_phone in CASES:

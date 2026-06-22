@@ -26,15 +26,9 @@ def test_build_section_content_projects_handles_null_entries():
     assert any(item['text'] == 'MyApp' for item in result)
 
 
-@patch('app.services.cv_generator_fallback._groq_with_retry')
-@patch('app.services.cv_generator_fallback.Groq')
-def test_groq_generate_skills_handles_null_entries(mock_groq_cls, mock_retry):
-    mock_response = type('Resp', (), {
-        'choices': [type('Choice', (), {
-            'message': type('Message', (), {'content': 'Python, AWS'})()
-        })()]
-    })()
-    mock_retry.return_value = mock_response
+@patch('app.services.cv_generator_fallback._call_cv_local_llm')
+def test_groq_generate_skills_handles_null_entries(mock_llm):
+    mock_llm.return_value = 'Python, AWS'
 
     result = _groq_generate_skills(
         {

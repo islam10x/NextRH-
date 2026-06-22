@@ -1,4 +1,4 @@
-﻿"""
+"""
 CV Generation Service (Production-Ready)
 =========================================
 Handles DOCX templates with complex layouts including textboxes, shapes, tables.
@@ -1044,7 +1044,7 @@ def _detect_personal_info(
     # when it finds an ALL-CAPS candidate closer to the email (Step 3a
     # may have picked a job title or school name from the contact block).
     _step3a_name = detected.get('name')
-    _name_cands: List[Tuple[Tuple[int, int], str, List[str]]] = []
+    _name_cands: List[Tuple[Tuple[int, int], str, List[str], str]] = []
     for i, p in enumerate(paragraphs):
         ps = p.strip()
         if not ps or len(ps) > 55:
@@ -1088,16 +1088,23 @@ def _detect_personal_info(
         all_caps_bonus = 0 if all(w.isupper() for w in words) else 1
         # Use spaced version when CamelCase split was applied
         display_name = ' '.join(words) if ' '.join(words) != ps else ps
-        _name_cands.append(((all_caps_bonus, dist), display_name, words))
+        _name_cands.append(((all_caps_bonus, dist), display_name, words, ps))
 
     if _name_cands:
         _name_cands.sort(key=lambda x: x[0])
-        _, best_name, best_words = _name_cands[0]
+        _, best_name, best_words, best_raw = _name_cands[0]
         # Override Step 3a if Step 5 found a better candidate
         if not _step3a_name or best_name != _step3a_name:
             detected['name'] = best_name
             detected['first_name_text'] = best_words[0]
             detected['last_name_text'] = ' '.join(best_words[1:])
+            # Keep _name_raw consistent with the chosen name; the Step 3a value
+            # may belong to a different paragraph (e.g. a job title) and must not
+            # leak into name replacement pairs.
+            if best_raw and best_raw != best_name:
+                detected['_name_raw'] = best_raw
+            else:
+                detected.pop('_name_raw', None)
             logger.info(f"Detected [name] (wide scan): {best_name}")
 
     # ── Step 6: Name from email local part ───────────────────────────
@@ -1271,13 +1278,25 @@ def _build_replacements(
     # Placeholder-only name (e.g. "PRÉNOM NOM") — no real name was detected
     if emp_name:
         added_ph_names: set = set()
+        # Never reuse the detected title (or its placeholder variants) as a name
+        # replacement — infographic contact blocks place an ALL_CAPS job title
+        # right next to the name and it must map to the employee's title, not name.
+        _title_texts: set = set()
+        if detected.get('title'):
+            _title_texts.add(detected['title'])
+        _title_texts.update(detected.get('_all_ph_titles', []))
         if detected.get('_ph_name') and not detected.get('name'):
             ph = detected['_ph_name']
-            pairs.append((ph, emp_name))
-            added_ph_names.add(ph)
+            if ph not in _title_texts:
+                pairs.append((ph, emp_name))
+                added_ph_names.add(ph)
         # ALL_CAPS / title-case variants collected from headers etc.
         for variant in detected.get('_all_ph_names', []):
-            if variant not in added_ph_names and variant != detected.get('name'):
+            if (
+                variant not in added_ph_names
+                and variant != detected.get('name')
+                and variant not in _title_texts
+            ):
                 pairs.append((variant, emp_name))
                 added_ph_names.add(variant)
 
@@ -2283,6 +2302,7 @@ def _apply_paragraph_replacements(
                     if all_fit_in_runs:
                         # Per-run replacement — preserves formatting of each run
                         runs_changed = False
+                        modified_run_idxs: List[int] = []
                         for ri, r in enumerate(runs):
                             t_elem = r.find(WT)
                             if t_elem is None:
@@ -2297,7 +2317,38 @@ def _apply_paragraph_replacements(
                                 t_elem.text = modified_rtext
                                 t_elem.set(XML_SPACE, 'preserve')
                                 runs_changed = True
+                                modified_run_idxs.append(ri)
                         if runs_changed:
+                            # Uniformity guard: when a replacement regenerates the
+                            # content of MULTIPLE runs whose inline styles differ
+                            # (e.g. one run Calibri, the next Courier), collapse the
+                            # whole paragraph into the first modified run's style so
+                            # the generated sentence renders in one uniform body font
+                            # rather than a patchwork of template run styles.
+                            if len(modified_run_idxs) >= 2:
+                                rpr_sigs = set()
+                                for ri in modified_run_idxs:
+                                    rpr = runs[ri].find(f'{{{W}}}rPr')
+                                    rpr_sigs.add(
+                                        etree.tostring(rpr) if rpr is not None else b''
+                                    )
+                                if len(rpr_sigs) > 1:
+                                    keep_idx = modified_run_idxs[0]
+                                    merged_text = ''.join(
+                                        (r.find(WT).text or '')
+                                        for r in runs
+                                        if r.find(WT) is not None
+                                    )
+                                    keep_t = runs[keep_idx].find(WT)
+                                    if keep_t is not None:
+                                        keep_t.text = merged_text
+                                        keep_t.set(XML_SPACE, 'preserve')
+                                        for ri, r in enumerate(runs):
+                                            if ri == keep_idx:
+                                                continue
+                                            other_t = r.find(WT)
+                                            if other_t is not None:
+                                                other_t.text = ''
                             file_count += 1
                             file_changed = True
                     else:
@@ -2439,7 +2490,7 @@ _SECTION_MAP: Dict[str, List[str]] = {
     ],
     'projects': [
         # EN
-        'projects', 'key projects', 'selected projects', 'notable projects',
+        'projects', 'key projects', 'key project', 'selected projects', 'notable projects',
         'project experience', 'key projects & contributions',
         'personal projects', 'academic projects',
         # FR
@@ -2651,6 +2702,15 @@ def _identify_section_lxml(p_elem: Any) -> Optional[str]:
     if text.rstrip().endswith(':'):
         return None
 
+    # Label:value content rows (e.g. "Languages: French, Arabic, English") are
+    # NOT section headings — the keyword is just an inline label followed by a
+    # colon and substantial value content on the same line.
+    _colon_idx = text.find(':')
+    if 0 < _colon_idx < len(text.rstrip()) - 1:
+        _after_colon = text[_colon_idx + 1:].strip()
+        if len(_after_colon) >= 3:
+            return None
+
     t_lower = text.lower().strip().replace('\u2019', "'").replace('\u2018', "'").replace('\u00a0', ' ')
 
     if has_any_formatting:
@@ -2723,18 +2783,21 @@ def _groq_generate_skills(
     full profile (skills array, certifications, education, projects).
     Returns a single comma-separated string, or None on failure.
     """
-    skills  = employee.get('skills') or []
+    skills  = [s for s in (employee.get('skills') or []) if s is not None]
     certs   = [
         (c if isinstance(c, str) else (c.get('name') or ''))
         for c in (employee.get('certifications') or [])
+        if isinstance(c, (str, dict))
     ]
     edus    = [
         (e.get('degree') or e.get('institution') or '')
         for e in (employee.get('education') or [])
+        if isinstance(e, dict)
     ]
     projs   = [
         (p.get('description') or p.get('name') or '')
         for p in (employee.get('projects') or [])
+        if isinstance(p, dict)
     ]
 
     profile = {
@@ -2989,6 +3052,8 @@ def _build_section_content(
             return None
         lines = []
         for proj in projects:
+            if not isinstance(proj, dict):
+                continue
             name = _strip(proj.get('name'))
             skill_list = ', '.join(proj.get('skills') or [])
             desc = _strip(proj.get('description'))
@@ -3018,7 +3083,12 @@ def _build_section_content(
         if not langs:
             return None
         if isinstance(langs, list):
-            text = ', '.join(l if isinstance(l, str) else _strip(l.get('name') if isinstance(l, dict) else l) for l in langs)
+            lang_names = [
+                l if isinstance(l, str) else _strip(l.get('name') if isinstance(l, dict) else l)
+                for l in langs
+                if l is not None
+            ]
+            text = ', '.join(n for n in lang_names if n)
         else:
             text = str(langs)
         return [{'text': text, 'bold': False, 'bullet': False}] if text else None
@@ -3028,7 +3098,11 @@ def _build_section_content(
         if not interests:
             return None
         if isinstance(interests, list):
-            items_list = [i if isinstance(i, str) else _strip(i.get('name', '')) for i in interests]
+            items_list = [
+                i if isinstance(i, str) else _strip(i.get('name', '') if isinstance(i, dict) else i)
+                for i in interests
+                if i is not None
+            ]
             items_list = [i for i in items_list if i]
         else:
             items_list = [str(interests)]
@@ -3281,7 +3355,7 @@ def _extract_content_styles(removable_elems: list) -> Dict[str, Optional[str]]:
     Returns ``{compact: id_or_None, bold: id_or_None, normal: id_or_None}``.
     """
     W = NS_W
-    styles: Dict[str, Optional[str]] = {'compact': None, 'bold': None, 'normal': None}
+    styles: Dict[str, Optional[str]] = {'compact': None, 'bold': None, 'normal': None, 'first': None}
 
     for p in removable_elems:
         if p.tag != f'{{{W}}}p':
@@ -3298,6 +3372,12 @@ def _extract_content_styles(removable_elems: list) -> Dict[str, Optional[str]]:
                 style_id = ps.get(f'{{{W}}}val')
         if not style_id:
             continue
+
+        # Remember the first styled content paragraph as a generic fallback so
+        # single-paragraph sections (e.g. a styled summary block) keep their
+        # template paragraph style even when no role-specific slot matches.
+        if styles['first'] is None:
+            styles['first'] = style_id
 
         # Classify using style name heuristics and text content
         sval = style_id.lower()
@@ -4359,6 +4439,12 @@ def _replace_cv_sections(
                     sid = content_styles.get('bold')
                 else:
                     sid = content_styles.get('normal')
+                # Plain, non-bullet single-block sections (e.g. a styled summary
+                # paragraph) should keep the template's paragraph style even when
+                # no role-specific slot classified it.  Avoid the fallback for
+                # bullets so list items don't inherit a heading/title style.
+                if sid is None and not item.get('bullet') and not item.get('compact'):
+                    sid = content_styles.get('first')
                 new_p = _make_para_elem(
                     item['text'],
                     bold=item.get('bold', False),
@@ -7140,10 +7226,12 @@ def convert_docx_to_pdf(docx_path: str, output_path: Optional[str] = None) -> Op
 
     lo_profile = tempfile.mkdtemp(prefix='lo_profile_')
     try:
+        import pathlib
+        lo_profile_uri = pathlib.Path(lo_profile).as_uri()
         result = subprocess.run(
             [
                 soffice,
-                f"-env:UserInstallation=file://{lo_profile}",
+                f"-env:UserInstallation={lo_profile_uri}",
                 "--headless",
                 "--convert-to", "pdf:writer_pdf_Export:EmbedStandardFonts=true",
                 "--outdir", output_dir,

@@ -102,6 +102,10 @@ services:
       - ollama-data:/root/.ollama
     networks:
       - cv-network
+    gpus:
+    - driver: nvidia
+      count: all
+      capabilities: [gpu]
  
 
   # Helper to pull models automatically

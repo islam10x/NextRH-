@@ -8,8 +8,8 @@ import {
   IsUUID,
   Max,
   Min,
-} from 'class-validator';
-import { Transform } from 'class-transformer';
+} from "class-validator";
+import { Transform } from "class-transformer";
 
 export class UploadPvDto {
   @IsOptional()
@@ -20,7 +20,7 @@ export class UploadPvDto {
   @Transform(({ value }) => {
     if (!value) return undefined;
     if (Array.isArray(value)) return value;
-    if (typeof value === 'string') {
+    if (typeof value === "string") {
       try {
         const parsed = JSON.parse(value);
         return Array.isArray(parsed) ? parsed : [value];
@@ -38,8 +38,8 @@ export class UploadPvDto {
   projectId: string;
 
   @IsOptional()
-  @IsEnum(['low', 'medium', 'high'])
-  complexity?: 'low' | 'medium' | 'high';
+  @IsEnum(["low", "medium", "high"])
+  complexity?: "low" | "medium" | "high";
 
   @IsOptional()
   @IsString()
@@ -67,8 +67,8 @@ export class SetTargetsDto {
 
 export class UpdateProjectRecordDto {
   @IsOptional()
-  @IsEnum(['low', 'medium', 'high'])
-  complexity?: 'low' | 'medium' | 'high';
+  @IsEnum(["low", "medium", "high"])
+  complexity?: "low" | "medium" | "high";
 }
 
 export class ComputeScoreDto {
