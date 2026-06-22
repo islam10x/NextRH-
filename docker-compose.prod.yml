@@ -18,9 +18,7 @@ services:
 
   # NestJS Backend
   backend:
-    build:
-      context: ./backend
-      target: production
+    image: ghcr.io/islam10x/nextrh-backend:latest
     container_name: cv-backend
     env_file:
       - ./backend/.env
@@ -52,7 +50,7 @@ services:
 
   # Python AI Service
   ai-service:
-    build: ./ai-service
+    image: ghcr.io/islam10x/nextrh-ai-service:latest
     container_name: cv-ai-service
     env_file:
       - ./ai-service/.env
@@ -134,11 +132,7 @@ services:
 
   # React Frontend
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile.prod
-      args:
-        VITE_API_URL: ${VITE_API_URL:-/api}
+    image: ghcr.io/islam10x/nextrh-frontend:latest
     container_name: cv-frontend
     ports:
       - "80:80"
