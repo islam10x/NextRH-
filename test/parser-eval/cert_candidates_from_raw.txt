@@ -1,0 +1,268 @@
+===== Bou_Amor_Hanine_CV (1).docx =====
+2022 | Clients Safozi | Migration site web vers Le Cloud Installation service d’hébergement Plesk Migration site web vers WordPress Migration site web vers Plesk Configuration DNS Installation certificat SSL Création des boites mail
+2022 | Clients Safozi | Migration de serveur de messagerie Préparation du nouveau serveur Zimbra Installation certificat Let's Encrypt Migration des donnes et transfert des comptes
+
+===== CV  HKIMI Yesser 2024 MAJ.pdf =====
+Certification
+Certificat
+Gatewatcher Certified Security Analyst
+Gatewatcher Certified Security Expert
+Gatewatcher Certified Security Professional
+ET15- Sophos Central Endpoint and Server v2.0 – Engineer
+Sophos Certified Engineer
+Sophos Certified Architect
+NSE1 Network Security Associate
+NSE2 Network Security Associate
+NSE4 Fortigate Network Security Professionnal
+Palo Alto Networks Certified Network Security Engineer
+Barracuda Load Balancer ADC Certified Product Specialist
+Certified Forcepoint NGFW Administrator
+NSE5 Network Security Analyst
+NSE5 Network Security Analyst
+Certified Ethical Hacker
+Sophos Architect
+ForcePoint NGFW Administrator
+
+===== cv haythem masmoudi BAD.docx =====
+Certifications: Cisco Certified Network Associate/Cisco Certified Network Associate Routing and Switching/Cisco Certified Network Professional Collaboration /Cisco Certified Collaboration Applications Implementation /Cisco Certified Collaboration Call Control & Mobility Implementation /Cisco Certified Collaboration Cloud & Edge Implementation /Cisco Certified Collaboration Core /Implementing Cisco IP Switched Networks (SWITCH 300-115)/ Cisco Certified Network Professional Collaboration (CCNP Collaboration)/ Cisco Video Network Representative /Cisco Collaboration Field Engineer Representative 1/Cisco Unified Communications on Unified Computing Systems Representative/Express Collaboration Systems Engineer Representative/Cisco Certified Network Professional Voice (CCNP Voice)/ Express Collaboration Systems Engineer Representative v2/Cisco Certified Network Associate Voice (CCNA Voice)/ Cisco Certified Network Associate (CCNA)
+Certification:
+2021 | O.M.M.P | Tunisia | Acquisition and operation of equipment, media and licenses for VOIP upgrade
+2020 | CONSEIL SUPERIEUR DE LA MAGISTRATURE | Tunisia | Implementation of a videoconferencing solution for internal and external meetings. All conference stations are located at the various meeting rooms.
+2020 | Attijari Bank | Tunisia | Migration of the bank’s video conferencing solution to the Cisco cloud infrastructure. All Cisco Endpoints are registered and managed from Webex.
+2020 | SODEPS | Tunisia | Implementation of a Cisco Webex-based cloud-based videoconferencing solution. Meeting room Endpoints are recorded and managed from the Webex Cloud.
+2020 | SOTRAPIL | Tunisia | Implementation of a Unified Communications solution containing a CUCM server, a CUC server and an IM&P server. The network is interconnected via a SIP trunk with the operator. Video calls, instant messaging and presence are accessible by the Cisco client.
+2020 | STEG | Tunisia | Implementation of a videoconferencing solution for Cisco Webex-based STEG. Webex Room Kit endpoints are recorded and managed from the cloud.
+2020 | Groupe Hamrouni | Tunisia | Upgrade the group’s IT infrastructure. Each site is equipped with a Firewall and PoE switches. All sites are interconnected and are also connected to the telephone infrastructure deployed at the NEXTSTEP DataCenter. It is a Cisco-based, centralized, multi-site collaboration architecture.
+2020 | OOLAB | Tunisia | Installation of a Cisco CME-based IP Telephony solution in OOLAB Headquarters to accommodate a Call Centre of about 30 agents. PSNT accesses deployed in this project are provided by a French provider via secure SIP trunk technology.
+2019 | BNA | Tunisia | Migration of the bank’s video conferencing solution to the Cisco Webex cloud infrastructure. All Cisco Endpoints are registered and managed from Webex.
+2019 | SCET Tunisie | Tunisia | Implementation of a Cisco CUCM-based collaboration solution. The solution is highly available and follows the best practices defined by the manufacturer. Mobility is ensured via Cisco Jabber customers.
+2019 | INEAS | Tunisia | Implementation of a videoconferencing solution to ensure internal and external meetings of INEAS with its various partners. The deployed architecture consists of a Cisco CMS video conferencing server and meeting rooms equipped with Webex Room Kit and Cisco.
+2019 | IRADA | Tunisia | Implementation of a videoconferencing solution to ensure internal IRADA meetings. This infrastructure includes a main site and regional branches. It is based on the Cisco Meeting Server and Cisco Endpoints.
+2019 | CONSEIL SUPERIEUR DE LA MAGISTRATURE | Tunisia | Technical project management of the implementation of the new CSM Telephony and Security infrastructure. The implementation of a ToIP solution based on Cisco Unified Communications containing a CUCM server and a CUC server deployed on a Cisco physical server. IP telephones are of different ranges. Interconnection to the PSTN network is via a gateway and a SIP trunk to the operator. The security component of the project consists in setting up and configuring a Firewall including a Web filtering license.
+2018 | Institut National de la Météorologie | Tunisia | Implementation of a Cisco Unified Communications solution
+2018 | Université Centrale | Tunisia | Implementation of a collaboration and call centre solution based on Cisco
+2017 | MSC | Tunisia | Migration of the company’s legacy analog PABX-based telephone system to a Cisco CallManager-based IP telephony solution
+2017 | Clinique Soukra | Tunisia | Implementation of a Cisco Unified Communications solution
+2017 | Tunis International Bank | Tunisia | Implementation of a Cisco Unified Communications solution
+2017 | FIPA | Tunisia | Implementation of a Cisco Unified Communications mono-site solution
+2017 | Clinique Amen Santé | Tunisia | Implementation of a Cisco Unified Communications solution
+2017 | OMMP | Tunisia | Implementation of a Collaboration solution CISCO
+2016 | TAHA Voyages | Tunisia | Implementation of a Cisco Unified Communications solution
+2016 | HONDA | Tunisia | Implementation of a Cisco Unified Communications solution
+2016 | KIA | Tunisia | Implementation of a Cisco Unified Communications solution
+2016 | Attijari Bank | Tunisia | Implementation of two Cisco-based video conference rooms
+2016 | CRDA Jendouba | Tunisia | Cisco-based video conference room set up
+2015 | Vitalait | Tunisia | Implementation of a videoconferencing solution based on the “Mobile and Remote Access via Cisco Expressway” architecture.
+2015 | Comete Engineering | Tunisia | Mise en place d’une salle de conférence vidéo à base de Cisco
+2011 | Clinique Internationale Hannibal | Tunisia | Implementation of a ToIP solution containing two CUCMs and a Cisco Unity server
+2010 | Fournisseur de Service Internet TOPNET | Tunisia | Establishment of a Cisco Unified Contact Center Express (UCCX) Call Centre
+
+===== CV mohamed Yacoub.docx =====
+Certification
+Certificat | Date d’obtention
+Juin 2015 | Cisco Certified Network Academy "CCNA"
+
+===== CV Mouna Belghith.docx =====
+Certification
+Certificat | Date d’obtention
+CCNA1 : Introduction to Networks | 06/04/2021
+CCNA2 : Routing and Switching Essentials | 14/06/2021
+CCNA3 : Scaling Networks | 23/12/2021
+2022 | Interne (POP Ouardia) | Migration plateforme FSI : Installation et configuration de VMware vSphere Mise en rack des serveurs migration des VMs vers la nouvelle plateforme
+2022 | RNTA | Mise en place d'une solution de sauvegarde et de réplication Nakivo Backup & Replication Implémentation d’une nouvelle infrastructure système : Serveur (serveur R650xs) et Robot de sauvegarde (TL1000)
+2023 | IPEC | Mise en place d'une solution de sauvegarde et de réplication Nakivo Backup & Replication. Configuration des volumes pour les sauvegardes au niveau du NAS
+2023 | Carthage Cément | Mise en place d'une solution de sauvegarde et de réplication Nakivo Backup & Replication. Mise en rack et configuration d’un NAS
+2023 | Interne (EO-Datacenter) | Mise en place d’une plateforme Cloud Installation et configuration de VMware vSphere Mise en rack des serveurs migration des VMs vers la nouvelle plateforme
+
+===== CV Ridha ESSADEK-Avril 2019.docx =====
+Certifications
+Certificat | Date d’obtention
+CCNA Académique | Novembre 2013
+CCNA Collaboration | Mars 2019
+CCNA | Mars 2019
+CCNP Collaboration | Mai 2021
+Novembre 2016 | Formation CCNA R&S
+Décembre 2016 | Formation CCNA troubleshoot
+2019 | ATFP | Déploiement d’une solution de VoIP pour le Small business (Cisco Call Manger Express)
+2018 | Hôtel AVANI | Déploiement de deux serveurs redondants pour la solution Cisco call Manager cluster
+2018 | Dar ELJELD | Déploiement de deux serveurs redondants pour la solution Cisco call Manager cluster
+2018 | Dar ELJELD | Déploiement de deux serveurs redondants pour la solution Cisco call Manager cluster
+2017 | Clinique Soukra | Déploiement d’un serveur pour la solution Cisco call Manager cluster
+2017 | Clinique ophtalmologie Tunis | Déploiement de deux serveurs redondants pour la solution Cisco call Manager cluster
+2017 | KFC | Déploiement d’une solution de VoIP pour le Small business (Cisco Call Manger Express)
+2017 | COMAF | Déploiement d’une solution de VoIP pour le Small business (Cisco Call Manger Express)
+2017 | CNI | Mise en place des nouvelles connexions WAN pour les sites clients et migration des LAN correspondants vers une nouvelle architecture basé sur CISCO FTD
+2017 | Tunis International Bank (TIB) | Déploiement de deux serveurs redondants pour la solution Cisco call Manager cluster
+2016 | Hotel PLAZA Sfax | Déploiement d’une solution de VoIP pour le Small business (Cisco Call Manger Express)
+2016 | clinique ophtalmologie maghrébine | Déploiement d’un serveur pour la solution Cisco call Manager cluster
+2016 | Imprimerie Boussaa | Déploiement d’une solution de VoIP pour le Small business (Cisco Call Manger Express)
+2016 | Assurance STAR | Déploiement des cisco IP Phone + solution CUAC Standard
+2016 | Ecole intégrale | Déploiement d’une solution de VoIP pour le Small business (Cisco Call Manger Express)
+
+===== CV Sabrine ZOUABI.docx =====
+Certification
+Certificat | Date d’obtention
+Cisco Certified Specialist – Security Core | 06/08/2024
+NSE 1 Network Security Associate | 15/09/2020
+NSE 2 Network Security Associate | 16/09/2020
+Barracuda Load Balancer ADC - Foundation | 27/10/2020
+Sophos engineer | 28/01/2020
+BT10 - Barracuda Certified Sales Partner | 25/01/2021
+NSE 3 Network Security Associate | 05/05/2021
+Certificat XDR Analyst Exam | 19/12/2021
+Certificat XDR Analyst | 19/12/2021
+2019 | Formation Sophos
+2021 | BIAT | Managed Secureworks Teagis XDR with Monitoring 24/7 by Secureworks Certified MSP Partner
+2022 | ONT | une solution XDR (Extended Detection and Response )
+
+===== CV Safa BAIDI.docx =====
+Certification
+Certificat | Date d’obtention
+CCNA R&S: Introduction to Networks | 06/04/2021
+CCNA2 : Routing and Switching Essentials | 14/06/2021
+CCNA3 : Scaling Networks | 23/12/2021
+2022 | Interne (POP Ouardia) | Migration plateforme FSI : Installation et configuration de VMware vSphere Mise en rack des serveurs Migration des VMs vers la nouvelle plateforme
+
+===== CV salah meddeb.DOCX =====
+Certification
+Certificat | Date d’obtention
+Fortinet Certified Fundamentals | Nov 2023
+Fortinet Certified  Associate | Nov 2023
+Sophos Certified Engineer | Juin 2024
+
+===== CV Seif Eddine Ben Haddada 2025.docx =====
+Certification
+Certificate | Date d’obtention
+CCNA RS 2, 3 et 4 | 15-01-2018
+VMware Workspace ONE: Integrating the Digital Workspace | 28-01-2020
+VMware Workspace ONE: Design | 29-01-2020
+VMware Workspace ONE: Unified Endpoint Management Troubleshooting | 31-01-2020
+Microsoft Azure Administrator AZ-104 | 27-10-2022
+Professional VMware Horizon 7.7 2V0-51.19 | 26-05-2021
+VMware vSphere with Tanzu Specialist 5V0-23.20 | 12-09-2022
+VMware Certified Professionnel : Data Center Virtualisation 2024 | 30-01-2024
+Nakivo Technical Professionnal | 21-06-2024
+Veeam Certificate VMTSP SaaS | 19-06-2024
+Certificate VMTSP Public Cloud | 19-06-2024
+Certificate VMTSP Kubernetes Data Protection | 19-06-2024
+Certificate VMTSP Cybersecurity & DR | 19-06-2024
+Certificate VMTSP Cloud Service Provider | 19-06-2024
+Certificate VMSP SaaS | 19-06-2024
+Certificate VMSP Public Cloud | 19-06-2024
+Certificate VMSP Kubernetes Data Protection | 19-06-2024
+Certificate VMSP Cybersecurity & DR | 19-06-2024
+Certificate VMSP Cloud Service Provider | 19-06-2024
+Certificate Veeam Fundamentals | 19-06-2024
+From 27/01/2020 To 31/01/2020 | VMware Workspace ONE training
+From 25/09/2023 To 29/12/2023 | VMWare ICM 8
+2023 | Banque pour le Commerce et l’Industrie BCI (Mauritanie) | Mise en place d’une nouvelle plateforme système virtuelle basée sur Vmware
+
+===== CV SEIF IMAMI VF-1-3.pdf =====
+Certification
+Certificat
+Veeam Technical Sales Professional
+Dell EqualLogic PS6610 Storage
+Dell Storage SC4020
+Dell Networking OS 9
+Dell PowerEdge 13G
+DellEmc MidRange Storage
+VMware ESXI 5.5
+VEEAM BACKUP pour VMWARE
+Microsoft SCVMM 2012R2
+VMWARE VSPHERE 6.5
+VEEAM BACKUP & REPLICATION
+VMWARE VSPHERE 6.5
+VEEAM BACKUP & REPLICATION
+Microsoft CLUSTER HYPER-V & châssis DellEmc
+VMWARE VSAN
+
+===== CV Tarek KILANI _ Next Step.docx =====
+Certification
+Certificat | Date d’obtention
+The SecOps Group - Certified Network Security Practitioner | 2025
+The SecOps Group - Certified AppSec Practitioner | 2024
+EC-Council – Certified Ethical Hacker | 2022
+(ISC)² - Certified in Cybersecurity | 2023
+Barracuda - Web Application Firewall Foundation | 2022
+Barracuda - Load Balancer Foundation | 2022
+Fortinet - NSE 3 | 2023
+Fortinet - NSE 2 | 2020
+Fortinet - NSE 1 | 2020
+2022 | CBF | Mise en place et administration de la solution Barracuda WAF en tant que service managé
+
+===== CV Wael Moughi 2018.docx =====
+Certification
+Certificat | Date d’obtention
+Sophos Synchronized Security Engineer | Dec 31, 2017
+Sophos Certified Engineer | Dec 31, 2017
+Cisco Certified Network Associate Routing & Switching | Oct 23, 2017
+Sophos Certified Architect - XG Firewall | Apr 25, 2017
+Barracuda Web Security Gateway Certified Engineer | Aug 13, 2017
+Barracuda Email Security Gateway Certified Engineer | Sep 30, 2017
+2018 | Assister les utilisateurs et les clients sur site ou à distance, afin de résoudre au plus vite leurs incidents (réseaux, sécurité, wifi...) Analyse et diagnostique des incidents Analyse des performances systèmes et réseaux, propositions d’amélioration Reporting des actions réalisées dans l'outil de gestion des incidents (cause des incidents, dates d'intervention, actions réalisées) Participer à des projets d’intégration en mode industriel en suivants des procédures bien détaillés. Effectuer des visites préventives aux clients afin d'assurer le bon fonctionnement du réseaux (mise à jour des équipements, conseils technique..) Câblage et configuration réseaux. Maintenance informatique. Câblage et configuration de caméras de surveillance
+
+===== CV-wiemhajjaji.DOCX =====
+Certification
+Certificat | Date d’obtention
+Fortinet Certified Associate in Cybersecurity | 23/11/2023
+Fortinet Certified Fundamentals in Cybersecurity | 24/11/2023
+
+===== CV-yasmine-HAMOUDA.DOCX =====
+Certification
+Certificat | Date d’obtention
+Certification Barracuda WAF | 24/06/2024
+Fortinet Certified Associate in Cybersecurity | 27/11/2023
+Fortinet Certified Fundamentals in Cybersecurity | 24/11/2023
+
+===== CV-Yassine-Bennour.pdf =====
+Certification
+Certificat
+FCSS : NSE 7 Fortinet Enterprise Firewall 7.4 Administrator
+
+===== CV_rayhanegouissem_NS2024vrf.DOCX =====
+Certification
+Certificat | Date d’obtention
+Fortinet Certified Fundamentals in Cybersecurity | 24 Novembre 2023
+Fortinet Certified Associate in Cybersecurity | 24 Novembre 2023
+ESG01 – Barracuda Email Security Gateway Foundation | 09 Juin 2024
+ESG01 – Barracuda Email Security Gateway Specialist | 09 Juin 2024
+ADC01 – Barracuda Load Balancer ADC Foundation | 16 Juin 2024
+ADC01 – Barracuda Load Balancer ADC Specialist | 20 Juin 2024
+
+===== NS_CV_RaniaBouneb 2024.pdf =====
+SagemCom Tunisie
+Certification
+Certificat
+Microsoft Azure Solutions Architect Expert
+Microsoft Azure Administrator
+Red Hat Certified System Administrator
+VMware Certified Specialist -vSAN 2023
+Nakivo Technical Professional
+(VMware)
+(VMware)
+SagemCom
+(VMware)
+Mise en place d’une solution Azure Stack HCI
+(VMware)
+(VMware)
+Mise en place d’une solution Azure Stack HCI
+Mise en place d’une solution Azure Stack HCI
+système (VMWARE)
+(VEEAM)
+
+===== Refka_BABOURI_CV.DOCX =====
+Certification
+Certificat | Date d’obtention
+CCNAv7 Routing and Switching | 2022
+CCNA2v7 Switching, Routing, and Wireless Essentials | 2022
+CCNA3v7 Enterprise Networking, Security, and Automation | 2024
+XDR Certified Analyst | 2024
+XDR Certified Administrator | 2024
+
+===== WassimOmrani.DOCX =====
+Certification
+Certificat | Date d’obtention
+EX280 : Redhat Certified Openshift Administrator | août 2025
+2024 | STAR ASSURANCE | Automatisé le déploiement et la gestion de clusters Kubernetes sur VMware ESXi en utilisant Terraform (infrastructure as code) et Kubespray (provisionnement automatisé), ce qui a permis de réduire le temps de déploiement de 70% et d’assurer une reproductibilité fiable des environnements. Mis en place un système de monitoring avancé avec Zabbix pour le suivi en temps réel des performances des nœuds, des pods et des services critiques. Intégré une stack centralisée de logging avec ELK (Elasticsearch, Logstash, Kibana), permettant une corrélation et analyse rapide des incidents, facilitant le troubleshooting et l’optimisation des applications. Implémenté Velero pour la sauvegarde et la restauration des workloads Kubernetes vers Amazon S3, garantissant la résilience et la continuité d’activité. Ajout de CI/CD pipelines pour automatiser les déploiements applicatifs et les mises à jour de clusters, assurant un time-to-market accéléré. Application des meilleures pratiques de sécurité Kubernetes (RBAC, gestion des secrets, policies réseau, durcissement des nœuds). Documentation et standardisation du processus, facilitant la scalabilité et le transfert de connaissances au sein de l’équipe.
+2025 | Conçu, déployé et administré une plateforme Red Hat OpenShift bare-metal hébergeant plus de 100 applications clients, avec un SLA de disponibilité de 99,9%, garantissant la performance et la fiabilité des services critiques. Intégré IBM Fusion Access comme solution de stockage haute performance et scalable, permettant une gestion optimisée des volumes persistants et un support robuste pour les workloads stateful. Implémenté Kasten K10 pour la sauvegarde, la restauration et la reprise après sinistre des applications et des données, assurant la protection et la résilience de la plateforme. Mise en place de mécanismes de haute disponibilité (load balancing, failover, clustering), réduisant considérablement les risques d’interruption. Automatisé le cycle de vie applicatif via des pipelines CI/CD intégrés, permettant des déploiements rapides, fiables et sécurisés. Déployé et intégré un serveur SonarQube au pipeline CI/CD afin de renforcer la qualité du code, la détection de vulnérabilités et l’application des bonnes pratiques de développement. Renforcé la sécurité de la plateforme grâce aux bonnes pratiques OpenShift (RBAC, policies réseau, gestion des secrets) et optimisé la scalabilité horizontale pour répondre à la croissance des besoins.
+

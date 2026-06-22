@@ -1,7 +1,7 @@
-import { IsOptional, IsString } from 'class-validator';
+import { IsOptional, IsString } from "class-validator";
 
 export class UpdateParticipationDto {
-    @IsString()
-    @IsOptional()
-    description?: string;
+  @IsString()
+  @IsOptional()
+  description?: string;
 }

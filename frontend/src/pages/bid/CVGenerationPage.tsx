@@ -34,7 +34,7 @@ const ALLOWED_MIMES = new Set([
 ]);
 
 const safeFilenamePart = (value: string) =>
-  value.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_\-]/g, '');
+  value.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_-]/g, '');
 
 const formatRelativeTime = (iso: string | null): string => {
   if (!iso) return 'Jamais utilisé';

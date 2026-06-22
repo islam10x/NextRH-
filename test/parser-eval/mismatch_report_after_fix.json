@@ -1,0 +1,411 @@
+{
+  "total_cvs": 20,
+  "cvs_with_any_mismatch": 20,
+  "summary_mismatch_counts": {
+    "full_name": 1,
+    "email": 0,
+    "phone": 0,
+    "work_experience": 0,
+    "education": 1,
+    "skills": 20,
+    "certifications": 0
+  },
+  "details": [
+    {
+      "cv_file": "Bou_Amor_Hanine_CV (1).docx",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "aws",
+            "cloud",
+            "linux"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV  HKIMI Yesser 2024 MAJ.pdf",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "fortinet",
+            "réseaux",
+            "sécurité"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV Firas Toumi 2025.pdf",
+      "mismatch_count": 2,
+      "mismatches": [
+        {
+          "field": "education",
+          "reason": "no overlapping entry",
+          "gt": [
+            "Technicien sup?rieur en infrastructure et r?seaux d?acc?s. - CSFTK"
+          ],
+          "parsed": [
+            "Technicien supérieur en infrastructure et réseaux d’accès - CSFTK"
+          ]
+        },
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "communications unifi?es",
+            "it",
+            "r?seaux"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV mohamed Yacoub.docx",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "réseaux",
+            "support it",
+            "sécurité"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV Mouna Belghith.docx",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "cloud",
+            "réseaux",
+            "sécurité"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV Ridha ESSADEK-Avril 2019.docx",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "collaboration",
+            "support",
+            "télécommunication"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV Sabrine ZOUABI.docx",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "it",
+            "réseaux",
+            "sécurité"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV Safa BAIDI.docx",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "cloud",
+            "réseaux",
+            "télécom"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV salah meddeb.DOCX",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "it consulting",
+            "réseaux",
+            "support"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV Seif Eddine Ben Haddada 2025.docx",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "cloud",
+            "linux",
+            "systèmes"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV SEIF IMAMI VF-1-3.pdf",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "dell emc",
+            "infrastructure it",
+            "storage"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV Tarek KILANI _ Next Step.docx",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "incident response",
+            "soc",
+            "sécurité"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV Wael Moughi 2018.docx",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "it",
+            "réseaux",
+            "sécurité"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV-wiemhajjaji.DOCX",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "it",
+            "réseaux",
+            "security"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV-yasmine-HAMOUDA.DOCX",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "cybersécurité",
+            "it",
+            "soc"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV-Yassine-Bennour.pdf",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "lan/wlan",
+            "réseaux",
+            "sécurité"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "CV_rayhanegouissem_NS2024vrf.DOCX",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "it",
+            "réseaux",
+            "sécurité"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "NS_CV_RaniaBouneb 2024.pdf",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "azure",
+            "systèmes",
+            "virtualisation"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "Refka_BABOURI_CV.DOCX",
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "cybersécurité",
+            "siem",
+            "soc"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    },
+    {
+      "cv_file": "WassimOmrani.DOCX",
+      "mismatch_count": 2,
+      "mismatches": [
+        {
+          "field": "full_name",
+          "reason": "same tokens, reversed/reshuffled order",
+          "gt": "Wassim Omrani",
+          "parsed": "Omrani Wassim"
+        },
+        {
+          "field": "skills",
+          "reason": "recall 0.00",
+          "gt_count": 3,
+          "parsed_count": 0,
+          "overlap": [],
+          "missing_from_parsed": [
+            "cloud",
+            "kubernetes",
+            "linux"
+          ],
+          "extra_in_parsed": []
+        }
+      ]
+    }
+  ]
+}

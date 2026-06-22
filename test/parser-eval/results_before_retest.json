@@ -1,0 +1,1011 @@
+[
+  {
+    "cv_file": "Bou_Amor_Hanine_CV (1).docx",
+    "gt": {
+      "cv_file": "Bou_Amor_Hanine_CV (1).docx",
+      "full_name": "Bou Amor Hanine",
+      "email": "h.bouamor@nextstep-it.com",
+      "phone": "0021698772825",
+      "work_experience": [
+        "Consultante Cloud chez NextStep IT"
+      ],
+      "education": [
+        "Licence appliquée en technologie de l’informatique : Réseaux et services informatiques - Institut Supérieur Des Etudes Technologiques De Bizerte"
+      ],
+      "skills": [
+        "Cloud",
+        "AWS",
+        "Linux"
+      ],
+      "certifications": []
+    },
+    "parsed": {
+      "full_name": "Bou Amor Hanine",
+      "email": "h.bouamor@nextstep-it.com",
+      "phone": "0021698772825",
+      "work_experience": [
+        "Consultante Cloud chez NextStep IT",
+        "Administratrice Système linux & Cloud chez Safozi"
+      ],
+      "education": [
+        "Licence appliquée en technologie de l’informatique : Réseaux et services informatiques - Institut Supérieur Des Etudes Technologiques De Bizerte",
+        "Baccalauréat en Sciences techniques - Lycée Ibn Abi Dhief Manouba"
+      ],
+      "skills": [],
+      "certifications": []
+    }
+  },
+  {
+    "cv_file": "CV  HKIMI Yesser 2024 MAJ.pdf",
+    "gt": {
+      "cv_file": "CV  HKIMI Yesser 2024 MAJ.pdf",
+      "full_name": "Yesser HKIMI",
+      "email": "y.hkimi@nextstep-it.com",
+      "phone": "98 772 871",
+      "work_experience": [
+        "Consultant Réseaux Sécurité chez NextStep IT"
+      ],
+      "education": [
+        "Mastère professionnel en administration et sécurité des réseaux informatiques - Institut Supérieur d’informatique de KEF"
+      ],
+      "skills": [
+        "Réseaux",
+        "Sécurité",
+        "Fortinet"
+      ],
+      "certifications": [
+        "Gatewatcher Certified Security Analyst",
+        "Gatewatcher Certified Security Expert",
+        "Gatewatcher Certified Security Professional",
+        "ET15- Sophos Central Endpoint and Server v2.0 ? Engineer",
+        "Sophos Certified Engineer",
+        "Sophos Certified Architect",
+        "NSE1 Network Security Associate",
+        "NSE2 Network Security Associate",
+        "NSE4 Fortigate Network Security Professionnal",
+        "Palo Alto Networks Certified Network Security Engineer",
+        "Barracuda Load Balancer ADC Certified Product Specialist",
+        "Certified Forcepoint NGFW Administrator",
+        "NSE5 Network Security Analyst",
+        "Certified Ethical Hacker"
+      ]
+    },
+    "parsed": {
+      "full_name": "Yesser HKIMI",
+      "email": "y.hkimi@nextstep-it.com",
+      "phone": "",
+      "work_experience": [
+        "Consultant Réseaux Sécurité chez NextStep IT",
+        "Vneuron Mémoire de fin d’études : Mise en place et implémentation d’une plateforme de supervision d’une solution GED",
+        "Agence Tunisienne Stage de fin d’études d’Internet Implémentation et administration d’un système de ticketage chez Fév 2016- Juin 2016",
+        "Agence Tunisienne Stage de Perfectionnement d’Iternet Mise en place et implémentation d’une solution de supervision chez Jan 2016-Fév 2016",
+        "Stage d’initiation chez Tunisie Télécom"
+      ],
+      "education": [
+        "Mastère professionnel en administration et sécurité des réseaux informatiques - Institut Supérieur d’informatique de KEF",
+        "Licence appliquée en réseaux et services informatiques - Institut Supérieur des études technologiques de Charguia"
+      ],
+      "skills": [],
+      "certifications": [
+        "Gatewatcher Certified Security Analyst 30/ Gatewatcher Certified Security Expert 30/ Gatewatcher Certified Security Professional 30/",
+        "ET15- Sophos Central Endpoint and Server v2.0 – Engineer 23/ Sophos Certified Engineer 23/",
+        "Sophos Certified Architect 02/"
+      ]
+    }
+  },
+  {
+    "cv_file": "CV Firas Toumi 2025.pdf",
+    "gt": {
+      "cv_file": "CV Firas Toumi 2025.pdf",
+      "full_name": "Toumi Firas",
+      "email": "f.toumi@nextstep-it.com",
+      "phone": "98 772 829",
+      "work_experience": [
+        "Consultant-IT chez NextStep-IT"
+      ],
+      "education": [
+        "Technicien sup?rieur en infrastructure et r?seaux d?acc?s. - CSFTK"
+      ],
+      "skills": [
+        "R?seaux",
+        "IT",
+        "Communications unifi?es"
+      ],
+      "certifications": [
+        "XG firewall v17.5 - Engineer",
+        "Fortinet NSE1",
+        "Fortinet NSE2",
+        "3cx Basic Certified Engineer v16"
+      ]
+    },
+    "parsed": {
+      "full_name": "Toumi Firas",
+      "email": "f.toumi@nextstep-it.com",
+      "phone": "+971 98 772 829",
+      "work_experience": [
+        "Consultant-IT chez NextStep-IT"
+      ],
+      "education": [
+        "Technicien supérieur en infrastructure et réseaux d’accès. Technicien supérieur en infrastructure et - CSFTK"
+      ],
+      "skills": [],
+      "certifications": [
+        "XG firewall v17.5 - Engineer Janvier",
+        "Fortinet NSE1 Novembre 9",
+        "Fortinet NSE2 Novembre 9",
+        "3cx Basic Certified Engineer v16 Janvier"
+      ]
+    }
+  },
+  {
+    "cv_file": "CV mohamed Yacoub.docx",
+    "gt": {
+      "cv_file": "CV mohamed Yacoub.docx",
+      "full_name": "Mohamed YACOUBI",
+      "email": "mohamed.yacoubi@nextstep-it.com",
+      "phone": "98 772 870",
+      "work_experience": [
+        "Consultant Support IT chez NEXT STEP IT"
+      ],
+      "education": [
+        "BTS Réseau et Sécurité informatique - Formation Professionnelle \"Centre de Formation Technologique (CFT)"
+      ],
+      "skills": [
+        "Support IT",
+        "Réseaux",
+        "Sécurité"
+      ],
+      "certifications": [
+        "Cisco Certified Network Academy \"CCNA\""
+      ]
+    },
+    "parsed": {
+      "full_name": "Mohamed YACOUBI",
+      "email": "mohamed.yacoubi@nextstep-it.com",
+      "phone": "98 772 870",
+      "work_experience": [
+        "Consultant Support IT chez NEXT STEP IT",
+        "Support technique systèmes et réseaux informatique chez Globaltech MULTISERVICES",
+        "Support télécommunications et réseaux chez STS Networks"
+      ],
+      "education": [
+        "BTS Réseau et Sécurité informatique - Formation Professionnelle \"Centre de Formation Technologique (CFT)",
+        "Economie & Gestion, mention Bien - Baccalauréat",
+        "Stage Professionnelle \"Centre de recherches et des technologies des Eaux\" (CERTE)",
+        "Cisco Certified Network Academy \"CCNA"
+      ],
+      "skills": [],
+      "certifications": [
+        "Date d’obtention"
+      ]
+    }
+  },
+  {
+    "cv_file": "CV Mouna Belghith.docx",
+    "gt": {
+      "cv_file": "CV Mouna Belghith.docx",
+      "full_name": "Mouna BELGHITH",
+      "email": "m.belghith@nextstep-it.com",
+      "phone": "98 772 845",
+      "work_experience": [
+        "Consultante Cloud chez NextStep"
+      ],
+      "education": [
+        "Licence en Sciences et Technologies de l’Information et de la Communication (STIC) spécialité Sécurité des réseaux - Institut Supérieur des études technologiques en Communications de Tunis (Iset’Com)"
+      ],
+      "skills": [
+        "Cloud",
+        "Réseaux",
+        "Sécurité"
+      ],
+      "certifications": [
+        "CCNA1 : Introduction to Networks",
+        "CCNA2 : Routing and Switching Essentials",
+        "CCNA3 : Scaling Networks"
+      ]
+    },
+    "parsed": {
+      "full_name": "Mouna BELGHITH",
+      "email": "m.belghith@nextstep-it.com",
+      "phone": "98 772 845",
+      "work_experience": [
+        "Consultante Cloud chez NextStep"
+      ],
+      "education": [
+        "Licence en Sciences et Technologies de l’Information et de la Communication (STIC) spécialité Sécurité des réseaux - Institut Supérieur des études technologiques en Communications de Tunis (Iset’Com)",
+        "Master en Sécurité des Systèmes d’Information et des Infrastructures - Institut supérieur d'informatique d’Ariana (ISI)"
+      ],
+      "skills": [],
+      "certifications": [
+        "CCNA1 : Introduction to Networks",
+        "CCNA2 : Routing and Switching Essentials",
+        "TOEIC : Listening and Reading : 580",
+        "CCNA3 : Scaling Networks",
+        "CyberOps : CyberOps Associate"
+      ]
+    }
+  },
+  {
+    "cv_file": "CV Ridha ESSADEK-Avril 2019.docx",
+    "gt": {
+      "cv_file": "CV Ridha ESSADEK-Avril 2019.docx",
+      "full_name": "Ridha ESSADEK",
+      "email": "r.essadek@nextstep-it.com",
+      "phone": "+216 98 772 858",
+      "work_experience": [
+        "Consultant IT collaboration chez NextStep IT"
+      ],
+      "education": [
+        "Diplôme national en Télécommunication, Option sécurité réseaux télécommunications - Institut Supérieur des Etudes Technologiques de Gabes (ISETG)"
+      ],
+      "skills": [
+        "Collaboration",
+        "Télécommunication",
+        "Support"
+      ],
+      "certifications": [
+        "CCNA Acad?mique",
+        "CCNA Collaboration",
+        "CCNA",
+        "CCNP Collaboration"
+      ]
+    },
+    "parsed": {
+      "full_name": "Ridha ESSADEK",
+      "email": "r.essadek@nextstep-it.com",
+      "phone": "+216 98 772 858",
+      "work_experience": [
+        "Consultant IT collaboration chez NextStep IT"
+      ],
+      "education": [
+        "Diplôme national en Télécommunication, Option sécurité réseaux télécommunications - Institut Supérieur des Etudes Technologiques de Gabes (ISETG)",
+        "Formation téléphonie CME & CUCM",
+        "Formation CCNA R&S",
+        "Formation CCNA troubleshoot",
+        "Formation virtualization et Windows Server AD",
+        "Formation ASA & Firepower",
+        "Formation Cyberoam",
+        "Formation LISP"
+      ],
+      "skills": [],
+      "certifications": [
+        "CCNA Académique",
+        "CCNA Collaboration",
+        "CCNA",
+        "CCS – Collaboration Core",
+        "CCNP Collaboration",
+        "CCS – Collaboration Cloud & Edge Implementation"
+      ]
+    }
+  },
+  {
+    "cv_file": "CV Sabrine ZOUABI.docx",
+    "gt": {
+      "cv_file": "CV Sabrine ZOUABI.docx",
+      "full_name": "Sabrine ZOUABI",
+      "email": "s.zouabi@nextstep-it.com",
+      "phone": "98772826",
+      "work_experience": [
+        "Agent du guichet chez Poste tunisienne"
+      ],
+      "education": [
+        "Licence applique en réseaux et services informatiques - Institut supérieure des études technologiques de Beja"
+      ],
+      "skills": [
+        "Réseaux",
+        "Sécurité",
+        "IT"
+      ],
+      "certifications": [
+        "Cisco Certified Specialist ? Security Core",
+        "NSE 1 Network Security Associate",
+        "NSE 2 Network Security Associate",
+        "Barracuda Load Balancer ADC - Foundation",
+        "Sophos engineer",
+        "BT10 - Barracuda Certified Sales Partner",
+        "NSE 3 Network Security Associate",
+        "Certificat XDR Analyst Exam",
+        "Certificat XDR Analyst"
+      ]
+    },
+    "parsed": {
+      "full_name": "ZOUABI sabrine",
+      "email": "s.zouabi@nextstep-it.com",
+      "phone": "98772826",
+      "work_experience": [
+        "Agent du guichet chez Poste tunisienne",
+        "Consultant réseaux et sécurité support chez NextStep It"
+      ],
+      "education": [
+        "Licence applique en réseaux et services informatiques - Institut supérieure des études technologiques de Beja",
+        "Stage initiation au sein de la société tunisienne d’électricité et gaz",
+        "Stage de perfectionnement au sein de la poste tunisienne",
+        "Projet de fin d’étude au sein de l’agence nationale de sécurité informatique : Mise en place d’un SIEM (system information event management) à base open source",
+        "Formation Sophos"
+      ],
+      "skills": [],
+      "certifications": [
+        "Cisco Certified Specialist – Security Core",
+        "NSE 1 Network Security Associate",
+        "NSE 2 Network Security Associate",
+        "Barracuda Load Balancer ADC - Foundation",
+        "Sophos engineer",
+        "BT10 - Barracuda Certified Sales Partner",
+        "NSE 3 Network Security Associate",
+        "Certificat XDR Analyst Exam",
+        "Certificat XDR Analyst"
+      ]
+    }
+  },
+  {
+    "cv_file": "CV Safa BAIDI.docx",
+    "gt": {
+      "cv_file": "CV Safa BAIDI.docx",
+      "full_name": "Safa BAIDI",
+      "email": "s.baidi@nextstep-it.com",
+      "phone": "98 772 878",
+      "work_experience": [
+        "Consultante Cloud chez NextStep"
+      ],
+      "education": [
+        "Licence en Sciences et Technologies de l’Information et de la Communication (STIC) spécialité Réseaux et Systèmes Télécoms - Institut Supérieur des études technologiques en Communications de Tunis (Iset’Com)"
+      ],
+      "skills": [
+        "Cloud",
+        "Réseaux",
+        "Télécom"
+      ],
+      "certifications": [
+        "CCNA R&S: Introduction to Networks",
+        "CCNA2 : Routing and Switching Essentials",
+        "CCNA3 : Scaling Networks"
+      ]
+    },
+    "parsed": {
+      "full_name": "Safa BAIDI",
+      "email": "s.baidi@nextstep-it.com",
+      "phone": "98 772 878",
+      "work_experience": [
+        "Consultante Cloud chez NextStep"
+      ],
+      "education": [
+        "Licence en Sciences et Technologies de l’Information et de la Communication (STIC) spécialité Réseaux et Systèmes Télécoms - Institut Supérieur des études technologiques en Communications de Tunis (Iset’Com)",
+        "Ingénierie en Informatique - Esprit"
+      ],
+      "skills": [],
+      "certifications": [
+        "CCNA R&S: Introduction to Networks",
+        "CCNA2 : Routing and Switching Essentials",
+        "CCNA3 : Scaling Networks",
+        "Voltaire en orthographe (695/900)"
+      ]
+    }
+  },
+  {
+    "cv_file": "CV salah meddeb.DOCX",
+    "gt": {
+      "cv_file": "CV salah meddeb.DOCX",
+      "full_name": "Med Salah Meddeb",
+      "email": "s.meddeb@nextstep-it.com",
+      "phone": "98 12 99 21",
+      "work_experience": [
+        "Stage PFE chez Tunisie Telecom"
+      ],
+      "education": [
+        "Baccalauréat Science expérimentale - Lycée cité Errafeha"
+      ],
+      "skills": [
+        "IT Consulting",
+        "Réseaux",
+        "Support"
+      ],
+      "certifications": [
+        "Fortinet Certified Fundamentals",
+        "Fortinet Certified Associate",
+        "Sophos Certified Engineer"
+      ]
+    },
+    "parsed": {
+      "full_name": "Meddeb Med Salah",
+      "email": "s.meddeb@nextstep-it.com",
+      "phone": "98 12 99 21",
+      "work_experience": [
+        "Stage PFE chez Tunisie Telecom",
+        "Consultan Sécurité des réseaux chez Nextstep IT"
+      ],
+      "education": [
+        "Baccalauréat Science expérimentale - Lycée cité Errafeha",
+        "Ingénierie des réseaux et systèmes - Institut supérieur de l’informatique (ISI)",
+        "Master 1 Cybersécurité - TED University"
+      ],
+      "skills": [],
+      "certifications": [
+        "Fortinet Certified Fundamentals",
+        "Fortinet Certified Associate",
+        "Sophos Certified Engineer"
+      ]
+    }
+  },
+  {
+    "cv_file": "CV Seif Eddine Ben Haddada 2025.docx",
+    "gt": {
+      "cv_file": "CV Seif Eddine Ben Haddada 2025.docx",
+      "full_name": "Seif Eddine Ben Haddada",
+      "email": "s.benhaddada@nextstep-it.com",
+      "phone": "+216 98 772 863",
+      "work_experience": [
+        "Ingénieur Système chez NEXT STEP IT"
+      ],
+      "education": [
+        "Mathematics Bachelor - Lycée Ouardia"
+      ],
+      "skills": [
+        "Cloud",
+        "Systèmes",
+        "Linux"
+      ],
+      "certifications": [
+        "CCNA RS 2, 3 et 4",
+        "VMware Workspace ONE: Integrating the Digital Workspace",
+        "VMware Workspace ONE: Design",
+        "VMware Workspace ONE: Unified Endpoint Management Troubleshooting",
+        "Microsoft Azure Administrator AZ-104",
+        "Professional VMware Horizon 7.7 2V0-51.19",
+        "VMware vSphere with Tanzu Specialist 5V0-23.20",
+        "VMware Certified Professionnel : Data Center Virtualisation 2024",
+        "Nakivo Technical Professionnal",
+        "Veeam Certificate VMTSP SaaS",
+        "Certificate VMTSP Public Cloud",
+        "Certificate VMTSP Kubernetes Data Protection",
+        "Certificate VMTSP Cybersecurity & DR",
+        "Certificate VMTSP Cloud Service Provider",
+        "Certificate VMSP SaaS",
+        "Certificate VMSP Public Cloud",
+        "Certificate VMSP Kubernetes Data Protection",
+        "Certificate VMSP Cybersecurity & DR",
+        "Certificate VMSP Cloud Service Provider",
+        "Certificate Veeam Fundamentals"
+      ]
+    },
+    "parsed": {
+      "full_name": "Seif Eddine Ben Haddada",
+      "email": "s.benhaddada@nextstep-it.com",
+      "phone": "+216 98 772 863",
+      "work_experience": [
+        "Ingénieur Système chez NEXT STEP IT"
+      ],
+      "education": [
+        "Mathematics Bachelor - Lycée Ouardia",
+        "Applied degree in Computer Science - Iset Rades",
+        "Computer engineer specializing in networks and distributed systems - Université Libre de Tunis"
+      ],
+      "skills": [],
+      "certifications": [
+        "Linux Redhat System Administrator RHCSA",
+        "CCNA RS 2, 3 et 4",
+        "VMware Workspace ONE: Integrating the Digital Workspace",
+        "VMware Workspace ONE: Design",
+        "VMware Workspace ONE: Unified Endpoint Management Troubleshooting",
+        "Microsoft Azure Administrator AZ-104",
+        "Professional VMware Horizon 7.7 2V0-51.19",
+        "VMware vSphere with Tanzu Specialist 5V0-23.20",
+        "VMware Certified Professionnel : Data Center Virtualisation 2024",
+        "Nakivo Technical Professionnal",
+        "Veeam Certificate VMTSP SaaS",
+        "Certificate VMTSP Public Cloud",
+        "Certificate VMTSP Kubernetes Data Protection",
+        "Certificate VMTSP Cybersecurity & DR",
+        "Certificate VMTSP Cloud Service Provider",
+        "Certificate VMSP SaaS",
+        "Certificate VMSP Public Cloud",
+        "Certificate VMSP Kubernetes Data Protection",
+        "Certificate VMSP Cybersecurity & DR",
+        "Certificate VMSP Cloud Service Provider",
+        "Certificate Veeam Fundamentals",
+        "From 17/12/2016 To 15/01/2017",
+        "From 27/01/2020 To 31/01/2020",
+        "From 25/09/2023 To 29/12/2023"
+      ]
+    }
+  },
+  {
+    "cv_file": "CV SEIF IMAMI VF-1-3.pdf",
+    "gt": {
+      "cv_file": "CV SEIF IMAMI VF-1-3.pdf",
+      "full_name": "Seif IMAMI",
+      "email": "s.imami@nextstep-it.com",
+      "phone": "98 772 856",
+      "work_experience": [
+        "IT system infrastructure chez GENERAL TELECOM"
+      ],
+      "education": [
+        "Technicien Supérieur de télécommunication option informatique - Centre sectoriel de formation en électronique de Sousse"
+      ],
+      "skills": [
+        "Infrastructure IT",
+        "Storage",
+        "Dell EMC"
+      ],
+      "certifications": [
+        "Veeam Technical Sales Professional",
+        "Dell EqualLogic PS6610 Storage",
+        "Dell Storage SC4020",
+        "Dell Networking OS 9",
+        "Dell PowerEdge 13G",
+        "DellEmc MidRange Storage",
+        "VMware ESXI 5.5",
+        "VEEAM BACKUP pour VMWARE",
+        "Microsoft SCVMM 2012R2",
+        "VMWARE VSPHERE 6.5",
+        "VEEAM BACKUP & REPLICATION",
+        "Microsoft CLUSTER HYPER-V & ch?ssis DellEmc",
+        "VMWARE VSAN"
+      ]
+    },
+    "parsed": {
+      "full_name": "IMAMI SEIF",
+      "email": "s.imami@nextstep-it.com",
+      "phone": "+97152486300",
+      "work_experience": [
+        "IT system infrastructure chez GENERAL TELECOM",
+        "IT system infrastructure chez S2I",
+        "IT system infrastructure chez NextStep IT"
+      ],
+      "education": [
+        "Technicien Supérieur de télécommunication option informatique - Centre sectoriel de formation en électronique de Sousse"
+      ],
+      "skills": [],
+      "certifications": [
+        "Veeam Technical Sales Professional eScan Technical Engineer",
+        "DCSE Storage Foundations",
+        "Dell EqualLogic PS6610 Storage",
+        "Dell Storage SC4020",
+        "Dell Networking OS 9",
+        "Dell PowerEdge 13G",
+        "DPACK 2.0 Technical",
+        "EMEA Cloud Services"
+      ]
+    }
+  },
+  {
+    "cv_file": "CV Tarek KILANI _ Next Step.docx",
+    "gt": {
+      "cv_file": "CV Tarek KILANI _ Next Step.docx",
+      "full_name": "Tarek KILANI",
+      "email": "t.kilani@nextstep-it.com",
+      "phone": "70 258 200",
+      "work_experience": [
+        "SOC Manager chez Next Step"
+      ],
+      "education": [
+        "Licence appliquée en sciences et technologies de l'information et de la communication Spécialité : Sécurité des réseaux - Institut Supérieur des études technologiques en Communications (ISETCom)"
+      ],
+      "skills": [
+        "SOC",
+        "Sécurité",
+        "Incident Response"
+      ],
+      "certifications": [
+        "The SecOps Group - Certified Network Security Practitioner",
+        "The SecOps Group - Certified AppSec Practitioner",
+        "EC-Council ? Certified Ethical Hacker",
+        "(ISC)? - Certified in Cybersecurity",
+        "Barracuda - Web Application Firewall Foundation",
+        "Barracuda - Load Balancer Foundation",
+        "Fortinet - NSE 3",
+        "Fortinet - NSE 2",
+        "Fortinet - NSE 1"
+      ]
+    },
+    "parsed": {
+      "full_name": "Tarek Kilani",
+      "email": "t.kilani@nextstep-it.com",
+      "phone": "+70258200",
+      "work_experience": [
+        "SOC Manager chez Next Step",
+        "Consultant Senior - Cyber Risk Advisory Assistant Manager - Cyber Risk Advisory chez Deloitte",
+        "Analyste SOC Référent Technique chez Next Step",
+        "Ingénieur Cybersécurité - Services de sécurité managés chez Advancia IT SYSTEM"
+      ],
+      "education": [
+        "Licence appliquée en sciences et technologies de l'information et de la communication Spécialité : Sécurité des réseaux - Institut Supérieur des études technologiques en Communications (ISETCom)",
+        "Diplôme national d'ingénieur en informatique Spécialité : Infrastructures des réseaux et sécurité des données - École Supérieure Privée d’Ingénierie et de Technologies (ESPRIT)"
+      ],
+      "skills": [],
+      "certifications": [
+        "PECB - ISO/IEC 27005 Risk Manager",
+        "PECB - ISO/IEC 27001 Lead Implementer",
+        "The SecOps Group - Certified Network Security Practitioner",
+        "The SecOps Group - Certified AppSec Practitioner",
+        "EC-Council – Certified Ethical Hacker",
+        "(ISC)² - Certified in Cybersecurity",
+        "Secureworks - Taegis XDR Administrator",
+        "Secureworks - Taegis XDR Analyst",
+        "Barracuda - Web Application Firewall Foundation",
+        "Barracuda - Load Balancer Foundation",
+        "Fortinet - NSE 3",
+        "Fortinet - NSE 2",
+        "Fortinet - NSE 1"
+      ]
+    }
+  },
+  {
+    "cv_file": "CV Wael Moughi 2018.docx",
+    "gt": {
+      "cv_file": "CV Wael Moughi 2018.docx",
+      "full_name": "Wael Mzoughi",
+      "email": "w.mzoughi@nextstep-it.com",
+      "phone": "+216 98 772 834",
+      "work_experience": [
+        "Technicien Supérieur Réseau et Sécurité chez Next Step IT"
+      ],
+      "education": [
+        "Licence appliqué en réseaux et services informatiques à - institut supérieure d’études technologique de Nabeul."
+      ],
+      "skills": [
+        "Réseaux",
+        "Sécurité",
+        "IT"
+      ],
+      "certifications": [
+        "Sophos Synchronized Security Engineer",
+        "Sophos Certified Engineer",
+        "Cisco Certified Network Associate Routing & Switching",
+        "Sophos Certified Architect - XG Firewall",
+        "Barracuda Web Security Gateway Certified Engineer",
+        "Barracuda Email Security Gateway Certified Engineer"
+      ]
+    },
+    "parsed": {
+      "full_name": "Wael Mzoughi",
+      "email": "w.mzoughi@nextstep-it.com",
+      "phone": "+216 98 772 834",
+      "work_experience": [
+        "Technicien Supérieur Réseau et Sécurité chez Next Step IT",
+        "Technicien Supérieur Réseau et Sécurité chez Leading services"
+      ],
+      "education": [
+        "Licence appliqué en réseaux et services informatiques à - institut supérieure d’études technologique de Nabeul."
+      ],
+      "skills": [],
+      "certifications": [
+        "Sophos Synchronized Security Engineer",
+        "Sophos Certified Engineer",
+        "Cisco Certified Network Associate Routing & Switching",
+        "Sophos Certified Architect - XG Firewall",
+        "Barracuda Web Security Gateway Certified Engineer",
+        "Barracuda Email Security Gateway Certified Engineer"
+      ]
+    }
+  },
+  {
+    "cv_file": "CV-wiemhajjaji.DOCX",
+    "gt": {
+      "cv_file": "CV-wiemhajjaji.DOCX",
+      "full_name": "Wiem HAJJAJJI",
+      "email": "w.hajjaji@nextstep-it.com",
+      "phone": "98129927",
+      "work_experience": [
+        "Stage ouvrier chez Tunisie télécom manouba"
+      ],
+      "education": [
+        "Baccalauréat en science mathématique - Lycée Hamida Bakir Mnihla"
+      ],
+      "skills": [
+        "Security",
+        "Réseaux",
+        "IT"
+      ],
+      "certifications": [
+        "Fortinet Certified Associate in Cybersecurity",
+        "Fortinet Certified Fundamentals in Cybersecurity"
+      ]
+    },
+    "parsed": {
+      "full_name": "HAJJAJJI WIEM",
+      "email": "w.hajjaji@nextstep-it.com",
+      "phone": "+98129927",
+      "work_experience": [
+        "Stage ouvrier chez Tunisie télécom manouba",
+        "Stage pfe chez Office nationale de la poste tunisienne",
+        "Consultant IT chez Next Step"
+      ],
+      "education": [
+        "Baccalauréat en science mathématique - Lycée Hamida Bakir Mnihla",
+        "Licence en technologie des informations et communications - ISSAT MATEUR",
+        "1er master en Cyber Security - TED University"
+      ],
+      "skills": [
+        "Security Consultant"
+      ],
+      "certifications": [
+        "Fortinet Certified Associate in Cybersecurity",
+        "Fortinet Certified Fundamentals in Cybersecurity"
+      ]
+    }
+  },
+  {
+    "cv_file": "CV-yasmine-HAMOUDA.DOCX",
+    "gt": {
+      "cv_file": "CV-yasmine-HAMOUDA.DOCX",
+      "full_name": "Yasmine HAMOUDA",
+      "email": "y.hamouda@nextstep-it.com",
+      "phone": "98129929",
+      "work_experience": [
+        "Consultante IT chez NextStep IT"
+      ],
+      "education": [
+        "Master Professionnel en Cybersécurité - TED University"
+      ],
+      "skills": [
+        "Cybersécurité",
+        "IT",
+        "SOC"
+      ],
+      "certifications": [
+        "Certification Barracuda WAF",
+        "Fortinet Certified Associate in Cybersecurity",
+        "Fortinet Certified Fundamentals in Cybersecurity"
+      ]
+    },
+    "parsed": {
+      "full_name": "Yasmine HAMOUDA",
+      "email": "y.hamouda@nextstep-it.com",
+      "phone": "98129929",
+      "work_experience": [
+        "Consultante IT chez NextStep IT"
+      ],
+      "education": [
+        "Master Professionnel en Cybersécurité - TED University",
+        "Licence Appliquée en Technologie de l’Informatique - Institut Supérieur des Etudes Technologiques de Sousse",
+        "Baccalauréat Sciences Expérimentales - Lycée Ksour Essef"
+      ],
+      "skills": [],
+      "certifications": [
+        "Certification Barracuda WAF",
+        "Fortinet Certified Associate in Cybersecurity",
+        "Fortinet Certified Fundamentals in Cybersecurity"
+      ]
+    }
+  },
+  {
+    "cv_file": "CV-Yassine-Bennour.pdf",
+    "gt": {
+      "cv_file": "CV-Yassine-Bennour.pdf",
+      "full_name": "Yassine Bennour",
+      "email": "y.bennour@nextstep-it.com",
+      "phone": "+216 98122456",
+      "work_experience": [
+        "Consultant IT chez Next Step IT"
+      ],
+      "education": [
+        "Diplôme du baccalauréat - Lycée Khaireddine Ariana"
+      ],
+      "skills": [
+        "Réseaux",
+        "Sécurité",
+        "LAN/WLAN"
+      ],
+      "certifications": [
+        "FCSS : NSE 7 Fortinet Enterprise Firewall 7.4 Administrator"
+      ]
+    },
+    "parsed": {
+      "full_name": "Yassine Bennour",
+      "email": "y.bennour@nextstep-it.com",
+      "phone": "+216 98122456",
+      "work_experience": [
+        "Consultant IT chez Next Step IT",
+        "Next Step IT Stagiaire (Stage PFE) Stagiaire (Stage de chez Février",
+        "Next Step IT perfectionnement) chez Janvier",
+        "BIAT Stagiaire (Stage d’initiation) chez Juin"
+      ],
+      "education": [
+        "Diplôme du baccalauréat - Lycée Khaireddine Ariana",
+        "Licence en Réseaux et services informatiques - Institut supérieur des études technologiques de Charguia"
+      ],
+      "skills": [],
+      "certifications": [
+        "FCSS : NSE 7 Fortinet Enterprise Firewall 7.4 Administrator"
+      ]
+    }
+  },
+  {
+    "cv_file": "CV_rayhanegouissem_NS2024vrf.DOCX",
+    "gt": {
+      "cv_file": "CV_rayhanegouissem_NS2024vrf.DOCX",
+      "full_name": "Rayhane Gouissem",
+      "email": "r.gouissem@nextstep-it.com",
+      "phone": "98 129 925",
+      "work_experience": [
+        "Stage d’initiation chez Tunisie Telecom la kasbah"
+      ],
+      "education": [
+        "Baccalauréat en Sciences Techniques - Lycée Ibn Rachik Ezzahra"
+      ],
+      "skills": [
+        "IT",
+        "Réseaux",
+        "Sécurité"
+      ],
+      "certifications": [
+        "Fortinet Certified Fundamentals in Cybersecurity",
+        "Fortinet Certified Associate in Cybersecurity",
+        "ESG01 ? Barracuda Email Security Gateway Foundation",
+        "ESG01 ? Barracuda Email Security Gateway Specialist",
+        "ADC01 ? Barracuda Load Balancer ADC Foundation",
+        "ADC01 ? Barracuda Load Balancer ADC Specialist"
+      ]
+    },
+    "parsed": {
+      "full_name": "Rayhane Gouissem",
+      "email": "r.gouissem@nextstep-it.com",
+      "phone": "+97148129925",
+      "work_experience": [
+        "Stage d’initiation chez Tunisie Telecom la kasbah",
+        "Saisonnière chez Actel Tunisie Telecom",
+        "Stage Technicien chez Tunisian Smart Technologies",
+        "PFA chez Iset’COM El Ghazela",
+        "Stage PFE chez Timsoft Group",
+        "Consultante Sécurité Réseau chez NextStep IT"
+      ],
+      "education": [
+        "Baccalauréat en Sciences Techniques - Lycée Ibn Rachik Ezzahra",
+        "Licence en Science et Technologies de l’information en communication – Spécialité Réseaux et Systèmes des Télécommunications - Iset’COM El-Ghazela",
+        "Mastère en Cybersécurité - TED University (ispTED)"
+      ],
+      "skills": [],
+      "certifications": [
+        "Fortinet Certified Fundamentals in Cybersecurity",
+        "Fortinet Certified Associate in Cybersecurity",
+        "ESG01 – Barracuda Email Security Gateway Foundation",
+        "ESG01 – Barracuda Email Security Gateway Specialist",
+        "ADC01 – Barracuda Load Balancer ADC Foundation",
+        "ADC01 – Barracuda Load Balancer ADC Specialist"
+      ]
+    }
+  },
+  {
+    "cv_file": "NS_CV_RaniaBouneb 2024.pdf",
+    "gt": {
+      "cv_file": "NS_CV_RaniaBouneb 2024.pdf",
+      "full_name": "Rania BOUNEB",
+      "email": "r.bouneb@nextstep-it.com",
+      "phone": "+216 98772854",
+      "work_experience": [
+        "Consultant Système chez Next Step IT"
+      ],
+      "education": [
+        "Master Professionnel en Informatique - Ecole Nationale d'Electronique et des Télécommunications de Sfax (ENET'Com)"
+      ],
+      "skills": [
+        "Systèmes",
+        "Azure",
+        "Virtualisation"
+      ],
+      "certifications": [
+        "Microsoft Azure Solutions Architect Expert",
+        "Microsoft Azure Administrator",
+        "Red Hat Certified System Administrator",
+        "VMware Certified Specialist -vSAN 2023",
+        "Nakivo Technical Professional"
+      ]
+    },
+    "parsed": {
+      "full_name": "BOUNEB RANIA",
+      "email": "r.bouneb@nextstep-it.com",
+      "phone": "+216 98772854",
+      "work_experience": [
+        "Consultant Système chez Next Step IT",
+        "SagemCom Tunisie Projet de fin d’études : Système de gestion de la maintenance préventive des cadres de brasage chez Janvier",
+        "Projet : Développement d’une application web pour assurer le suivi du plan de maintenance au quotidien. chez SNCFT",
+        "Zouila Projet de fin d’études Automatisation et implémentation d'un système de supervision industriel en temps réel dans l'unité d’extraction d'huile de grignon. chez Janvier",
+        "Caveo Tunisie Projet : Automatisation d'un chariot monte-charge électrique chez Janvier",
+        "Stage d’initiation chez Lear Corporation"
+      ],
+      "education": [
+        "Master Professionnel en Informatique - Ecole Nationale d'Electronique et des Télécommunications de Sfax (ENET'Com)",
+        "Licence appliquée en génie électrique (spécialité : Automatisme et informatique industrielle) - Institut Supérieur des Etudes Technologiques de Mahdia (ISET)",
+        "Baccalauréat Mathématiques - Lycée Ibn Rachik ezzahra"
+      ],
+      "skills": [],
+      "certifications": [
+        "Microsoft Azure Solutions Architect Expert",
+        "Microsoft Azure Administrator",
+        "Red Hat Certified System Administrator",
+        "VMware Certified Specialist -vSAN 2023",
+        "Nakivo Technical Professional"
+      ]
+    }
+  },
+  {
+    "cv_file": "Refka_BABOURI_CV.DOCX",
+    "gt": {
+      "cv_file": "Refka_BABOURI_CV.DOCX",
+      "full_name": "Refka BABOURI",
+      "email": "r.babouri@nextstep-it.com",
+      "phone": "+216 98129933",
+      "work_experience": [
+        "Analyste SOC chez NextStep IT"
+      ],
+      "education": [
+        "Diplôme d’un master en Cybersécurité opérationnelle - Ecole Supérieure des communications de Tunis (SUP’COM)"
+      ],
+      "skills": [
+        "SOC",
+        "SIEM",
+        "Cybersécurité"
+      ],
+      "certifications": [
+        "CCNAv7 Routing and Switching",
+        "CCNA2v7 Switching, Routing, and Wireless Essentials",
+        "CCNA3v7 Enterprise Networking, Security, and Automation",
+        "XDR Certified Analyst",
+        "XDR Certified Administrator"
+      ]
+    },
+    "parsed": {
+      "full_name": "Refka BABOURI",
+      "email": "r.babouri@nextstep-it.com",
+      "phone": "+216 98129933",
+      "work_experience": [
+        "Analyste SOC chez NextStep IT"
+      ],
+      "education": [
+        "Diplôme d’un master en Cybersécurité opérationnelle - Ecole Supérieure des communications de Tunis (SUP’COM)",
+        "Diplôme en Licence appliquée en technologie de l’information et communication - Faculté des sciences de Bizerte (FSB)"
+      ],
+      "skills": [],
+      "certifications": [
+        "CCNAv7 Routing and Switching",
+        "CCNA2v7 Switching, Routing, and Wireless Essentials",
+        "Cybersecurity Essentials",
+        "Attestation mooc SecNumAc",
+        "CCNA3v7 Enterprise Networking, Security, and Automation",
+        "XDR Certified Analyst",
+        "XDR Certified Administrator",
+        "Cybersecurity Operations",
+        "Email Authentication"
+      ]
+    }
+  },
+  {
+    "cv_file": "WassimOmrani.DOCX",
+    "gt": {
+      "cv_file": "WassimOmrani.DOCX",
+      "full_name": "Wassim Omrani",
+      "email": "w.omrani@nextstep-it.com",
+      "phone": "98 122 464",
+      "work_experience": [
+        "Consultant Cloud chez NEXTSTEP IT"
+      ],
+      "education": [
+        "Diplôme du cycle d'ingénieur : Technologie de l'information - Esprit Engineering"
+      ],
+      "skills": [
+        "Cloud",
+        "Kubernetes",
+        "Linux"
+      ],
+      "certifications": [
+        "EX280 : Redhat Certified Openshift Administrator"
+      ]
+    },
+    "parsed": {
+      "full_name": "Omrani Wassim",
+      "email": "w.omrani@nextstep-it.com",
+      "phone": "98 122 464",
+      "work_experience": [
+        "Consultant Cloud chez NEXTSTEP IT"
+      ],
+      "education": [
+        "Diplôme du cycle d'ingénieur : Technologie de l'information - Esprit Engineering",
+        "Sciences et technologies de l'information et de la communication - ESSTHs"
+      ],
+      "skills": [],
+      "certifications": [
+        "EX280 : Redhat Certified Openshift Administrator"
+      ]
+    }
+  }
+]

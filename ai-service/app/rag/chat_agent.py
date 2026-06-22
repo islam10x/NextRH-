@@ -45,6 +45,10 @@ from app.utils.llm import build_rag_chat_llm, parse_json_object
 TOP_K = 5
 TOP_K_PER_MATCHED_EMPLOYEE = 8
 NO_INFO_REPLY = "I don't have that information."
+OUT_OF_SCOPE_REPLY = (
+    "I can only help with employee data — skills, certifications, "
+    "experience, projects, and team composition. "
+)
 
 
 def _normalize_for_match(value: str) -> str:
@@ -737,8 +741,8 @@ def _build_structured_facts(
     project_ranking.sort(key=lambda item: item[1], reverse=True)
     experience_years_ranking.sort(key=lambda item: item[1], reverse=True)
 
-    _MAX_ITEMS = 6
-    _DESC_LEN = 120
+    _MAX_ITEMS = 50
+    _DESC_LEN = 500
     for row in employee_rows:
         projs = row["projects"]
         if len(projs) > _MAX_ITEMS:
@@ -1281,6 +1285,43 @@ def build_chain():
     print(f"[chat_agent] Using chat provider: {provider}, model: {model_name}")
     print("[chat_agent] Pipeline mode: llm-first")
 
+    # ------------------------------------------------------------------
+    # Scope gate — fast pre-retrieval classifier.
+    # Uses a minimal prompt so the LLM only needs to emit one JSON token.
+    # Falls back to in_scope on any error to avoid blocking valid queries.
+    # ------------------------------------------------------------------
+    _scope_prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """You are a query classifier for an HR employee-database assistant.
+
+The assistant can ONLY answer questions about:
+- Employees: names, roles, contact details
+- Skills, certifications, education
+- Work experience, projects, clients
+- Team headcount and composition
+
+Classify the user query below.
+Reply with JSON only — no explanation, no markdown:
+  {{"scope": "in_scope"}}   — if the query is about employee/HR data
+  {{"scope": "out_of_scope"}} — if it is general knowledge, small talk, coding help, etc.""",
+            ),
+            ("human", "{query}"),
+        ]
+    )
+
+    def _classify_scope(user_input: str) -> str:
+        """Return 'in_scope' or 'out_of_scope'. Defaults to 'in_scope' on error."""
+        try:
+            messages = _scope_prompt.format_messages(query=user_input)
+            raw = llm.invoke(messages)
+            content = str(getattr(raw, "content", "") or "").strip()
+            obj = parse_json_object(content) or {}
+            return str(obj.get("scope") or "in_scope").lower()
+        except Exception:
+            return "in_scope"
+
     query_rewrite_prompt = ChatPromptTemplate.from_messages(
         [
             (
@@ -1289,7 +1330,7 @@ def build_chain():
 Resolve pronouns from chat history and replace them with exact employee names when clear.
 Preserve constraints (else, besides, counts, comparisons) and obvious typo normalization.
 If a person name looks misspelled, map it to the closest name in EmployeeNames only when clearly unambiguous.
-Return only the rewritten question.""",
+Return ONLY the rewritten question. Do not include any conversational filler, markdown formatting, or introductory text.""",
             ),
             MessagesPlaceholder("chat_history"),
             ("human", "EmployeeNames:\n{employee_names}\n\nUserInput:\n{input}"),
@@ -1323,7 +1364,8 @@ Rules:
 - Preserve constraints (negations/exclusions, comparisons, "other than", etc.).
 - For category words, include lexical variants (singular/plural and common French/English variants when relevant).
 - If a name seems misspelled, align it to the closest EmployeeNames entry when unambiguous.
-- Keep all queries concise and specific; do not invent entities.""",
+- Keep all queries concise and specific; do not invent entities.
+DO NOT wrap the output in markdown blocks like ```json. Output ONLY the raw JSON object.""",
             ),
             MessagesPlaceholder("chat_history"),
             ("human", "EmployeeNames:\n{employee_names}\n\nUserInput:\n{input}"),
@@ -1332,6 +1374,18 @@ Rules:
 
     def _plan_llm_first_queries(user_input: str, chat_history: list) -> tuple[str, list[str]]:
         fallback_query = _rewrite_query(user_input, chat_history)
+
+        # Robust fallback: automatically append recently discussed names if pronouns are used.
+        if _needs_reference_resolution(_normalize_for_match(user_input)) and chat_history:
+            recent_names = []
+            for msg in reversed(chat_history[-4:]):
+                content = str(getattr(msg, "content", "") or "").strip()
+                matches = _extract_names_mentioned(_normalize_for_match(content), known_names)
+                recent_names.extend(matches)
+            if recent_names:
+                # Just blindly append the most recent discussed name so vector search catches it.
+                fallback_query = f"{fallback_query} {recent_names[0]}"
+
         fallback_queries = _dedupe_keep_order([fallback_query, user_input])
         try:
             employee_names_blob = "\n".join(f"- {name}" for name in known_names) if known_names else "(none)"
@@ -1387,6 +1441,7 @@ RULES:
 - Answer the question using ONLY the StructuredFacts and Context above. Do NOT use outside knowledge.
 - All names in the question refer to employees in the data above, not famous people.
 - Match names partially and case-insensitively (e.g. "anouar" = "Anouar ABDALLAH").
+- If asked for "similar experience" or to compare, strictly evaluate the 'experience_years' or project details. Do not list employees with vastly different years of experience.
 - If matching data exists, answer concisely from it.
 - If no matching data exists, reply exactly: "I don't have that information."
 - Answer only what was asked. Keep it short.
@@ -1439,6 +1494,13 @@ Question: {standalone_query}""",
         if input_words and input_words.issubset(_GREETING_WORDS | {"", "there", "everyone", "all"}):
             return {
                 "answer": _GREETING_REPLY,
+                "context": [],
+            }
+
+        # Scope gate — reject out-of-scope queries before retrieval.
+        if _classify_scope(user_input) == "out_of_scope":
+            return {
+                "answer": OUT_OF_SCOPE_REPLY,
                 "context": [],
             }
 
@@ -1503,6 +1565,15 @@ Question: {standalone_query}""",
             yield _json.dumps({"type": "done"}) + "\n"
             history.add_user_message(user_input)
             history.add_ai_message(_GREETING_REPLY)
+            return
+
+        # Scope gate — reject out-of-scope queries before retrieval.
+        if _classify_scope(user_input) == "out_of_scope":
+            yield _json.dumps({"type": "context", "data": []}) + "\n"
+            yield _json.dumps({"type": "token", "data": OUT_OF_SCOPE_REPLY}) + "\n"
+            yield _json.dumps({"type": "done"}) + "\n"
+            history.add_user_message(user_input)
+            history.add_ai_message(OUT_OF_SCOPE_REPLY)
             return
 
         # Retrieval

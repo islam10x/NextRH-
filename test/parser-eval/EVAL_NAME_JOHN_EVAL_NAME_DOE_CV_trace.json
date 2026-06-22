@@ -1,0 +1,259 @@
+{
+  "mode": "direct",
+  "employee_name": "EVAL_NAME_JOHN EVAL_NAME_DOE",
+  "template": "Document 1.docx",
+  "output": "EVAL_NAME_JOHN_EVAL_NAME_DOE_CV.docx",
+  "total_duration_ms": 33257.58,
+  "replacements": {
+    "attempted": 48,
+    "applied": 45
+  },
+  "phases": [
+    {
+      "name": "input_validation",
+      "status": "success",
+      "duration_ms": 0.88,
+      "message": "11/12 fields valid",
+      "details": {
+        "fields_defaulted": [],
+        "dropped_experiences": 0,
+        "dropped_educations": 0
+      }
+    },
+    {
+      "name": "template_validation",
+      "status": "success",
+      "duration_ms": 1.08,
+      "details": {
+        "zip_entries": 30,
+        "size_bytes": 40632
+      }
+    },
+    {
+      "name": "sdt_dissolution",
+      "status": "success",
+      "duration_ms": 35.44,
+      "message": "48 SDTs dissolved",
+      "details": {
+        "sdts_dissolved": 48
+      }
+    },
+    {
+      "name": "text_extraction",
+      "status": "success",
+      "duration_ms": 25.66,
+      "message": "90 paragraphs, 1938 chars",
+      "details": {
+        "paragraphs": 90,
+        "chars": 1938
+      }
+    },
+    {
+      "name": "contact_detection",
+      "status": "success",
+      "duration_ms": 3.69,
+      "message": "Detected 6 fields",
+      "details": {
+        "detected_fields": [
+          "email",
+          "name",
+          "first_name_text",
+          "last_name_text",
+          "title",
+          "address"
+        ]
+      }
+    },
+    {
+      "name": "structural_extraction",
+      "status": "success",
+      "duration_ms": 2.59,
+      "message": "exp=0, edu=1",
+      "details": {
+        "experience_entries": 0,
+        "education_entries": 1
+      }
+    },
+    {
+      "name": "summary_generation",
+      "status": "skipped",
+      "duration_ms": 0.0,
+      "message": "Employee already has a summary"
+    },
+    {
+      "name": "build_replacement_map",
+      "status": "success",
+      "duration_ms": 0.5,
+      "message": "32 replacement pairs",
+      "details": {
+        "pair_count": 32,
+        "pairs_preview": [
+          {
+            "old": "Bachelor of Arts, Degree, GPA",
+            "new": "EVAL_EDU_DEG"
+          },
+          {
+            "old": "{{ prenom }} {{ nom }}",
+            "new": "EVAL_NAME_JOHN EVAL_NAME_DOE"
+          },
+          {
+            "old": "{{ current_position }}",
+            "new": "EVAL_TITLE_ENGINEER"
+          },
+          {
+            "old": "yourname@example.com",
+            "new": "eval_email@evaldomain.com"
+          },
+          {
+            "old": "{{current_position}}",
+            "new": "EVAL_TITLE_ENGINEER"
+          },
+          {
+            "old": "{{ full_name }}",
+            "new": "EVAL_NAME_JOHN EVAL_NAME_DOE"
+          },
+          {
+            "old": "{{ job_title }}",
+            "new": "EVAL_TITLE_ENGINEER"
+          },
+          {
+            "old": "{{ telephone }}",
+            "new": ""
+          },
+          {
+            "old": "{{ linkedin }}",
+            "new": "linkedin.com/in/eval_linkedin"
+          },
+          {
+            "old": "Project title",
+            "new": "EVAL_TITLE_ENGINEER"
+          },
+          {
+            "old": "{{full_name}}",
+            "new": "EVAL_NAME_JOHN EVAL_NAME_DOE"
+          },
+          {
+            "old": "{{job_title}}",
+            "new": "EVAL_TITLE_ENGINEER"
+          },
+          {
+            "old": "{{telephone}}",
+            "new": ""
+          },
+          {
+            "old": "{{ address }}",
+            "new": "EVAL_ADDRESS_CITY"
+          },
+          {
+            "old": "@example.com",
+            "new": "@evaldomain.com"
+          },
+          {
+            "old": "{{linkedin}}",
+            "new": "linkedin.com/in/eval_linkedin"
+          },
+          {
+            "old": "{{ title }}",
+            "new": "EVAL_TITLE_ENGINEER"
+          },
+          {
+            "old": "{{ poste }}",
+            "new": "EVAL_TITLE_ENGINEER"
+          },
+          {
+            "old": "{{ email }}",
+            "new": "eval_email@evaldomain.com"
+          },
+          {
+            "old": "{{ phone }}",
+            "new": ""
+          }
+        ]
+      }
+    },
+    {
+      "name": "ai_supplement",
+      "status": "success",
+      "duration_ms": 33000.26,
+      "message": "AI contributed 16 additional pair(s)"
+    },
+    {
+      "name": "section_replacement",
+      "status": "success",
+      "duration_ms": 21.58,
+      "message": "0 sections replaced",
+      "details": {
+        "sections_replaced": 0
+      }
+    },
+    {
+      "name": "textbox_section_replacement",
+      "status": "success",
+      "duration_ms": 17.2,
+      "message": "0 textbox sections replaced",
+      "details": {
+        "txbx_replaced": 0
+      }
+    },
+    {
+      "name": "section_clearing",
+      "status": "success",
+      "duration_ms": 31.46,
+      "message": "2 sections cleared",
+      "details": {
+        "cleared": 2
+      }
+    },
+    {
+      "name": "apply_replacements",
+      "status": "success",
+      "duration_ms": 37.38,
+      "message": "45 paragraph(s) modified",
+      "details": {
+        "paragraphs_modified": 45
+      }
+    },
+    {
+      "name": "textbox_resize",
+      "status": "success",
+      "duration_ms": 20.37,
+      "message": "0 textboxes resized",
+      "details": {
+        "resized": 0
+      }
+    },
+    {
+      "name": "textbox_reflow",
+      "status": "success",
+      "duration_ms": 19.72,
+      "message": "0 textboxes reflowed",
+      "details": {
+        "reflowed": 0
+      }
+    },
+    {
+      "name": "quality_check",
+      "status": "success",
+      "duration_ms": 34.37,
+      "message": "All checks passed",
+      "details": {
+        "issues_found": 0
+      }
+    },
+    {
+      "name": "output_validation",
+      "status": "success",
+      "duration_ms": 0.47,
+      "message": "Valid DOCX (37,687 bytes)",
+      "details": {
+        "output_size_bytes": 37687,
+        "input_hash": "f048a704d20250d5"
+      }
+    }
+  ],
+  "quality_issues": [],
+  "validation_warnings": [
+    "Discarding invalid phone: '999-EVAL-PHONE'"
+  ],
+  "success": true
+}

@@ -31,6 +31,13 @@ def _tagger_enable_conditionals() -> bool:
     return os.getenv("CV_TEMPLATE_TAGGER_CONDITIONALS", "1") != "0"
 
 
+def _tagger_remove_empty_sections() -> bool:
+    """Return True for strict mode: empty sections (heading + content) are
+    removed entirely. When False (legacy), the heading is kept and an "N/A"
+    placeholder is shown for the empty body."""
+    return os.getenv("CV_TEMPLATE_REMOVE_EMPTY_SECTIONS", "1") != "0"
+
+
 # ============================================================================
 # REGEX PATTERNS
 # ============================================================================
@@ -333,6 +340,11 @@ class Section:
     section_type: str  # "header", "experience", "education", etc.
     heading_idx: Optional[int] = None
     paragraph_indices: List[int] = dataclass_field(default_factory=list)
+    # A "borderline" heading is one that matches a section keyword but was not
+    # confidently promoted to a real heading (e.g. "Skills Summary" without
+    # heading styling). These always use the legacy keep-heading + "N/A"
+    # fallback, even in strict mode.
+    borderline: bool = False
 
 
 @dataclass
@@ -471,20 +483,34 @@ def auto_tag_template(docx_path: str) -> str:
         "awards": "awards",
     }
     
+    strict_mode = _tagger_remove_empty_sections()
+
     for section in sections:
         cond_var = _SECTION_CONDITIONS.get(section.section_type)
         if cond_var and section.heading_idx is not None and section.paragraph_indices:
             logger.info(f"[DEBUG] Wrapping section '{section.section_type}' in {{% if {cond_var} %}}")
-            first_para = all_paras[section.paragraph_indices[0]]
             last_para = all_paras[section.paragraph_indices[-1]]
 
-            # Keep the heading visible; only the content block is conditional.
-            _insert_paragraph_before(first_para, f"{{%p if {cond_var} %}}")
+            # Borderline headings always use the legacy keep-heading + "N/A"
+            # fallback, even in strict mode.
+            use_strict = strict_mode and not section.borderline
 
-            # Insert in reverse order because addnext inserts directly after the same anchor.
-            _insert_paragraph_after(last_para, "{%p endif %}")
-            _insert_paragraph_after(last_para, "N/A")
-            _insert_paragraph_after(last_para, "{%p else %}")
+            if use_strict:
+                # Strict mode: heading + content disappear together when empty.
+                # Wrap starting at the heading itself, with no N/A fallback.
+                heading_para = all_paras[section.heading_idx]
+                _insert_paragraph_before(heading_para, f"{{%p if {cond_var} %}}")
+                _insert_paragraph_after(last_para, "{%p endif %}")
+            else:
+                # Legacy mode: keep the heading visible; only the content block is
+                # conditional, falling back to an "N/A" placeholder when empty.
+                first_para = all_paras[section.paragraph_indices[0]]
+                _insert_paragraph_before(first_para, f"{{%p if {cond_var} %}}")
+
+                # Insert in reverse order because addnext inserts directly after the same anchor.
+                _insert_paragraph_after(last_para, "{%p endif %}")
+                _insert_paragraph_after(last_para, "N/A")
+                _insert_paragraph_after(last_para, "{%p else %}")
 
     # --- Step 7: inject for-loops for repeating sections ---
     for section in sections:
@@ -593,16 +619,42 @@ def _classify_heading_text(text: str) -> str:
     return "other"
 
 
+def _borderline_heading_type(para) -> Optional[str]:
+    """Classify a paragraph that *looks* like a section heading by keyword but
+    was not confidently promoted by ``_is_heading`` (e.g. "Skills Summary"
+    without any heading styling).
+
+    Returns the matched section type, or ``None`` if it is not a borderline
+    heading. Borderline headings get the legacy keep-heading + "N/A" fallback.
+    """
+    text = (para.text or "").strip()
+    if not text or len(text) >= 40:
+        return None
+    section_type = _classify_heading_text(text)
+    if section_type == "other":
+        return None
+    # Exact keyword matches are already handled by _is_heading; only treat
+    # partial/loose keyword matches as borderline.
+    text_norm = _normalize_heading_text(text)
+    if any(text_norm in keywords for keywords in _NORMALIZED_HEADING_KEYWORDS.values()):
+        return None
+    return section_type
+
+
 def _detect_sections(paragraphs) -> List[Section]:
     """Walk paragraphs and group them into logical sections."""
     sections: List[Section] = []
-    heading_indices: List[Tuple[int, str]] = []
+    heading_indices: List[Tuple[int, str, bool]] = []
 
     # Find all headings
     for i, para in enumerate(paragraphs):
         if _is_heading(para):
             section_type = _classify_heading_text(para.text)
-            heading_indices.append((i, section_type))
+            heading_indices.append((i, section_type, False))
+        else:
+            borderline_type = _borderline_heading_type(para)
+            if borderline_type is not None:
+                heading_indices.append((i, borderline_type, True))
 
     # Everything before the first heading = "header"
     first_heading_idx = heading_indices[0][0] if heading_indices else len(paragraphs)
@@ -612,7 +664,7 @@ def _detect_sections(paragraphs) -> List[Section]:
         sections.append(header)
 
     # Each heading starts a new section, ending at the next heading
-    for pos, (h_idx, h_type) in enumerate(heading_indices):
+    for pos, (h_idx, h_type, h_borderline) in enumerate(heading_indices):
         next_idx = (
             heading_indices[pos + 1][0] if pos + 1 < len(heading_indices)
             else len(paragraphs)
@@ -621,6 +673,7 @@ def _detect_sections(paragraphs) -> List[Section]:
             section_type=h_type,
             heading_idx=h_idx,
             paragraph_indices=list(range(h_idx + 1, next_idx)),
+            borderline=h_borderline,
         )
         sections.append(section)
 

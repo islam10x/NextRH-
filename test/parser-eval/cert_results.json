@@ -1,0 +1,481 @@
+[
+  {
+    "file": "CV + DIP + CERTIF sabrine-4.pdf",
+    "expected": {
+      "certification_name": "NSE 1 Network Security Associate",
+      "issuer": "Fortinet",
+      "issuer_aliases": [
+        "Fortinet Training Institute",
+        "NSE Institute"
+      ],
+      "certification_name_aliases": []
+    },
+    "parsed": {
+      "success": true,
+      "certification_name": "NSE 1 Network Security Associate",
+      "issuer": "Fortinet",
+      "issue_date": "2020-09-15",
+      "expiration_date": null,
+      "credential_id": null,
+      "raw_text": "NSE Institute\nSabrine Zouabi\nNSE 1 Network Security Associate\nSeptember 15, 2020\n2 years\njzkXiyoAgy\nVerify this certification's authenticity at:\nhttps://training.fortinet.com/mod/customcert/verify_certificate.php\nPowered by TCPDF (www.tcpdf.org)\n--- OCR Supplement ---\nSee TINET: NSE Gertitied\nNSE Institute a\nThis nettifies that —— a\nSabrine Zouabi\nhas achieved Fortinet’s Network Security Expert certification\nNSE 1 Network Security Associate\nCertification Date: September 15, 2020\nCertification Validity: 2 years\nCertification Number: jzkXiyoAgy\nKen Xie Michael Xie\nCEO of Fortinet President and Chief Technology\nOfficer (CTO), Fortinet\nee er Verify this certification'’s authenticity at:\nfe htips://training.fortinet.com/mod/customcert/verify_certificate.php\n--- Alternative OCR ---\nag || ||\nF:-RTIMET. NSE Certified\nNSE Institute\nThis certifies that\nSabrine Zouabi\nhas achieved Fortinet’s Network Security Expert certification\nNSE 1 Network Security Associate\nCertification Date: September 15, 2"
+    },
+    "correct": {
+      "certification_name": true,
+      "issuer": true
+    },
+    "latency_seconds": 17.057
+  },
+  {
+    "file": "CV + DIP + CERTIF sabrine-5.pdf",
+    "expected": {
+      "certification_name": "NSE 2 Network Security Associate",
+      "issuer": "Fortinet",
+      "issuer_aliases": [
+        "Fortinet Training Institute",
+        "NSE Institute"
+      ],
+      "certification_name_aliases": []
+    },
+    "parsed": {
+      "success": true,
+      "certification_name": "NSE 2 Network Security Associate",
+      "issuer": "Fortinet",
+      "issue_date": "2020-09-16",
+      "expiration_date": null,
+      "credential_id": null,
+      "raw_text": "NSE Institute\nSabrine Zouabi\nNSE 2 Network Security Associate\nSeptember 16, 2020\n2 years\nObPlYsVxpZ\nVerify this certification's authenticity at:\nhttps://training.fortinet.com/mod/customcert/verify_certificate.php\nPowered by TCPDF (www.tcpdf.org)\n--- OCR Supplement ---\nSee TINET: NSE Gertitied\nNSE Institute a\nThis nettifies that —— a\nSabrine Zouabi\nhas achieved Fortinet’s Network Security Expert certification\nNSE 2 Network Security Associate\nCertification Date: September 16, 2020\nCertification Validity: 2 years\nCertification Number: ObPIYsVxpZ\nKen Xie Michael Xie\nCEO of Fortinet President and Chief Technology\nOfficer (CTO), Fortinet\ngies\nseu httos://training.fortinet.com/mod/customcert/verify_certificate.php\nVerify this certification'’s authenticity at:\n--- Alternative OCR ---\nag || ||\nF:-RTINET. NSE Certified\nNSE Institute\nThis certifies that\nSabrine Zouabi\nhas achieved Fortinet’s Network Security Expert certification\nNSE 2 Network Security Associate\nCertification Date: September 16, 2"
+    },
+    "correct": {
+      "certification_name": true,
+      "issuer": true
+    },
+    "latency_seconds": 16.99
+  },
+  {
+    "file": "CV + DIP + CERTIF sabrine-6.pdf",
+    "expected": {
+      "certification_name": "NSE 3 Network Security Associate",
+      "issuer": "Fortinet",
+      "issuer_aliases": [
+        "Fortinet Training Institute",
+        "NSE Institute"
+      ],
+      "certification_name_aliases": []
+    },
+    "parsed": {
+      "success": true,
+      "certification_name": "NSE 3 Network Security Associate",
+      "issuer": "Fortinet",
+      "issue_date": "2021-05-05",
+      "expiration_date": "2023-05-05",
+      "credential_id": "Z6HWJPLjV5",
+      "raw_text": "FEERTINET.\nNSE Training Institute\nCertification Program\nThis certifies that\nSabrine Zouabi\nNas achieved\nNSE 3 Network Security Associate\nDate of achievement: May 5, 2021\nValid until: May 5, 2023\nCertification Validation number: Z6HWJPLjV5\nCLG i\nKen Xie Michael Xie\nCEO of Fortinet President and Chief Technology\n— Officer (CTO), Fortinet\neg ® Verify this certification’s authenticity at:\ntee an a https://training.fortinet.com/mod/customcert/verify certificate.php\n--- Alternative OCR ---\nFiRTINET. : }\nNSE Training Institute NSE tits\nCertification Program a Dit\nThis certifies that nit\nSabrine Zouabi a\nhas achieved 7\nNSE 3 Network Security Associate\nDate of achievement: May 5, 2021\nValid until: May 5, 2023\nCertification Validation number: z6HWJPLjV5\nKen Xie Michael Xie\nCEO of Fortinet President and Chief Technology\n_ mip Officer (CTO), Fortinet\nVerify this certification’s authenticity at:\nee https://training.fortinet.com/mod/customcert/verify certificate.php\n--- Embedded Text ---\nSabrine Zou"
+    },
+    "correct": {
+      "certification_name": true,
+      "issuer": true
+    },
+    "latency_seconds": 17.823
+  },
+  {
+    "file": "CV + DIP + CERTIF sabrine-7.pdf",
+    "expected": {
+      "certification_name": "NSE 4 Network Security Professional",
+      "issuer": "Fortinet",
+      "issuer_aliases": [
+        "Fortinet Training Institute",
+        "NSE Institute"
+      ],
+      "certification_name_aliases": []
+    },
+    "parsed": {
+      "success": true,
+      "certification_name": "NSE 4 Network Security Professional",
+      "issuer": "Fortinet",
+      "issue_date": "2022-01-28",
+      "expiration_date": "2024-01-28",
+      "credential_id": "hlTduoeQFT",
+      "raw_text": "FEERTINET.\nNSE Training Institute\nCertification Program\nThis certifies that\nSabrine Zouabi\nNas achieved\nNSE 4 Network Security Professional\nDate of achievement: January 28, 2022\nValid until: January 28, 2024\nCertification Validation number: hlTduoeQFT\nCLG i\nKen Xie Michael Xie\nCEO of Fortinet President and Chief Technology\nOfficer (CTO), Fortinet\nae ; a Verify this certification’s authenticity at:\nKee https://training.fortinet.com/mod/customcert/verify_certificate.php\n--- Alternative OCR ---\nFiRTINET. . }\nNSE Training Institute NE Bits\nCertification Program __. Dit\nThis certifies that rit\nSabrine Zouabi unt\nhas achieved 7\nNSE 4 Network Security Professional\nDate of achievement: January 28, 2022\nValid until: January 28, 2024\nCertification Validation number: hlTduoeOFT\nKen Xie Michael Xie\nCEO of Fortinet President and Chief Technology\n_ maeisel Officer (CTO), Fortinet\nVerify this certification’s authenticity at:\nae https://training.fortinet.com/mod/customcert/verify certificate.php\n--- E"
+    },
+    "correct": {
+      "certification_name": true,
+      "issuer": true
+    },
+    "latency_seconds": 18.599
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-10.pdf",
+    "expected": {
+      "certification_name": "Final Exam Success - XDR Analyst",
+      "issuer": "Secureworks",
+      "issuer_aliases": [],
+      "certification_name_aliases": []
+    },
+    "parsed": {
+      "success": true,
+      "certification_name": "Final Exam Success - XDR Analyst",
+      "issuer": "Secureworks",
+      "issue_date": "2021-12-16",
+      "expiration_date": null,
+      "credential_id": null,
+      "raw_text": "Certificate https://secureworks-pu.sabacloud.com/content/prodencryption/3Iq_E...\nCertificate of\nAchievement\npresented to\nMohamed YEFRNI\nfor the successful completion of\nFinal Exam Success - XDR Analyst\nKeep up the great work!\n1 sur 1 16/12/2021, 19:13\n--- OCR Supplement ---\nCertificate https://secureworks-pu.sabacloud.com/content/prodencryption/3Iq_E...\nCertificate of\nAchievement\npresented to\nMohamed YEFRNI\nfor the successful completion of\nFinal Exam Success - XDR Analyst\nKeep up the great work!\n1 sur 1 16/12/2021, 19:13\n--- Alternative OCR ---\nCertificate https://secureworks-pu.sabacloud.com/content/prodencryption/3lq_E...\ne e |\nCertificate of\nAchievement\npresented to\nMohamed YEFRNI\nfor the successful completion of\nwo Final Exam Success - XDR Analyst\nr 4 Keep up the great work! |\n1 sur 1 16/12/2021, 19:13"
+    },
+    "correct": {
+      "certification_name": true,
+      "issuer": true
+    },
+    "latency_seconds": 20.025
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-11.pdf",
+    "expected": {
+      "certification_name": "Palo Alto Networks Certified Network Security Engineer",
+      "issuer": "Palo Alto Networks",
+      "issuer_aliases": [
+        "Palo Alto"
+      ],
+      "certification_name_aliases": [
+        "PCNSE",
+        "as a Palo Alto Networks Certified Network: Sectirity-E Engine Bere NS ee ESS SESE"
+      ]
+    },
+    "parsed": {
+      "success": true,
+      "certification_name": "as a Palo Alto Networks Certified Network: Sectirity-E Engine Bere NS ee ESS SESE",
+      "issuer": "Palo Alto",
+      "issue_date": "2021-05-06",
+      "expiration_date": "2023-05-06",
+      "credential_id": "BREK564CDFEE1GKK",
+      "raw_text": "Mohamed Yefrni Jr\nMay 06, 2021\nExpires: May 6, 2023\nCertificate Code: PCNSE\nVerification #: BREK564CDFEE1GKK\nhttps://www.certmetrics.com/PaloAltoNetworks/public/verification.aspx\n--- OCR Supplement ---\naw ae |\n= at =\"\nNERS ad\n_ pi\nim Is (SrA |\ned ett et\ni . ‘ 4\nrae FA as\ni i.\niy Luduikd\nject Weds |\nperren sreeng eee [_merern | Le\nPeal |\nPanepnna\nSacra\nera [ecu\nfo ar um eT\nFash le\nuum | tne aI Hic Vili doak at ye! ye ue | Ta ool le To au\nee Ce en ee eee ee\nae pea = a= ain\nTHIS CERTIFICATE OF a Lonnri_\nee ee Eee Ie\n= = ananenn_| Sma = MTA Lond fen lth a 3\nok dee OE es ee EE\nee ee ea Le rn ee re\naarale ee Lod [ ananaean_| l =a = Lond ne IU = =m\ndeal alae CIES alter SI dele\nhas successfully demonsirated the knowledge and'skill Stopes sogniree us ann\nas a Palo Alto Networks Certified Network: Sectirity-E Engine Bere NS ee ESS SESE\n. ee ed eet Ee\nwoe! i os Cael\" www ww Www\n“mie SSCS SSCS ace\nihe . : alr [ CaO} {| ww ww\npine See ee Ue ee\na ee\n= ASS aa SE eA re ene\na eee eee\n“Ae NCC CAMEO EA A"
+    },
+    "correct": {
+      "certification_name": true,
+      "issuer": true
+    },
+    "latency_seconds": 26.31
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-12.pdf",
+    "expected": {
+      "certification_name": "Nexpose Certified Administrator",
+      "issuer": "Rapid7",
+      "issuer_aliases": [],
+      "certification_name_aliases": []
+    },
+    "parsed": {
+      "success": true,
+      "certification_name": "Nexpose Certified Administrator",
+      "issuer": "Rapid7",
+      "issue_date": null,
+      "expiration_date": null,
+      "credential_id": null,
+      "raw_text": "Nexpose Certified Administrator\nISSUED TO\nyefrni mohamed\nRAPIDY)\nNTOOSS\nCERTIBIED\nADMINISTRATOR:\nIssued on: 06 DEC 2020 | Issued by: Rapid7\nVerify: https://www.youracclaim.com/go/rlYzjqS7\n--- Alternative OCR ---\nRAPIDYD\nNexpose Certified Administrator\nISSUED TO\nyefrni mohamed\nRAPIDYD\nnexpose\nIssued on: 06 DEC 2020 | Issued by: Rapid7\nVerify: https://www.youracclaim.com/go/rlY¥zjqS7\n--- Embedded Text ---\nNexpose Certified Administrator\nISSUED TO\nyefrni mohamed\nIssued on: 06 DEC 2020 | Issued by: Rapid7\nVerify: https://www.youracclaim.com/go/rIYzjqS7"
+    },
+    "correct": {
+      "certification_name": true,
+      "issuer": true
+    },
+    "latency_seconds": 20.292
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-13.pdf",
+    "expected": {
+      "certification_name": "Advanced Vulnerability Manager",
+      "issuer": "Rapid7",
+      "issuer_aliases": [],
+      "certification_name_aliases": []
+    },
+    "parsed": {
+      "success": true,
+      "certification_name": "Advanced Vulnerability Manager",
+      "issuer": "Rapid7",
+      "issue_date": null,
+      "expiration_date": null,
+      "credential_id": "IMNOOPWG",
+      "raw_text": "Advanced Vulnerability Manager\nISSUED TO\nyefrni mohamed\nRAPIDY)\nVulnerability,\nCERTIFIED\nIssued on: 29 DEC 2020 | Issued by: Rapid7\nVerify: https://www.youracclaim.com/go/IMNOOPWG\n--- Alternative OCR ---\nRAPIDYD\nAdvanced Vulnerability Manager\nISSUED TO\nyefrni mohamed\nRAPID\nIssued on: 29 DEC 2020 | Issued by: Rapid7\nVerify: https://www.youracclaim.com/go/IMNOOPWG\n--- Embedded Text ---\nAdvanced Vulnerability Manager\nISSUED TO\nyefrni mohamed\nIssued on: 29 DEC 2020 | Issued by: Rapid7\nVerify: https://www.youracclaim.com/go/IMN00PwG"
+    },
+    "correct": {
+      "certification_name": true,
+      "issuer": true
+    },
+    "latency_seconds": 20.31
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-14.pdf",
+    "expected": {
+      "certification_name": "Sophos Certified Engineer",
+      "issuer": "Sophos",
+      "issuer_aliases": [],
+      "certification_name_aliases": []
+    },
+    "parsed": {
+      "success": true,
+      "certification_name": "Sophos Certified Engineer",
+      "issuer": "Sophos",
+      "issue_date": "2020-02-05",
+      "expiration_date": null,
+      "credential_id": null,
+      "raw_text": "SOPHOS\nSecurity made simple.\neast\nCertificate of Achievement\nmohamed yeirni\nis now a\nSophos Certified Engineer\nheld on Feb 05, 2020\nSIAL\n--- Alternative OCR ---\nSOPHOS\nCertificate of Achievement\nmohamed yefrni\nheld on Feb 05, 2020\n--- Embedded Text ---\nCertificate of Achievement\nmohamed yefrni\nis now a\nSophos Certified Engineer\nheld on Feb 05, 2020\nKris Hagerman, Sophos CEO"
+    },
+    "correct": {
+      "certification_name": true,
+      "issuer": true
+    },
+    "latency_seconds": 20.147
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-4.pdf",
+    "expected": {
+      "certification_name": "NSE 1 Network Security Associate",
+      "issuer": "Fortinet",
+      "issuer_aliases": [
+        "Fortinet Training Institute",
+        "NSE Institute"
+      ],
+      "certification_name_aliases": []
+    },
+    "parsed": {
+      "success": true,
+      "certification_name": "NSE 1 Network Security Associate",
+      "issuer": "Fortinet",
+      "issue_date": "2020-05-28",
+      "expiration_date": null,
+      "credential_id": null,
+      "raw_text": "NSE Institute\nmohamed yefrni\nNSE 1 Network Security Associate\nMay 28, 2020\n2 years\nCaOeV8wqKx\nVerify this certification's authenticity at:\nhttps://training.fortinet.com/mod/customcert/verify_certificate.php\nPowered by TCPDF (www.tcpdf.org)\n--- OCR Supplement ---\nen an\nSee TINET: NSE Gertitied\nNSE Institute a\nThis certifies that : — — ae\nmohamed yeirni\nhas achieved Fortinet’s Network Security Expert certification\nNSE 1 Network Security Associate\nCertification Date: May 28, 2020\nCertification Validity: 2 years\nCertification Number: CaOeV8wqkx\nKen Xie Michael Xie\nCEO of Fortinet President and Chief Technology\nOfficer (CTO), Fortinet\n--- Alternative OCR ---\nFeo Ug || ||\nF.sRTINET. NSE Certified\nNSE Institute\nThis certifies that\nmohamed yefrni\nhas achieved Fortinet’s Network Security Expert certification\nNSE 1 Network Security Associate\nCertification Date: May 28, 2020\nCertification Validity: 2 years\nCertification Number: CaOeV8wqkx\nKen Xie Michael Xie\nCEO of Fortinet President and Chief Te"
+    },
+    "correct": {
+      "certification_name": true,
+      "issuer": true
+    },
+    "latency_seconds": 16.637
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-5.pdf",
+    "expected": {
+      "certification_name": "NSE 2 Network Security Associate",
+      "issuer": "Fortinet",
+      "issuer_aliases": [
+        "Fortinet Training Institute",
+        "NSE Institute"
+      ],
+      "certification_name_aliases": []
+    },
+    "parsed": {
+      "success": true,
+      "certification_name": "NSE 2 Network Security Associate",
+      "issuer": "Fortinet",
+      "issue_date": "2020-05-28",
+      "expiration_date": null,
+      "credential_id": null,
+      "raw_text": "NSE Institute\nmohamed yefrni\nNSE 2 Network Security Associate\nMay 28, 2020\n2 years\nI0G8gnCp3n\nVerify this certification's authenticity at:\nhttps://training.fortinet.com/mod/customcert/verify_certificate.php\nPowered by TCPDF (www.tcpdf.org)\n--- OCR Supplement ---\nen an\nSee TINET: NSE Gertitied\nNSE Institute a\nThis certifies that : — — ae\nmohamed yeirni\nhas achieved Fortinet’s Network Security Expert certification\nNSE 2 Network Security Associate\nCertification Date: May 28, 2020\nCertification Validity: 2 years\nCertification Number: [0G8gnCp3n\nKen Xie Michael Xie\nCEO of Fortinet President and Chief Technology\nOfficer (CTO), Fortinet\n--- Alternative OCR ---\nag || ||\nF.sRTInNeEg. NSE Certified\nNSE Institute\nThis certifies that\nmohamed yefrni\nhas achieved Fortinet’s Network Security Expert certification\nNSE 2 Network Security Associate\nCertification Date: May 28, 2020\nCertification Validity: 2 years\nCertification Number: l0G8gnCp3n\nKen Xie Michael Xie\nCEO of Fortinet President and Chief Tech"
+    },
+    "correct": {
+      "certification_name": true,
+      "issuer": true
+    },
+    "latency_seconds": 16.302
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-6.pdf",
+    "expected": {
+      "certification_name": "NSE 3 Network Security Associate",
+      "issuer": "Fortinet",
+      "issuer_aliases": [
+        "Fortinet Training Institute",
+        "NSE Institute"
+      ],
+      "certification_name_aliases": []
+    },
+    "parsed": {
+      "success": true,
+      "certification_name": "NSE 3 Network Security Associate",
+      "issuer": "Fortinet",
+      "issue_date": "2020-05-29",
+      "expiration_date": null,
+      "credential_id": null,
+      "raw_text": "NSE Institute\nmohamed yefrni\nNSE 3 Network Security Associate\nMay 29, 2020\n2 years\nurk7TrOvtJ\nVerify this certification's authenticity at:\nhttps://training.fortinet.com/mod/customcert/verify_certificate.php\nPowered by TCPDF (www.tcpdf.org)\n--- OCR Supplement ---\nen an\nSee TINET: NSE Gertitied\nNSE Institute a\nThis certifies that : — — ae\nmohamed yeirni\nhas achieved Fortinet’s Network Security Expert certification\nNSE 3 Network Security Associate\nCertification Date: May 29, 2020\nCertification Validity: 2 years\nCertification Number: urk7TrOvtJ\nKen Xie Michael Xie\nCEO of Fortinet President and Chief Technology\nOfficer (CTO), Fortinet\n--- Alternative OCR ---\nag || ||\nF:-RTINET. NSE Certified\nNSE Institute\nThis certifies that\nmohamed yefrni\nhas achieved Fortinet’s Network Security Expert certification\nNSE 3 Network Security Associate\nCertification Date: May 29, 2020\nCertification Validity: 2 years\nCertification Number: = urk7TrOvtJ\nKen Xie Michael Xie\nCEO of Fortinet President and Chief Tech"
+    },
+    "correct": {
+      "certification_name": true,
+      "issuer": true
+    },
+    "latency_seconds": 17.133
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-7.pdf",
+    "expected": {
+      "certification_name": "NSE 4 Network Security Professional",
+      "issuer": "Fortinet",
+      "issuer_aliases": [
+        "Fortinet Training Institute",
+        "NSE Institute"
+      ],
+      "certification_name_aliases": []
+    },
+    "parsed": {
+      "success": true,
+      "certification_name": "NSE 4 Network Security Professional",
+      "issuer": "Fortinet",
+      "issue_date": "2021-09-06",
+      "expiration_date": "2023-09-06",
+      "credential_id": "yK2CoDVT7Y",
+      "raw_text": "FEERTINET.\nNSE Training Institute\nCertification Program\nThis certifies that\nmohamed yefrni\nhas achieved\nNSE 4 Network Security Professional\nDate of achievement: September 6, 2021\nValid until: September 6, 2023\nCertification Validation number: yK2CoDVT7Y\nCLG i\nKen Xie Michael Xie\nCEO of Fortinet President and Chief Technology\n_ Officer (CTO), Fortinet\nOP anes\nare J Verify this certification’s authenticity at:\nfweaek https://training.fortinet.com/mod/customcert/verify certificate.php\n--- Alternative OCR ---\nFiRTINET. .\nNSE Training Institute NE Bits\nCertification Program __. Dit\nThis certifies that nit\nmohamed yefrni —\nhas achieved 7\nNSE 4 Network Security Professional\nDate of achievement: September 6, 2021\nValid until: September 6, 2023\nCertification Validation number: yK2CoDVT7Y\nKen Xie Michael Xie\nCEO of Fortinet President and Chief Technology\n_ Bee Officer (CTO), Fortinet\nVerify this certification’s authenticity at:\nferee https://training.fortinet.com/mod/customcert/verify certificat"
+    },
+    "correct": {
+      "certification_name": true,
+      "issuer": true
+    },
+    "latency_seconds": 17.701
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-8.pdf",
+    "expected": {
+      "certification_name": "NSE 7 Network Security Architect",
+      "issuer": "Fortinet",
+      "issuer_aliases": [
+        "Fortinet Training Institute",
+        "NSE Institute"
+      ],
+      "certification_name_aliases": []
+    },
+    "parsed": {
+      "success": true,
+      "certification_name": "NSE 7 Network Security Architect",
+      "issuer": "Fortinet",
+      "issue_date": "2021-10-08",
+      "expiration_date": "2023-10-08",
+      "credential_id": "ZFjJH6YvMVj",
+      "raw_text": "FEERTINET.\nNSE Training Institute\nCertification Program\nThis certifies that\nmohamed yefrni\nhas achieved\nNSE 7 Network Security Architect\nDate of achievement: October 8, 2021\nValid until: October 8, 2023\nCertification Validation number: ZFjJH6YvMVj\nCLG i\nKen Xie Michael Xie\nCEO of Fortinet President and Chief Technology\nmeee Officer (CTO), Fortinet\naise Verify this certification’s authenticity at:\n“eat! https://training.fortinet.com/mod/customcert/verify certificate.php\n--- Alternative OCR ---\nFiRTINET. - }\nNSE Training Institute NSE tit\nCertification Program _. Dit\nThis certifies that rit\nmohamed yefrni —\nhas achieved 7\nNSE 7 Network Security Architect\nDate of achievement: October 8, 2021\nValid until: October 8, 2023\nCertification Validation number: ZFjH6YvMVj\nZan (1a\nKen Xie Michael Xie\nCEO of Fortinet President and Chief Technology\n_ lassie Officer (CTO), Fortinet\nVerify this certification’s authenticity at:\nfeac! https://training.fortinet.com/mod/customcert/verify certificate.php\n--"
+    },
+    "correct": {
+      "certification_name": true,
+      "issuer": true
+    },
+    "latency_seconds": 17.617
+  },
+  {
+    "file": "CV + DIP +CERTIF Mohamed YEFERNI VF-9.pdf",
+    "expected": {
+      "certification_name": "ADC200 - Barracuda Load Balancer ADC Certified Product Specialist",
+      "issuer": "Barracuda",
+      "issuer_aliases": [
+        "BarracudaCampus"
+      ],
+      "certification_name_aliases": [
+        "Barracuda Load Balancer ADC Certified Product Specialist"
+      ]
+    },
+    "parsed": {
+      "success": true,
+      "certification_name": "ADC200 - Barracuda Load Balancer ADC Certified Product Specialist",
+      "issuer": "Barracuda",
+      "issue_date": "2022-01-07",
+      "expiration_date": "2024-01-07",
+      "credential_id": "4c2a8f63c700fda0ff039b63d52ce1c6",
+      "raw_text": "Certificate of Achievement\nADC200 - Barracuda Load Balancer ADC Certified Product Specialist\nThis certificate is to confirm that\nyefrni mohamed\nhas successfully completed the exam(s) for this certification\nValid from 2022-01-07 until 2024-01-07\nHatem Naguib - CEO\nVerify this certificate: https://campus.barracuda.com/certification/verify/4c2a8f63c700fda0ff039b63d52ce1c6\nPowered by TCPDF (www.tcpdf.org)\n--- OCR Supplement ---\nSens.\nSIN SOOKE.\nCON SKOKIE\nBeseeeeann PEORES S|\nSENN PiISgeS\nSee nN ey TPR\nwh tif\nBarracudaCampus\nCertificate of Achievement\nADC200 - Barracuda Load Balancer ADC Certified Product Specialist\nThis certificate is to confirm that\nyefrni mohamed\nhas successfully completed the exam(s) for this certification\nValid from 2022-01-07 until 2024-01-07\nWe Barracuda.\nYour journey, secured.\nHatem Naguib - CEO\nVerify this certificate: https://campus.barracuda.com/certification/verify/4c2a8f63c700fda0f039b63d52ce1c6 ih\n--- Alternative OCR ---\nBarracudaCampus\nCertificate of Achieve"
+    },
+    "correct": {
+      "certification_name": true,
+      "issuer": true
+    },
+    "latency_seconds": 26.848
+  },
+  {
+    "file": "CV+ Diplome +Certificats  Mohamed Yferni SOPHOS-5.pdf",
+    "expected": {
+      "certification_name": "ET01 - Sophos Central Overview - Engineer",
+      "issuer": "Sophos",
+      "issuer_aliases": [],
+      "certification_name_aliases": [
+        "ETO1 - Sophes Central Overview - Engineer Feb 05, 2020 1.75 content hours"
+      ]
+    },
+    "parsed": {
+      "success": true,
+      "certification_name": "ETO1 - Sophes Central Overview - Engineer Feb 05, 2020 1.75 content hours",
+      "issuer": "Sophos",
+      "issue_date": "2020-02-05",
+      "expiration_date": null,
+      "credential_id": null,
+      "raw_text": "Hllowirig'é\noséfully edrripléted t\nFeb:05, 2020 175. content haurs.\n-Sybhersecurity: valve ec\n--- Alternative OCR ---\nCertificate of Achievement\nmohamed yefrni\nhas successfully completed the rollawing course\nETO1 - Sophes Central Overview - Engineer\nFeb 05, 2020 1.75 content hours\n_ eae - SOPHOS\nBl et Cy dana cae ty ecrabyed|\n--- Embedded Text ---\nCertificate of Achievement\nmohamed yefrni\nhas successfully completed the following course\nET01 - Sophos Central Overview - Engineer\nFeb 05, 2020 t.zs content hours\ni 50PH05\nHagerman, Sophos CE0 Cybersecurity evolved{r"
+    },
+    "correct": {
+      "certification_name": true,
+      "issuer": true
+    },
+    "latency_seconds": 15.483
+  },
+  {
+    "file": "CV+ Diplome +Certificats  Mohamed Yferni SOPHOS-6.pdf",
+    "expected": {
+      "certification_name": "ET80 - XG Firewall v17.5 - Engineer",
+      "issuer": "Sophos",
+      "issuer_aliases": [],
+      "certification_name_aliases": []
+    },
+    "parsed": {
+      "success": true,
+      "certification_name": "ET80 - XG Firewall v17.5 - Engineer",
+      "issuer": "Sophos",
+      "issue_date": null,
+      "expiration_date": null,
+      "credential_id": null,
+      "raw_text": "‘ET80 - XG Firewall v17.5- Engineer\nJan:04, 2020\nGebareec\nLinlby iad\ncnet:\n--- Alternative OCR ---\nCertificate of Achievement\nmohamed yefrni\nET@Q - 4G Firewall v1/.5 - Engineer\nJan Ot, 2020\n[ieee - SOPHOS\nies mre MeL that pouhterece! Cyt stash yan\n--- Embedded Text ---\nCertificate of Achievement\nmohamed yefrni\nET80 - XG Firewall v17.5 - Engineer\nJan 01 ,2020\nSOPHOS\nHaserman. Sophos cEo Cybersecurity evolved"
+    },
+    "correct": {
+      "certification_name": true,
+      "issuer": true
+    },
+    "latency_seconds": 18.276
+  },
+  {
+    "file": "CV+ Diplome +Certificats  Mohamed Yferni SOPHOS-7.pdf",
+    "expected": {
+      "certification_name": "ET80 - Sophos Firewall v18.5 - Engineer",
+      "issuer": "Sophos",
+      "issuer_aliases": [],
+      "certification_name_aliases": [
+        "ET80 - Sophos Firewall v18.5 - Engineer Feb 23, 2022 8.75 Gontent hours"
+      ]
+    },
+    "parsed": {
+      "success": true,
+      "certification_name": "ET80 - Sophos Firewall v18.5 - Engineer Feb 23, 2022 8.75 Gontent hours",
+      "issuer": "Sophos",
+      "issue_date": "2022-02-23",
+      "expiration_date": null,
+      "credential_id": null,
+      "raw_text": "ed yefrni\n75 content hours:\nEubbersneturity eotver\\\n--- Alternative OCR ---\nCertificate of Achievement\nmohamed yefrni\nhas successfully completed the fallawing course\nET80 - Sophos Firewall v18.5 - Engineer\nFeb 23, 2022 8.75 Gontent hours\n_ Ceeciea. SOPHOS\na, Bs: Shp. cua ne eb oyb araccneeby ecb\n--- Embedded Text ---\nCertificate of Achievement\nmohamed yefrni\nhas successfully completed the following course\nET80 - Sophos Firewall v18.5 - Engineer\nFeb 23,2022 8.75 content hours\n50PH05 /.KrisHagerman. Sophos CE0 Cybersecurity evolvedtl.-"
+    },
+    "correct": {
+      "certification_name": true,
+      "issuer": true
+    },
+    "latency_seconds": 19.454
+  },
+  {
+    "file": "CV+ Diplome +Certificats  Mohamed Yferni SOPHOS-8.pdf",
+    "expected": {
+      "certification_name": "Sophos Central Endpoint Protection Certified Engineer v5.0 (ET1 5)",
+      "issuer": "Sophos",
+      "issuer_aliases": [],
+      "certification_name_aliases": [
+        "Sophos Central Endpoint Protection Certified (ET1 5) Engineer v5.0"
+      ]
+    },
+    "parsed": {
+      "success": true,
+      "certification_name": "Sophos Central Endpoint Protection Certified (ET1 5) Engineer v5.0",
+      "issuer": "Sophos",
+      "issue_date": null,
+      "expiration_date": null,
+      "credential_id": null,
+      "raw_text": "E!, TTT nlal .I qFTTTE\nGertificate\nof Achievement\nmohamed yefrni\nhas successfully completed the following course\nSophos Central Endpoint Protection Certified\n(ET1 5) Engineer v5.0\nCompleted on: Content hours:\n10/212024 7h 30m\nJoe LeW, Sophos CEO Defeat Cyberattacks\n--- OCR Supplement ---\nTOUO0UUU\nfarevaravarare\nCorp pleted: ¢ ore Bontant hours:\n| Oy 2/I0aa 7The3Qrn\n“Defest tCyberatincts\n--- Alternative OCR ---\nLAAAA A,\n@£2@0808a28a8\nSUEuUUuUUUS\nCertificate\nof Achievement\nmohamed yefrni\nhas successfully campieted the fallowing course\nsophos Central Endpoint Protection Certified\nEngineer v5.0 (£115)\nCompleted on. Content hours\n1O2/ 202 4 #h 3am\now Lavy, Soph CEO Defeat Cyberattacks"
+    },
+    "correct": {
+      "certification_name": true,
+      "issuer": true
+    },
+    "latency_seconds": 18.741
+  }
+]

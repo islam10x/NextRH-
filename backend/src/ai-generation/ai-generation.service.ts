@@ -1,10 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { HttpService } from '@nestjs/axios';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { firstValueFrom } from 'rxjs';
-import { Cron, CronExpression } from '@nestjs/schedule';
-import { Project } from '../projects/entities/project.entity';
+import { Injectable, Logger } from "@nestjs/common";
+import { HttpService } from "@nestjs/axios";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
+import { firstValueFrom } from "rxjs";
+import { Cron, CronExpression } from "@nestjs/schedule";
+import { Project } from "../projects/entities/project.entity";
 
 @Injectable()
 export class AIGenerationService {
@@ -22,9 +22,9 @@ export class AIGenerationService {
     try {
       const response: any = await firstValueFrom(
         this.httpService.post(
-          'http://localhost:11434/api/generate',
+          "http://localhost:11434/api/generate",
           {
-            model: 'qwen2.5:1.5b-instruct',
+            model: "qwen2.5:1.5b-instruct",
             prompt,
             stream: false,
           },
@@ -36,20 +36,23 @@ export class AIGenerationService {
       );
 
       // Extract the title and strip surrounding quotes or extra whitespace
-      let title: string = (response.data?.response ?? '').trim();
-      title = title.replace(/^["']|["']$/g, ''); // remove leading/trailing quotes
-      title = title.split('\n')[0].trim();        // take only the first line
+      let title: string = (response.data?.response ?? "").trim();
+      title = title.replace(/^["']|["']$/g, ""); // remove leading/trailing quotes
+      title = title.split("\n")[0].trim(); // take only the first line
 
       if (!title) {
-        throw new Error('Empty response from Ollama');
+        throw new Error("Empty response from Ollama");
       }
 
       return title;
     } catch (error) {
-      console.error('Error generating title with Ollama:', error?.message ?? error);
+      console.error(
+        "Error generating title with Ollama:",
+        error?.message ?? error,
+      );
       // Fallback: derive a short title from the first ~8 words of the description
       const words = description.trim().split(/\s+/);
-      return words.slice(0, 8).join(' ') + (words.length > 8 ? '...' : '');
+      return words.slice(0, 8).join(" ") + (words.length > 8 ? "..." : "");
     }
   }
 
@@ -59,7 +62,7 @@ export class AIGenerationService {
    */
   async generateAndStoreTitle(project: Project): Promise<Project> {
     if (
-      project.projectName?.toLowerCase() !== 'unknown project' ||
+      project.projectName?.toLowerCase() !== "unknown project" ||
       project.generatedTitle
     ) {
       return project;
@@ -105,7 +108,7 @@ export class AIGenerationService {
             AND p.project_description IS NOT NULL
             AND p.project_description <> ''
         `,
-        ['unknown project'],
+        ["unknown project"],
       );
     } catch (err: any) {
       this.logger.warn(
@@ -122,7 +125,7 @@ export class AIGenerationService {
 
     for (const project of projects) {
       try {
-        const description = String(project.projectDescription || '').trim();
+        const description = String(project.projectDescription || "").trim();
         if (!description) continue;
 
         const title = await this.generateProjectTitle(description);
@@ -130,8 +133,8 @@ export class AIGenerationService {
           .createQueryBuilder()
           .update(Project)
           .set({ generatedTitle: title })
-          .where('project_id = :projectId', { projectId: project.projectId })
-          .andWhere('generated_title IS NULL')
+          .where("project_id = :projectId", { projectId: project.projectId })
+          .andWhere("generated_title IS NULL")
           .execute();
 
         this.logger.log(

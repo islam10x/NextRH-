@@ -1,6 +1,6 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from uuid import UUID
 from app.rag.etl_ingest import ingest_employee, run_ingestion, delete_employee_vectors
 from app.rag.chat_agent import build_chain
@@ -27,7 +27,7 @@ async def delete_user_vectors(user_id: UUID, background_tasks: BackgroundTasks):
     return {"message": f"RAG vectors deletion queued for user {user_id}"}
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(..., min_length=1, max_length=2000)
     session_id: str = "default"
 
 # Lazy-built RAG artifacts (chain + stream function).

@@ -11,7 +11,7 @@ on:
 jobs:
   build-and-push:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: read
       packages: write
@@ -76,7 +76,7 @@ jobs:
     steps:
       - name: Deploy directly on VM
         run: |
-          cd /home/sysadmin/NEXTRH
+          cd /home/sysadmin/NextRH
           
           # Log in to GitHub Container Registry to pull private images
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin

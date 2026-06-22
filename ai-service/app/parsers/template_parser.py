@@ -867,14 +867,18 @@ class TemplateCVParser:
         if start_idx == -1:
             return []
 
+        has_content = False
         for i in range(start_idx + 1, len(lines)):
             current_line = lines[i]
             if any(self._match_keyword(current_line, keyword) for keyword in end_keywords):
                 end_idx = i
                 break
             if self._is_cert_section_header_line(current_line):
-                end_idx = i
-                break
+                if has_content:
+                    end_idx = i
+                    break
+            elif current_line.strip():
+                has_content = True
 
         return lines[start_idx:end_idx]
 
