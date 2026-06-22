@@ -9,107 +9,33 @@ on:
       - main
 
 jobs:
-  build-and-push:
+  deploy:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: self-hosted
-    permissions:
-      contents: read
-      packages: write
-    
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to the Container registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata (tags, labels) for frontend
-        id: meta-frontend
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/nextrh-frontend
-          tags: |
-            type=raw,value=latest
-            type=sha,format=short
-
-      - name: Build and push frontend image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./frontend
-          file: ./frontend/Dockerfile.prod
-          push: true
-          build-args: |
-            VITE_API_URL=${{ vars.VITE_API_URL || '/api' }}
-          tags: ${{ steps.meta-frontend.outputs.tags }}
-          labels: ${{ steps.meta-frontend.outputs.labels }}
-
-      - name: Extract metadata (tags, labels) for backend
-        id: meta-backend
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/nextrh-backend
-          tags: |
-            type=raw,value=latest
-            type=sha,format=short
-
-      - name: Build and push backend image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./backend
-          target: production
-          push: true
-          tags: ${{ steps.meta-backend.outputs.tags }}
-          labels: ${{ steps.meta-backend.outputs.labels }}
-
-      - name: Extract metadata (tags, labels) for ai-service
-        id: meta-ai
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/nextrh-ai-service
-          tags: |
-            type=raw,value=latest
-            type=sha,format=short
-
-      - name: Build and push ai-service image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./ai-service
-          push: true
-          tags: ${{ steps.meta-ai.outputs.tags }}
-          labels: ${{ steps.meta-ai.outputs.labels }}
-
-  deploy:
-    needs: build-and-push
-    runs-on: self-hosted
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - name: Deploy directly on VM
+      - name: Build and deploy on VM
         run: |
+          set -e
           cd /home/sysadmin/NextRH
 
-          # Use whichever Compose is installed (v2 plugin or legacy v1 binary)
+          # Sync the deploy checkout to the merged main so we build the latest code.
+          git fetch origin
+          git reset --hard origin/main
+
+          # Use whichever Compose is installed (v2 plugin or legacy v1 binary).
           if docker compose version >/dev/null 2>&1; then
             DC="docker compose"
           else
             DC="docker-compose"
           fi
 
-          # Log in to GitHub Container Registry to pull private images
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-          # Pull and recreate ONLY the app services that CD rebuilt.
-          # postgres / ollama / clamav / n8n are left running untouched.
-          $DC -f docker-compose.prod.yml pull backend ai-service frontend
+          # Build and (re)start ONLY the app services. postgres / ollama / clamav /
+          # n8n and the observability stack are left running untouched.
+          $DC -f docker-compose.prod.yml build backend ai-service frontend
           $DC -f docker-compose.prod.yml up -d backend ai-service frontend
 
-          # Clean up dangling images only (keep images of running services)
+          # Reclaim disk so repeated builds don't fill the VM.
+          # NOTE: never use --volumes / volume prune here — that would delete the
+          # Postgres DB and Ollama models. These only touch images/build cache.
           docker image prune -f
+          docker builder prune -af --filter "until=168h"
