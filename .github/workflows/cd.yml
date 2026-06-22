@@ -106,14 +106,10 @@ jobs:
           # Log in to GitHub Container Registry to pull private images
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-          # Pull the latest images
-          $DC -f docker-compose.prod.yml pull
+          # Pull and recreate ONLY the app services that CD rebuilt.
+          # postgres / ollama / clamav / n8n are left running untouched.
+          $DC -f docker-compose.prod.yml pull backend ai-service frontend
+          $DC -f docker-compose.prod.yml up -d backend ai-service frontend
 
-          # Remove existing containers first
-          $DC -f docker-compose.prod.yml down
-
-          # Recreate containers with the new images
-          $DC -f docker-compose.prod.yml up -d
-
-          # Clean up old unused images to save space
-          docker image prune -af
+          # Clean up dangling images only (keep images of running services)
+          docker image prune -f
