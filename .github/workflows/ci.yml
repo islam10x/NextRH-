@@ -99,9 +99,20 @@ jobs:
           python-version: '3.11'
 
       - name: Install system dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          NEEDRESTART_MODE: a
         run: |
-          sudo apt-get update
-          sudo apt-get install -y tesseract-ocr ffmpeg libsm6 libxext6
+          # Skip apt entirely when the tools are already on the VM (they persist
+          # across runs on a self-hosted runner). Lock timeout + noninteractive
+          # so it fails fast instead of hanging on apt locks / debconf prompts.
+          if ! command -v tesseract >/dev/null 2>&1 || ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo -E apt-get -o DPkg::Lock::Timeout=120 update
+            sudo -E apt-get -o DPkg::Lock::Timeout=120 install -y --no-install-recommends \
+              tesseract-ocr ffmpeg libsm6 libxext6
+          else
+            echo "System deps already present, skipping apt."
+          fi
 
       - name: Install Python dependencies
         run: |
