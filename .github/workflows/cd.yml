@@ -34,7 +34,10 @@ jobs:
         id: meta-frontend
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}/frontend
+          images: ghcr.io/${{ github.repository_owner }}/nextrh-frontend
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
 
       - name: Build and push frontend image
         uses: docker/build-push-action@v5
@@ -42,6 +45,8 @@ jobs:
           context: ./frontend
           file: ./frontend/Dockerfile.prod
           push: true
+          build-args: |
+            VITE_API_URL=${{ vars.VITE_API_URL || '/api' }}
           tags: ${{ steps.meta-frontend.outputs.tags }}
           labels: ${{ steps.meta-frontend.outputs.labels }}
 
@@ -49,12 +54,16 @@ jobs:
         id: meta-backend
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}/backend
+          images: ghcr.io/${{ github.repository_owner }}/nextrh-backend
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
 
       - name: Build and push backend image
         uses: docker/build-push-action@v5
         with:
           context: ./backend
+          target: production
           push: true
           tags: ${{ steps.meta-backend.outputs.tags }}
           labels: ${{ steps.meta-backend.outputs.labels }}
@@ -63,7 +72,10 @@ jobs:
         id: meta-ai
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}/ai-service
+          images: ghcr.io/${{ github.repository_owner }}/nextrh-ai-service
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
 
       - name: Build and push ai-service image
         uses: docker/build-push-action@v5
@@ -76,22 +88,32 @@ jobs:
   deploy:
     needs: build-and-push
     runs-on: self-hosted
+    permissions:
+      contents: read
+      packages: read
     steps:
       - name: Deploy directly on VM
         run: |
           cd /home/sysadmin/NextRH
-          
+
+          # Use whichever Compose is installed (v2 plugin or legacy v1 binary)
+          if docker compose version >/dev/null 2>&1; then
+            DC="docker compose"
+          else
+            DC="docker-compose"
+          fi
+
           # Log in to GitHub Container Registry to pull private images
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          
+
           # Pull the latest images
-          docker-compose -f docker-compose.prod.yml pull
-          
+          $DC -f docker-compose.prod.yml pull
+
           # Remove existing containers first
-          docker-compose -f docker-compose.prod.yml down
-          
+          $DC -f docker-compose.prod.yml down
+
           # Recreate containers with the new images
-          docker-compose -f docker-compose.prod.yml up -d
-          
+          $DC -f docker-compose.prod.yml up -d
+
           # Clean up old unused images to save space
           docker image prune -af
