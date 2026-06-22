@@ -79,7 +79,10 @@ services:
 
   # Ollama for LLM and Embeddings
   ollama:
-    image: ollama/ollama:latest
+    # Pinned to match the known-good local version. `latest` previously drifted
+    # to a newer Ollama whose changed chat template broke small-model behavior
+    # (RAG scope classifier). Keep this pinned and bump deliberately.
+    image: ollama/ollama:0.19.0
     container_name: cv-ollama
     volumes:
       - ollama-data:/root/.ollama
