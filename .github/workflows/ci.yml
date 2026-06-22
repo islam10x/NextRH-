@@ -97,7 +97,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
 
       - name: Install system dependencies
         run: |
@@ -106,8 +105,15 @@ jobs:
 
       - name: Install Python dependencies
         run: |
+          # Persistent venv lives in the runner's home (outside _work), so it
+          # survives across runs. pip only does real work when requirements
+          # change; otherwise every package is "already satisfied" (no downloads).
+          python -m venv ~/ci-venv-ai-service
+          source ~/ci-venv-ai-service/bin/activate
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          # Make the venv the active interpreter for subsequent steps.
+          echo "PATH=$PATH" >> "$GITHUB_ENV"
 
       - name: Test
         run: pytest
