@@ -32,7 +32,8 @@ jobs:
           # Build and (re)start ONLY the app services. postgres / ollama / clamav /
           # n8n and the observability stack are left running untouched.
           $DC -f docker-compose.prod.yml build backend ai-service frontend
-          $DC -f docker-compose.prod.yml up -d backend ai-service frontend
+          $DC -f docker-compose.prod.yml rm -f backend ai-service frontend || true
+          $DC -f docker-compose.prod.yml up -d --force-recreate backend ai-service frontend
 
           # Reclaim disk so repeated builds don't fill the VM.
           # NOTE: never use --volumes / volume prune here — that would delete the
