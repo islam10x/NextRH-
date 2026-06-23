@@ -2,6 +2,8 @@ import {
   Controller,
   Post,
   Get,
+  Patch,
+  Delete,
   Body,
   UseGuards,
   UseInterceptors,
@@ -25,6 +27,18 @@ import {
   ALLOWED_UPLOAD_MIME_TYPES,
   MAX_UPLOAD_BYTES,
 } from "../file-validation/file-validation.constants";
+import { UpdateProfileBasicsDto } from "./dto/update-profile-basics.dto";
+import {
+  CreateWorkExperienceDto,
+  UpdateWorkExperienceDto,
+} from "./dto/work-experience.dto";
+import { CreateEducationDto, UpdateEducationDto } from "./dto/education.dto";
+
+const SELF_EDIT_ROLES = [
+  UserRole.EMPLOYEE,
+  UserRole.TEAM_MANAGER,
+  UserRole.BID_MANAGER,
+];
 
 @Controller("cv")
 export class CvController {
@@ -42,19 +56,83 @@ export class CvController {
   }
 
   /**
-   * Your Logic: Endpoint for AI parsing service to send structured data
+   * Self-service correction of parsing errors in the previewed CV. Each
+   * endpoint below is scoped to the calling user's own profile.
    */
-  @Post("process")
-  async processCv(@Body() body: { userId: string; data: any }) {
-    return this.cvService.processCvData(body.userId, body.data);
+  @Patch("profile/me")
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...SELF_EDIT_ROLES)
+  async updateProfileBasics(
+    @CurrentUser() user: any,
+    @Body() dto: UpdateProfileBasicsDto,
+  ) {
+    const userId = user.user_id || user.id;
+    return this.cvService.updateProfileBasics(userId, dto);
   }
 
-  /**
-   * One-time backfill: populate project dates from stored metadata.json files
-   */
-  @Post("backfill-project-dates")
-  async backfillProjectDates() {
-    return this.cvService.backfillProjectDates();
+  @Post("work-experience")
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...SELF_EDIT_ROLES)
+  async createWorkExperience(
+    @CurrentUser() user: any,
+    @Body() dto: CreateWorkExperienceDto,
+  ) {
+    const userId = user.user_id || user.id;
+    return this.cvService.createWorkExperience(userId, dto);
+  }
+
+  @Patch("work-experience/:id")
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...SELF_EDIT_ROLES)
+  async updateWorkExperience(
+    @CurrentUser() user: any,
+    @Param("id") id: string,
+    @Body() dto: UpdateWorkExperienceDto,
+  ) {
+    const userId = user.user_id || user.id;
+    return this.cvService.updateWorkExperience(userId, id, dto);
+  }
+
+  @Delete("work-experience/:id")
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...SELF_EDIT_ROLES)
+  async deleteWorkExperience(
+    @CurrentUser() user: any,
+    @Param("id") id: string,
+  ) {
+    const userId = user.user_id || user.id;
+    return this.cvService.deleteWorkExperience(userId, id);
+  }
+
+  @Post("education")
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...SELF_EDIT_ROLES)
+  async createEducation(
+    @CurrentUser() user: any,
+    @Body() dto: CreateEducationDto,
+  ) {
+    const userId = user.user_id || user.id;
+    return this.cvService.createEducation(userId, dto);
+  }
+
+  @Patch("education/:id")
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...SELF_EDIT_ROLES)
+  async updateEducation(
+    @CurrentUser() user: any,
+    @Param("id") id: string,
+    @Body() dto: UpdateEducationDto,
+  ) {
+    const userId = user.user_id || user.id;
+    return this.cvService.updateEducation(userId, id, dto);
+  }
+
+  @Delete("education/:id")
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...SELF_EDIT_ROLES)
+  async deleteEducation(@CurrentUser() user: any, @Param("id") id: string) {
+    const userId = user.user_id || user.id;
+    return this.cvService.deleteEducation(userId, id);
   }
 
   /**

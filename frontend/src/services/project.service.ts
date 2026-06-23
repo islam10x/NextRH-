@@ -111,7 +111,15 @@ export const projectService = {
     return res.data as CrossTeamRequest;
   },
 
-  async updateParticipation(participantId: string, payload: { description?: string }) {
+  async updateParticipation(participantId: string, payload: { description?: string; role?: string }) {
     return api.patch(`/projects/participations/${participantId}`, payload);
+  },
+
+  /**
+   * Self-service: remove a project from the employee's own CV. Only the
+   * employee's own participation row is deleted, never the shared project.
+   */
+  async deleteParticipation(participantId: string) {
+    return api.delete(`/projects/participations/${participantId}`);
   },
 };

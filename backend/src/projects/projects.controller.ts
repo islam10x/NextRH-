@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -99,5 +100,19 @@ export class ProjectsController {
   ) {
     const userId = req.user?.userId || req.user?.user_id || req.user?.id;
     return this.projectsService.updateParticipation(participantId, userId, dto);
+  }
+
+  /**
+   * Self-service: remove a project the employee doesn't own from their own
+   * CV. Only deletes the employee's own participation row.
+   */
+  @Delete("participations/:participantId")
+  @Roles(UserRole.EMPLOYEE, UserRole.TEAM_MANAGER, UserRole.BID_MANAGER)
+  async deleteParticipation(
+    @Param("participantId") participantId: string,
+    @Req() req: any,
+  ) {
+    const userId = req.user?.userId || req.user?.user_id || req.user?.id;
+    return this.projectsService.deleteOwnParticipation(participantId, userId);
   }
 }

@@ -53,14 +53,30 @@ export class FileValidationService {
   ) {
     const clamEnabled =
       this.configService.get<string>("CLAMAV_ENABLED") === "true";
+    const isProduction =
+      (this.configService.get<string>("NODE_ENV") || "").toLowerCase() ===
+      "production";
     if (!clamEnabled) {
+      if (isProduction) {
+        // Accepting uploads with no malware scan in production is a security gap.
+        // Surface it loudly so it is caught in monitoring instead of staying silent.
+        this.logger.error(
+          `[SECURITY] Virus scanning is DISABLED in production (CLAMAV_ENABLED!=true) while accepting a ${context} upload. Enable ClamAV.`,
+        );
+      }
       return;
     }
 
     const clam = await this.getClamClient();
     if (!clam) {
-      this.logger.warn("ClamAV client not available, skipping virus scan");
-      return;
+      // Scanning was explicitly enabled but the scanner is unreachable: fail
+      // CLOSED (reject) rather than silently accepting an unscanned file.
+      this.logger.error(
+        `ClamAV is enabled but unavailable; rejecting ${context} upload (fail-closed).`,
+      );
+      throw new BadRequestException(
+        "Unable to scan file for viruses. Please try again later.",
+      );
     }
 
     try {

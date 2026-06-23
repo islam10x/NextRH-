@@ -33,6 +33,12 @@ export class EmployeeProfile {
   @Column({ name: "professional_summary", type: "text", nullable: true })
   professionalSummary: string;
 
+  @Column({ name: "phone", type: "text", nullable: true })
+  phone: string | null;
+
+  @Column({ name: "address", type: "text", nullable: true })
+  address: string | null;
+
   @Column({ name: "folder_path", nullable: true })
   folderPath: string;
 

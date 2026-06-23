@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -6,7 +6,23 @@ import api from '@/services/api';
 import { CvCertification, CvProfile, UploadStatus } from '@/types';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { Award, Plus, Upload, Search, Calendar, Loader2, CheckCircle, File } from 'lucide-react';
+import {
+  Award,
+  Plus,
+  Upload,
+  Search,
+  Calendar,
+  Loader2,
+  CheckCircle,
+  File,
+  ShieldCheck,
+  Clock,
+  FileUp,
+  Lightbulb,
+  UserCheck,
+  Tag,
+  ScanLine,
+} from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -16,6 +32,11 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 import { useAuth } from '@/contexts/AuthContext';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { UploadProgress } from '@/components/common';
@@ -45,6 +66,8 @@ const getDynamicStatus = (cert: CvCertification): CvCertification['status'] => {
   return 'active';
 };
 
+const formatCertName = (name: string) => name.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+
 const CertificationsPage: React.FC = () => {
   const ALLOWED_TYPES = useMemo(
     () => [
@@ -65,6 +88,11 @@ const CertificationsPage: React.FC = () => {
   const [uploadedFile, setUploadedFile] = useState<UploadedFileInfo | null>(null);
   const [profile, setProfile] = useState<CvProfile | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  // Per-card proof upload state ("À confirmer" cards).
+  const [uploadingCertId, setUploadingCertId] = useState<string | null>(null);
+  const [dragOverCertId, setDragOverCertId] = useState<string | null>(null);
+  const cardInputRef = useRef<HTMLInputElement | null>(null);
+  const cardTargetRef = useRef<CvCertification | null>(null);
   const { user } = useAuth();
 
   // If the user's name equals their email, they haven't uploaded a CV yet
@@ -153,6 +181,54 @@ const CertificationsPage: React.FC = () => {
     [loadData]
   );
 
+  // Proof upload tied to a specific "À confirmer" card. Reuses the same backend
+  // endpoint: the OCR'd name is matched against the existing certification, which
+  // flips it to verified. We surface a clear toast and a mismatch warning.
+  const uploadProofForCert = useCallback(
+    async (file: File, target: CvCertification) => {
+      const validationError = validateFile(file);
+      if (validationError) {
+        toast.error(validationError);
+        return;
+      }
+
+      setUploadingCertId(target.id);
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        // Bind the proof to the targeted card: the backend rejects the upload if
+        // the OCR'd certification name does not match this certification.
+        formData.append('expected_certification_name', target.name);
+        await api.post('/certifications/upload', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+
+        toast.success(`« ${formatCertName(target.name)} » vérifiée et désormais prise en considération.`);
+        await loadData();
+      } catch (err) {
+        console.error('Proof upload failed', err);
+        if (axios.isAxiosError(err)) {
+          const message = (err.response?.data as { message?: string } | undefined)?.message;
+          const friendly =
+            message?.includes('malware') || message?.includes('virus')
+              ? 'Importation bloquée : logiciel malveillant détecté dans le fichier.'
+              : message;
+          toast.error(friendly || 'Échec de la vérification. Veuillez réessayer.');
+        } else {
+          toast.error('Échec de la vérification. Veuillez réessayer.');
+        }
+      } finally {
+        setUploadingCertId(null);
+      }
+    },
+    [loadData, validateFile]
+  );
+
+  const triggerCardUpload = useCallback((cert: CvCertification) => {
+    cardTargetRef.current = cert;
+    cardInputRef.current?.click();
+  }, []);
+
   const certifications = useMemo(() => profile?.certifications || [], [profile]);
   const normalizeText = useCallback(
     (value: string) => value.toLowerCase().replace(/_/g, ' ').replace(/\s+/g, ' ').trim(),
@@ -182,6 +258,21 @@ const CertificationsPage: React.FC = () => {
     });
   }, [certifications, searchQuery, normalizeText]);
 
+  const verifiedCertifications = useMemo(
+    () => filteredCertifications.filter((c) => c.isUploaded),
+    [filteredCertifications]
+  );
+  const pendingCertifications = useMemo(
+    () => filteredCertifications.filter((c) => !c.isUploaded),
+    [filteredCertifications]
+  );
+
+  // Progress is computed over the full set (not the search-filtered one).
+  const verifiedCount = useMemo(() => certifications.filter((c) => c.isUploaded).length, [certifications]);
+  const totalCount = certifications.length;
+  const pendingCount = totalCount - verifiedCount;
+  const verifiedPct = totalCount > 0 ? Math.round((verifiedCount / totalCount) * 100) : 0;
+
   const daysUntilExpiry = (cert: CvCertification): number | null => {
     const expDate = parseDateOnly(cert.expirationDate);
     if (!expDate) return null;
@@ -202,19 +293,12 @@ const CertificationsPage: React.FC = () => {
     return 'bg-muted text-muted-foreground';
   };
 
-  const uploadClass = (isUploaded?: boolean) => {
-    if (isUploaded) return 'bg-success/10 text-success';
-    return 'bg-muted text-muted-foreground';
-  };
-
   const formatStatus = (status?: CvCertification['status']) => {
     if (status === 'active') return 'Active';
     if (status === 'expiring_soon') return 'Expire bientôt';
     if (status === 'expired') return 'Expirée';
     return 'Inconnue';
   };
-
-  const formatCertName = (name: string) => name.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
 
   const formatFileSize = (bytes: number): string => {
     if (bytes < 1024) return `${bytes} B`;
@@ -246,6 +330,23 @@ const CertificationsPage: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* Hidden input shared by all per-card proof uploads */}
+      <input
+        ref={cardInputRef}
+        type="file"
+        accept=".pdf,.docx,.png,.jpg,.jpeg"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          const target = cardTargetRef.current;
+          e.target.value = '';
+          cardTargetRef.current = null;
+          if (file && target) {
+            uploadProofForCert(file, target);
+          }
+        }}
+      />
+
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Certifications</h1>
@@ -435,6 +536,39 @@ const CertificationsPage: React.FC = () => {
         </Alert>
       )}
 
+      {/* Verification progress */}
+      {totalCount > 0 && (
+        <Card>
+          <CardContent className="py-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="h-5 w-5 text-success" />
+                <span className="font-medium">
+                  {verifiedCount}/{totalCount} certifications vérifiées
+                </span>
+              </div>
+              <span className="text-sm text-muted-foreground">{verifiedPct}%</span>
+            </div>
+            <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+              <div
+                className="h-full rounded-full bg-success transition-all duration-500"
+                style={{ width: `${verifiedPct}%` }}
+              />
+            </div>
+            {pendingCount > 0 ? (
+              <p className="text-sm text-muted-foreground">
+                <span className="font-medium text-warning">{pendingCount}</span> certification(s) en attente de
+                justificatif. Elles ne sont pas encore prises en considération — ajoutez la preuve pour les valider.
+              </p>
+            ) : (
+              <p className="text-sm text-success">
+                Toutes vos certifications sont vérifiées. 🎉
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardContent className="py-4">
           <div className="relative">
@@ -459,59 +593,105 @@ const CertificationsPage: React.FC = () => {
           </CardContent>
         </Card>
       ) : filteredCertifications.length > 0 ? (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {filteredCertifications.map((cert, index) => {
-            const displayStatus = getDynamicStatus(cert);
-            return (
-            <Card key={`${cert.name}-${index}`} className="hover:shadow-md transition-all duration-200">
-              <CardContent className="p-5">
-                <div className="flex items-start justify-between gap-3 mb-4">
-                  <div className="p-2 rounded-lg bg-primary/10">
-                    <Award className="h-5 w-5 text-primary" />
-                  </div>
-                  <div className="flex flex-col items-end gap-1">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusClass(displayStatus)}`}>
-                      {formatStatus(displayStatus)}
-                    </span>
-                    {(() => {
-                      const days = daysUntilExpiry(cert);
-                      if (days !== null && days >= 0 && days <= 60) {
-                        return (
-                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-warning/10 text-warning border border-warning/20">
-                            {days === 0 ? 'Expire aujourd\'hui' : `Expire dans ${days}j`}
-                          </span>
-                        );
-                      }
-                      return null;
-                    })()}
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${uploadClass(cert.isUploaded)}`}>
-                      {cert.isUploaded ? 'Importé' : 'Extrait du CV'}
-                    </span>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <h3
-                    className="font-semibold text-foreground leading-tight break-words whitespace-normal"
-                    title={formatCertName(cert.name)}
-                  >
-                    {formatCertName(cert.name)}
-                  </h3>
-                  {cert.issuingOrganization && (
-                    <p className="text-sm text-muted-foreground">{cert.issuingOrganization}</p>
-                  )}
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Calendar className="h-3.5 w-3.5" />
-                    <span>Émis : {formatDate(cert.issueDate)}</span>
-                  </div>
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Calendar className="h-3.5 w-3.5" />
-                    <span>Expire : {formatDate(cert.expirationDate)}</span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            );
-          })}
+        <div className="space-y-8">
+          {/* Pending section first — it's the actionable one */}
+          {pendingCertifications.length > 0 && (
+            <section className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Clock className="h-5 w-5 text-warning" />
+                <h2 className="text-lg font-semibold">À confirmer — extraites de votre CV</h2>
+                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-warning/10 text-warning">
+                  {pendingCertifications.length}
+                </span>
+                <ProofTips />
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Déposez le justificatif sur une carte (ou cliquez sur « Ajouter la preuve ») pour la valider.
+              </p>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {pendingCertifications.map((cert, index) => (
+                  <PendingCertCard
+                    key={`pending-${cert.id}-${index}`}
+                    cert={cert}
+                    isUploading={uploadingCertId === cert.id}
+                    isDragOver={dragOverCertId === cert.id}
+                    onTriggerUpload={() => triggerCardUpload(cert)}
+                    onDragOver={() => setDragOverCertId(cert.id)}
+                    onDragLeave={() => setDragOverCertId((prev) => (prev === cert.id ? null : prev))}
+                    onDropFile={(file) => {
+                      setDragOverCertId(null);
+                      uploadProofForCert(file, cert);
+                    }}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Verified section */}
+          {verifiedCertifications.length > 0 && (
+            <section className="space-y-3">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="h-5 w-5 text-success" />
+                <h2 className="text-lg font-semibold">Vérifiées</h2>
+                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-success/10 text-success">
+                  {verifiedCertifications.length}
+                </span>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Justificatif fourni — elles sont prises en considération.
+              </p>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {verifiedCertifications.map((cert, index) => {
+                  const displayStatus = getDynamicStatus(cert);
+                  const days = daysUntilExpiry(cert);
+                  return (
+                    <Card key={`verified-${cert.id}-${index}`} className="hover:shadow-md transition-all duration-200">
+                      <CardContent className="p-5">
+                        <div className="flex items-start justify-between gap-3 mb-4">
+                          <div className="p-2 rounded-lg bg-success/10">
+                            <ShieldCheck className="h-5 w-5 text-success" />
+                          </div>
+                          <div className="flex flex-col items-end gap-1">
+                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusClass(displayStatus)}`}>
+                              {formatStatus(displayStatus)}
+                            </span>
+                            {days !== null && days >= 0 && days <= 60 && (
+                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-warning/10 text-warning border border-warning/20">
+                                {days === 0 ? 'Expire aujourd\'hui' : `Expire dans ${days}j`}
+                              </span>
+                            )}
+                            <span className="px-2 py-1 rounded-full text-xs font-medium bg-success/10 text-success">
+                              Vérifiée
+                            </span>
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <h3
+                            className="font-semibold text-foreground leading-tight break-words whitespace-normal"
+                            title={formatCertName(cert.name)}
+                          >
+                            {formatCertName(cert.name)}
+                          </h3>
+                          {cert.issuingOrganization && (
+                            <p className="text-sm text-muted-foreground">{cert.issuingOrganization}</p>
+                          )}
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <Calendar className="h-3.5 w-3.5" />
+                            <span>Émis : {formatDate(cert.issueDate)}</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <Calendar className="h-3.5 w-3.5" />
+                            <span>Expire : {formatDate(cert.expirationDate)}</span>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            </section>
+          )}
         </div>
       ) : (
         <Card>
@@ -528,8 +708,130 @@ const CertificationsPage: React.FC = () => {
           </CardContent>
         </Card>
       )}
-
     </div>
+  );
+};
+
+// Discreet, contextual tips so users upload a proof that actually passes the
+// verification (name match, certification match, readability).
+const ProofTips: React.FC = () => (
+  <Popover>
+    <PopoverTrigger asChild>
+      <button
+        type="button"
+        className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors"
+      >
+        <Lightbulb className="h-3.5 w-3.5" />
+        Conseils
+      </button>
+    </PopoverTrigger>
+    <PopoverContent align="start" className="w-72 text-sm">
+      <p className="font-medium mb-2">Pour que la validation réussisse</p>
+      <ul className="space-y-2 text-muted-foreground">
+        <li className="flex gap-2">
+          <UserCheck className="h-4 w-4 mt-0.5 shrink-0 text-primary" />
+          <span>Le document doit afficher <strong>votre nom</strong> (prénom et nom), comme sur votre profil.</span>
+        </li>
+        <li className="flex gap-2">
+          <Tag className="h-4 w-4 mt-0.5 shrink-0 text-primary" />
+          <span>Le <strong>nom de la certification</strong> doit correspondre à la carte que vous validez.</span>
+        </li>
+        <li className="flex gap-2">
+          <ScanLine className="h-4 w-4 mt-0.5 shrink-0 text-primary" />
+          <span>Importez un fichier <strong>net et lisible</strong> — PDF de préférence, ou photo/scan bien cadré.</span>
+        </li>
+      </ul>
+    </PopoverContent>
+  </Popover>
+);
+
+interface PendingCertCardProps {
+  cert: CvCertification;
+  isUploading: boolean;
+  isDragOver: boolean;
+  onTriggerUpload: () => void;
+  onDragOver: () => void;
+  onDragLeave: () => void;
+  onDropFile: (file: File) => void;
+}
+
+const PendingCertCard: React.FC<PendingCertCardProps> = ({
+  cert,
+  isUploading,
+  isDragOver,
+  onTriggerUpload,
+  onDragOver,
+  onDragLeave,
+  onDropFile,
+}) => {
+  return (
+    <Card
+      className={cn(
+        'border-dashed transition-all duration-200',
+        isDragOver ? 'border-primary ring-2 ring-primary/30 bg-primary/5' : 'hover:shadow-md',
+        isUploading && 'opacity-70'
+      )}
+      onDragOver={(e) => {
+        e.preventDefault();
+        if (!isUploading) onDragOver();
+      }}
+      onDragLeave={onDragLeave}
+      onDrop={(e) => {
+        e.preventDefault();
+        if (isUploading) return;
+        const file = e.dataTransfer.files?.[0];
+        if (file) onDropFile(file);
+      }}
+    >
+      <CardContent className="p-5">
+        <div className="flex items-start justify-between gap-3 mb-4">
+          <div className="p-2 rounded-lg bg-warning/10">
+            <Clock className="h-5 w-5 text-warning" />
+          </div>
+          <span className="px-2 py-1 rounded-full text-xs font-medium bg-warning/10 text-warning border border-warning/20">
+            À confirmer
+          </span>
+        </div>
+        <div className="space-y-2">
+          <h3
+            className="font-semibold text-foreground leading-tight break-words whitespace-normal"
+            title={formatCertName(cert.name)}
+          >
+            {formatCertName(cert.name)}
+          </h3>
+          {cert.issuingOrganization && (
+            <p className="text-sm text-muted-foreground">{cert.issuingOrganization}</p>
+          )}
+          {cert.issueDate && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Calendar className="h-3.5 w-3.5" />
+              <span>Émis : {cert.issueDate}</span>
+            </div>
+          )}
+        </div>
+        <div className="mt-4">
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full"
+            disabled={isUploading}
+            onClick={onTriggerUpload}
+          >
+            {isUploading ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Vérification...
+              </>
+            ) : (
+              <>
+                <FileUp className="h-4 w-4 mr-2" />
+                Ajouter la preuve
+              </>
+            )}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 };
 

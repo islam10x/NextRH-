@@ -7,7 +7,10 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
+import * as path from "path";
+import { existsSync } from "fs";
 import { FileStorageService } from "../file-storage/file-storage.service";
+import { MetadataSyncService } from "../file-storage/metadata-sync.service";
 import {
   Certification,
   CertificationStatus,
@@ -18,6 +21,10 @@ import { FileValidationService } from "../file-validation/file-validation.servic
 import { formatIsoDate, normalizeFlexibleDate } from "../utils/date-normalizer";
 import { TeamsService } from "../teams/teams.service";
 import { ScoringService } from "../scoring/scoring.service";
+import {
+  CreateCertificationDto,
+  UpdateCertificationDto,
+} from "./dto/certification.dto";
 
 @Injectable()
 export class CertificationsService {
@@ -35,15 +42,33 @@ export class CertificationsService {
     private readonly fileValidationService: FileValidationService,
     private readonly teamsService: TeamsService,
     private readonly scoringService: ScoringService,
+    private readonly metadataSyncService: MetadataSyncService,
   ) {
     this.aiServiceBaseUrl =
       this.configService.get<string>("AI_SERVICE_URL")?.replace(/\/+$/, "") ||
       "http://127.0.0.1:8000";
   }
 
-  async saveEmployeeCertification(user: any, file: Express.Multer.File) {
+  async saveEmployeeCertification(
+    user: any,
+    file: Express.Multer.File,
+    expectedCertificationName?: string,
+  ) {
     await this.fileValidationService.validate(file, "certification");
     const userId = typeof user === "string" ? user : user.user_id || user.id;
+
+    // #3 Defense-in-depth: a proof can only be accepted for a user whose name is
+    // configured. Otherwise the AI ownership check (_verify_user_name) is skipped
+    // and ANY document would pass. The CV upload is what populates these names.
+    const firstName =
+      typeof user === "object" && user ? (user.firstName as string) : undefined;
+    const lastName =
+      typeof user === "object" && user ? (user.lastName as string) : undefined;
+    if (!firstName?.trim() || !lastName?.trim()) {
+      throw new BadRequestException(
+        "Veuillez d'abord configurer votre nom (importez votre CV) avant d'ajouter un justificatif de certification.",
+      );
+    }
 
     // 1. Call AI service for OCR parsing
     let parsedData = null;
@@ -92,6 +117,24 @@ export class CertificationsService {
           "Failed to parse certification or verify name match.",
       );
     }
+
+    // #1 Strict binding: when the proof is uploaded for a specific "À confirmer"
+    // card, the OCR'd certification name MUST match that card. Otherwise we would
+    // silently create a different verified certification next to the targeted one.
+    const parsedCertName = (parsedData.certification_name || "").trim();
+    if (
+      expectedCertificationName?.trim() &&
+      !this.certificationNamesMatch(parsedCertName, expectedCertificationName)
+    ) {
+      this.logger.warn(
+        `[AUDIT][certification.proof] user=${userId} result=REJECTED_MISMATCH ` +
+          `expected="${expectedCertificationName.trim()}" parsed="${parsedCertName}"`,
+      );
+      throw new BadRequestException(
+        `Le justificatif détecté (« ${parsedCertName || "inconnu"} ») ne correspond pas à la certification ciblée (« ${expectedCertificationName.trim()} »). Vérifiez que vous importez le bon document.`,
+      );
+    }
+
     const parsedExpirationDate = normalizeFlexibleDate(
       parsedData.expiration_date,
       "end",
@@ -127,6 +170,17 @@ export class CertificationsService {
       parsedData,
       parsedIssueDate,
       parsedExpirationDate,
+      storageResult.path,
+    );
+
+    // #7 Audit trail for every accepted proof (who, what, when, signals).
+    this.logger.log(
+      `[AUDIT][certification.proof] user=${userId} result=ACCEPTED ` +
+        `cert="${certName}" issuer="${parsedData.issuer || ""}" ` +
+        `credentialId="${parsedData.credential_id || ""}" ` +
+        `issueDate="${formatIsoDate(parsedIssueDate) || ""}" ` +
+        `expiration="${formatIsoDate(parsedExpirationDate) || ""}" ` +
+        `file="${storageResult.filename}"`,
     );
 
     return {
@@ -140,6 +194,7 @@ export class CertificationsService {
     parsedData: any,
     parsedIssueDate: Date | null,
     parsedExpirationDate: Date | null,
+    filePath?: string,
   ) {
     // Find user's profile
     const profile = await this.profileRepository.findOne({
@@ -151,17 +206,34 @@ export class CertificationsService {
       return;
     }
 
-    // Check if a certification with this name already exists for this user (e.g. from a CV parse)
+    // Find a certification already listed for this employee that this proof
+    // corresponds to, so the upload upgrades it instead of creating a near
+    // duplicate. Matching is lenient (casing / accents / punctuation / OCR
+    // formatting differences) — prefer an exact name match, then an as-yet
+    // unverified entry, then any lenient match (e.g. re-uploading proof for an
+    // already verified cert just refreshes it).
     const certName = parsedData.certification_name || "Unknown Certification";
-    const existingCert = await this.certificationRepository.findOne({
-      where: {
-        profile: { profile_id: profile.profile_id },
-        certificationName: certName,
-      },
+    const profileCerts = await this.certificationRepository.find({
+      where: { profile: { profile_id: profile.profile_id } },
     });
+    const existingCert =
+      profileCerts.find((c) => c.certificationName === certName) ??
+      profileCerts.find(
+        (c) =>
+          !c.isUploaded &&
+          this.certificationNamesMatch(c.certificationName, certName),
+      ) ??
+      profileCerts.find((c) =>
+        this.certificationNamesMatch(c.certificationName, certName),
+      ) ??
+      null;
 
     if (existingCert) {
-      // Upgrade existing CV-parsed cert to a verified uploaded cert
+      // Upgrade the matched cert to a verified uploaded cert. Every field now
+      // comes from the analysed certificate (the source of truth), including
+      // the name, so a prior parsing error is corrected by the upload.
+      existingCert.certificationName =
+        certName || existingCert.certificationName;
       existingCert.isUploaded = true;
       existingCert.issuingOrganization =
         parsedData.issuer || existingCert.issuingOrganization;
@@ -170,6 +242,7 @@ export class CertificationsService {
         parsedExpirationDate || existingCert.expirationDate;
       existingCert.credentialId =
         parsedData.credential_id || existingCert.credentialId;
+      existingCert.filePath = filePath || existingCert.filePath;
 
       await this.certificationRepository.save(existingCert);
       this.logger.log(
@@ -184,6 +257,7 @@ export class CertificationsService {
         issueDate: parsedIssueDate,
         expirationDate: parsedExpirationDate,
         credentialId: parsedData.credential_id,
+        filePath: filePath,
         isUploaded: true,
       });
 
@@ -212,15 +286,117 @@ export class CertificationsService {
   }
 
   /**
+   * Self-service: create a manual (unverified) certification entry so an
+   * employee can correct a CV parsing error. Always created with
+   * isUploaded=false — proof verification is the only path to is_uploaded=true.
+   */
+  async createCertification(userId: string, dto: CreateCertificationDto) {
+    const profile = await this.profileRepository.findOne({
+      where: { user: { user_id: userId } },
+    });
+    if (!profile) {
+      throw new NotFoundException("Employee profile not found");
+    }
+
+    const certification = this.certificationRepository.create({
+      profile,
+      certificationName: dto.certificationName.trim(),
+      issuingOrganization: dto.issuingOrganization?.trim() || null,
+      issueDate: dto.issueDate
+        ? normalizeFlexibleDate(dto.issueDate, "start")
+        : null,
+      expirationDate: dto.expirationDate
+        ? normalizeFlexibleDate(dto.expirationDate, "end")
+        : null,
+      credentialId: dto.credentialId?.trim() || null,
+      isUploaded: false,
+    });
+
+    await this.certificationRepository.save(certification);
+    await this.metadataSyncService.syncFromDb(userId);
+    await this.ragService.triggerUserSync(userId);
+    return certification;
+  }
+
+  /**
+   * Self-service: edit a certification's metadata. Blocked once a proof has
+   * been verified (isUploaded=true) — editing name/dates after verification
+   * would let an employee rename a verified cert into an unverified claim
+   * without ever re-proving it. Verified certs can only be removed (delete),
+   * not renamed; corrections to a verified cert require re-uploading proof
+   * via the existing /certifications/upload flow.
+   */
+  async updateCertification(
+    userId: string,
+    certificationId: string,
+    dto: UpdateCertificationDto,
+  ) {
+    const cert = await this.certificationRepository.findOne({
+      where: { certification_id: certificationId },
+      relations: ["profile", "profile.user"],
+    });
+    if (!cert || cert.profile?.user?.user_id !== userId) {
+      throw new NotFoundException("Certification not found");
+    }
+    if (cert.isUploaded) {
+      throw new BadRequestException(
+        "Cette certification est vérifiée et ne peut plus être modifiée ici. Supprimez-la puis ré-importez un justificatif si nécessaire.",
+      );
+    }
+
+    if (dto.certificationName !== undefined) {
+      cert.certificationName = dto.certificationName.trim();
+    }
+    if (dto.issuingOrganization !== undefined) {
+      cert.issuingOrganization = dto.issuingOrganization?.trim() || null;
+    }
+    if (dto.issueDate !== undefined) {
+      cert.issueDate = dto.issueDate
+        ? normalizeFlexibleDate(dto.issueDate, "start")
+        : null;
+    }
+    if (dto.expirationDate !== undefined) {
+      cert.expirationDate = dto.expirationDate
+        ? normalizeFlexibleDate(dto.expirationDate, "end")
+        : null;
+    }
+    if (dto.credentialId !== undefined) {
+      cert.credentialId = dto.credentialId?.trim() || null;
+    }
+
+    await this.certificationRepository.save(cert);
+    await this.metadataSyncService.syncFromDb(userId);
+    await this.ragService.triggerUserSync(userId);
+    return cert;
+  }
+
+  async deleteCertification(userId: string, certificationId: string) {
+    const cert = await this.certificationRepository.findOne({
+      where: { certification_id: certificationId },
+      relations: ["profile", "profile.user"],
+    });
+    if (!cert || cert.profile?.user?.user_id !== userId) {
+      throw new NotFoundException("Certification not found");
+    }
+
+    await this.certificationRepository.remove(cert);
+    await this.metadataSyncService.syncFromDb(userId);
+    await this.ragService.triggerUserSync(userId);
+    return { success: true };
+  }
+
+  /**
    * Get global certification statistics for BID managers
    */
   async getGlobalCertStats() {
     const today = new Date();
     const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
 
+    // Strict gating: only verified (proof-uploaded) certifications are reported.
     const all = await this.certificationRepository
       .createQueryBuilder("cert")
       .leftJoinAndSelect("cert.profile", "profile")
+      .where("cert.is_uploaded = true")
       .getMany();
 
     const stats = {
@@ -284,6 +460,7 @@ export class CertificationsService {
       .leftJoinAndSelect("cert.profile", "profile")
       .leftJoinAndSelect("profile.user", "user")
       .where("cert.profile.profile_id IN (:...profileIds)", { profileIds })
+      .andWhere("cert.is_uploaded = true")
       .orderBy("cert.expirationDate", "ASC")
       .getMany();
 
@@ -296,6 +473,7 @@ export class CertificationsService {
       expirationDate: cert.expirationDate,
       status: this.calculateStatus(cert.expirationDate),
       credentialId: cert.credentialId,
+      hasProof: Boolean(cert.filePath),
       employeeId: cert.profile?.user?.user_id,
       employeeName: cert.profile?.user
         ? `${cert.profile.user.firstName || ""} ${cert.profile.user.lastName || ""}`.trim() ||
@@ -303,6 +481,82 @@ export class CertificationsService {
         : "Unknown",
       employeeEmail: cert.profile?.user?.email,
     }));
+  }
+
+  /**
+   * Whether the OCR'd certification name matches the targeted "À confirmer" card.
+   * Lenient (equality / containment / strong token overlap) so legitimate OCR
+   * formatting differences still pass, while a clearly different certificate
+   * (e.g. Azure proof dropped on an AWS card) is rejected.
+   */
+  private certificationNamesMatch(a: string, b: string): boolean {
+    const na = this.normalizeCertNameForMatch(a);
+    const nb = this.normalizeCertNameForMatch(b);
+    if (!na || !nb) return false;
+    if (na === nb) return true;
+    if (na.includes(nb) || nb.includes(na)) return true;
+
+    const ta = new Set(na.split(" ").filter(Boolean));
+    const tb = new Set(nb.split(" ").filter(Boolean));
+    const [shorter, longer] = ta.size <= tb.size ? [ta, tb] : [tb, ta];
+    if (shorter.size === 0) return false;
+    let common = 0;
+    shorter.forEach((t) => {
+      if (longer.has(t)) common += 1;
+    });
+    return common / shorter.size >= 0.6;
+  }
+
+  private normalizeCertNameForMatch(value: string): string {
+    return (value || "")
+      .normalize("NFD")
+      .replace(/[̀-ͯ]/g, "")
+      .replace(/[^a-zA-Z0-9]+/g, " ")
+      .trim()
+      .toLowerCase();
+  }
+
+  /**
+   * Resolve a certification's stored proof file for download, with strict
+   * path-traversal protection (the resolved path must stay inside storage root).
+   * Returns null when the requester is not allowed or no proof exists.
+   */
+  async getCertificationProof(
+    certificationId: string,
+    requester: { userId: string; role?: string },
+  ): Promise<{ absolutePath: string; fileName: string } | null> {
+    const cert = await this.certificationRepository.findOne({
+      where: { certification_id: certificationId },
+      relations: ["profile", "profile.user"],
+    });
+    if (!cert || !cert.filePath) {
+      return null;
+    }
+
+    // Owner can always view their own proof. Managers/BID can view team proofs.
+    const isOwner = cert.profile?.user?.user_id === requester.userId;
+    const isManager =
+      requester.role === "team_manager" || requester.role === "bid_manager";
+    if (!isOwner && !isManager) {
+      return null;
+    }
+
+    const storageRoot = path.resolve(this.fileStorageService.getStorageRoot());
+    const absolutePath = path.resolve(process.cwd(), cert.filePath);
+    if (
+      absolutePath !== storageRoot &&
+      !absolutePath.startsWith(storageRoot + path.sep)
+    ) {
+      this.logger.warn(
+        `[AUDIT][certification.proof] BLOCKED path traversal attempt cert=${certificationId} path=${cert.filePath}`,
+      );
+      return null;
+    }
+    if (!existsSync(absolutePath)) {
+      return null;
+    }
+
+    return { absolutePath, fileName: path.basename(absolutePath) };
   }
 
   /**

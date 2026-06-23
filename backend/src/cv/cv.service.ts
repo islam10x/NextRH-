@@ -14,6 +14,7 @@ import {
 import { Project } from "../projects/entities/project.entity";
 import { ProjectParticipant } from "../projects/entities/participant.entity";
 import { FileStorageService } from "../file-storage/file-storage.service";
+import { MetadataSyncService } from "../file-storage/metadata-sync.service";
 import { RagService } from "../rag/rag.service";
 import { FileValidationService } from "../file-validation/file-validation.service";
 import {
@@ -22,6 +23,12 @@ import {
 } from "../utils/date-normalizer";
 import { AIGenerationService } from "../ai-generation/ai-generation.service";
 import { CvTemplatesService } from "../cv-templates/cv-templates.service";
+import { UpdateProfileBasicsDto } from "./dto/update-profile-basics.dto";
+import {
+  CreateWorkExperienceDto,
+  UpdateWorkExperienceDto,
+} from "./dto/work-experience.dto";
+import { CreateEducationDto, UpdateEducationDto } from "./dto/education.dto";
 import * as fs from "fs";
 import * as fsPromises from "fs/promises";
 import * as path from "path";
@@ -53,6 +60,7 @@ export class CvService {
     @InjectRepository(ProjectParticipant)
     private participantRepository: Repository<ProjectParticipant>,
     private readonly fileStorageService: FileStorageService,
+    private readonly metadataSyncService: MetadataSyncService,
     private readonly configService: ConfigService,
     private readonly ragService: RagService,
     private readonly fileValidationService: FileValidationService,
@@ -98,14 +106,22 @@ export class CvService {
 
     const metaData = await this.fileStorageService.getEmployeeMetadata(userId);
     const rawMeta = await this.fileStorageService.getRawMetadata(userId);
-    const phone = this.cleanText(rawMeta?.structured_data?.phone) || null;
-    // Address often has trailing parser artifacts; cut at common section headers.
-    const rawAddress: string = this.cleanText(
-      rawMeta?.structured_data?.address,
-    );
-    const address = rawAddress
-      ? this.stripAtFirstSectionMarker(rawAddress) || null
-      : null;
+    // DB column is the source of truth once the employee has corrected it;
+    // fall back to the value parsed from the CV (metadata.json) otherwise.
+    const phone =
+      this.cleanText(profile?.phone) ||
+      this.cleanText(rawMeta?.structured_data?.phone) ||
+      null;
+    let address = this.cleanText(profile?.address) || null;
+    if (!address) {
+      // Parsed address often has trailing artifacts; cut at section headers.
+      const rawAddress: string = this.cleanText(
+        rawMeta?.structured_data?.address,
+      );
+      address = rawAddress
+        ? this.stripAtFirstSectionMarker(rawAddress) || null
+        : null;
+    }
     const cvFilename = rawMeta?.filename || null;
     const fallbackCertifications =
       this.extractCertificationsFromMetadata(rawMeta);
@@ -358,7 +374,9 @@ export class CvService {
       address,
       cvFilename,
       currentPosition: profile.currentPosition ?? null,
-      professionalSummary: profile.professionalSummary ?? null,
+      professionalSummary:
+        profile.professionalSummary ??
+        (this.cleanText(rawMeta?.structured_data?.summary) || null),
       totalExperienceYears: profile.totalExperienceYears ?? null,
       skills: metaData.skills ?? [],
       lastUpdate: metaData.last_update ?? null,
@@ -762,6 +780,23 @@ export class CvService {
       isCurrent: true,
     });
     await this.metadataRepository.save(snapshot);
+
+    // 3b. Persist parsed contact details + summary on the profile so the DB is
+    // the source of truth (metadata.json is only a fallback). Only overwrite
+    // when the parse actually found a value, so a re-upload that misses one of
+    // these does not wipe a value the employee previously corrected.
+    const parsedStructured = normalizedData.structured_data ?? {};
+    const parsedPhone = this.cleanText(parsedStructured.phone);
+    const parsedAddress = this.stripAtFirstSectionMarker(
+      this.cleanText(parsedStructured.address),
+    );
+    const parsedSummary = this.cleanText(parsedStructured.summary);
+    if (parsedPhone) profile.phone = parsedPhone;
+    if (parsedAddress) profile.address = parsedAddress;
+    if (parsedSummary) profile.professionalSummary = parsedSummary;
+    if (parsedPhone || parsedAddress || parsedSummary) {
+      await this.profileRepository.save(profile);
+    }
 
     // 4. Populate Work Experience
     if (normalizedData.structured_data?.experience) {
@@ -1914,6 +1949,186 @@ export class CvService {
       latestExp.isCurrent = true;
       latestExp.endDate = null;
     }
+  }
+
+  /**
+   * Self-service CV editing: lets an employee correct parsing errors in their
+   * own previewed CV. Every method here is scoped to the calling user via
+   * profile.user.user_id, mirroring the ownership pattern used in
+   * ProjectsService.updateParticipation.
+   */
+  private async getOwnProfileOrThrow(userId: string): Promise<EmployeeProfile> {
+    const profile = await this.profileRepository.findOne({
+      where: { user: { user_id: userId } },
+    });
+    if (!profile) {
+      throw new NotFoundException("Employee profile not found");
+    }
+    return profile;
+  }
+
+  async updateProfileBasics(userId: string, dto: UpdateProfileBasicsDto) {
+    const profile = await this.getOwnProfileOrThrow(userId);
+
+    if (dto.currentPosition !== undefined) {
+      profile.currentPosition = dto.currentPosition.trim();
+    }
+    if (dto.professionalSummary !== undefined) {
+      profile.professionalSummary = dto.professionalSummary.trim();
+    }
+    if (dto.totalExperienceYears !== undefined) {
+      profile.totalExperienceYears = dto.totalExperienceYears;
+    }
+    if (dto.phone !== undefined) {
+      profile.phone = this.cleanText(dto.phone) || null;
+    }
+    if (dto.address !== undefined) {
+      profile.address = this.cleanText(dto.address) || null;
+    }
+
+    await this.profileRepository.save(profile);
+    await this.metadataSyncService.syncFromDb(userId);
+    await this.ragService.triggerUserSync(userId);
+    return this.getMyProfile(userId);
+  }
+
+  async createWorkExperience(userId: string, dto: CreateWorkExperienceDto) {
+    const profile = await this.getOwnProfileOrThrow(userId);
+    const isCurrent = Boolean(dto.isCurrent);
+
+    const experience = this.experienceRepository.create({
+      profile,
+      jobTitle: dto.jobTitle.trim(),
+      companyName: dto.companyName.trim(),
+      startDate: dto.startDate
+        ? normalizeFlexibleDate(dto.startDate, "start")
+        : null,
+      endDate:
+        isCurrent || !dto.endDate
+          ? null
+          : normalizeFlexibleDate(dto.endDate, "end"),
+      isCurrent,
+      description: dto.description?.trim() || "",
+    });
+
+    await this.experienceRepository.save(experience);
+    await this.metadataSyncService.syncFromDb(userId);
+    await this.ragService.triggerUserSync(userId);
+    return this.getMyProfile(userId);
+  }
+
+  async updateWorkExperience(
+    userId: string,
+    experienceId: string,
+    dto: UpdateWorkExperienceDto,
+  ) {
+    const experience = await this.experienceRepository.findOne({
+      where: { experience_id: experienceId },
+      relations: ["profile", "profile.user"],
+    });
+    if (!experience || experience.profile?.user?.user_id !== userId) {
+      throw new NotFoundException("Work experience not found");
+    }
+
+    if (dto.jobTitle !== undefined) experience.jobTitle = dto.jobTitle.trim();
+    if (dto.companyName !== undefined)
+      experience.companyName = dto.companyName.trim();
+    if (dto.isCurrent !== undefined) experience.isCurrent = dto.isCurrent;
+    if (dto.startDate !== undefined) {
+      experience.startDate = dto.startDate
+        ? normalizeFlexibleDate(dto.startDate, "start")
+        : null;
+    }
+    if (dto.endDate !== undefined) {
+      experience.endDate = dto.endDate
+        ? normalizeFlexibleDate(dto.endDate, "end")
+        : null;
+    }
+    if (experience.isCurrent) experience.endDate = null;
+    if (dto.description !== undefined)
+      experience.description = dto.description.trim();
+
+    await this.experienceRepository.save(experience);
+    await this.metadataSyncService.syncFromDb(userId);
+    await this.ragService.triggerUserSync(userId);
+    return this.getMyProfile(userId);
+  }
+
+  async deleteWorkExperience(userId: string, experienceId: string) {
+    const experience = await this.experienceRepository.findOne({
+      where: { experience_id: experienceId },
+      relations: ["profile", "profile.user"],
+    });
+    if (!experience || experience.profile?.user?.user_id !== userId) {
+      throw new NotFoundException("Work experience not found");
+    }
+
+    await this.experienceRepository.remove(experience);
+    await this.metadataSyncService.syncFromDb(userId);
+    await this.ragService.triggerUserSync(userId);
+    return this.getMyProfile(userId);
+  }
+
+  async createEducation(userId: string, dto: CreateEducationDto) {
+    const profile = await this.getOwnProfileOrThrow(userId);
+
+    const education = this.educationRepository.create({
+      profile,
+      degree: dto.degree.trim(),
+      fieldOfStudy: dto.fieldOfStudy?.trim() || null,
+      institution: dto.institution?.trim() || null,
+      endDate: dto.endDate ? normalizeFlexibleDate(dto.endDate, "end") : null,
+    });
+
+    await this.educationRepository.save(education);
+    await this.metadataSyncService.syncFromDb(userId);
+    await this.ragService.triggerUserSync(userId);
+    return this.getMyProfile(userId);
+  }
+
+  async updateEducation(
+    userId: string,
+    educationId: string,
+    dto: UpdateEducationDto,
+  ) {
+    const education = await this.educationRepository.findOne({
+      where: { education_id: educationId },
+      relations: ["profile", "profile.user"],
+    });
+    if (!education || education.profile?.user?.user_id !== userId) {
+      throw new NotFoundException("Education entry not found");
+    }
+
+    if (dto.degree !== undefined) education.degree = dto.degree.trim();
+    if (dto.fieldOfStudy !== undefined)
+      education.fieldOfStudy = dto.fieldOfStudy?.trim() || null;
+    if (dto.institution !== undefined)
+      education.institution = dto.institution?.trim() || null;
+    if (dto.endDate !== undefined) {
+      education.endDate = dto.endDate
+        ? normalizeFlexibleDate(dto.endDate, "end")
+        : null;
+    }
+
+    await this.educationRepository.save(education);
+    await this.metadataSyncService.syncFromDb(userId);
+    await this.ragService.triggerUserSync(userId);
+    return this.getMyProfile(userId);
+  }
+
+  async deleteEducation(userId: string, educationId: string) {
+    const education = await this.educationRepository.findOne({
+      where: { education_id: educationId },
+      relations: ["profile", "profile.user"],
+    });
+    if (!education || education.profile?.user?.user_id !== userId) {
+      throw new NotFoundException("Education entry not found");
+    }
+
+    await this.educationRepository.remove(education);
+    await this.metadataSyncService.syncFromDb(userId);
+    await this.ragService.triggerUserSync(userId);
+    return this.getMyProfile(userId);
   }
 
   /**

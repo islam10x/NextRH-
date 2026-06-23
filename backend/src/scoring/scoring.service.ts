@@ -1292,11 +1292,23 @@ export class ScoringService {
       0,
     );
 
+    // Strict gating: only certifications with an uploaded proof count toward the
+    // score. CV-parsed certifications (is_uploaded = false) stay "pending proof"
+    // and never inflate the score until the employee provides the document.
+    // Year is taken from the issue date, falling back to the upload date when the
+    // certificate has no parsed issue date — otherwise a verified certification
+    // with an unparseable date would count toward no year at all.
     const certCount = await this.certRepo
       .createQueryBuilder("c")
       .where("c.profile_id = :profileId", { profileId })
       .andWhere("c.status = :status", { status: "active" })
-      .andWhere("EXTRACT(YEAR FROM c.issue_date) = :year", { year })
+      .andWhere("c.is_uploaded = true")
+      .andWhere(
+        "EXTRACT(YEAR FROM COALESCE(c.issue_date, c.uploaded_at)) = :year",
+        {
+          year,
+        },
+      )
       .getCount();
 
     const trainingCount = await this.trainingSessionRepo

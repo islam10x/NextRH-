@@ -23,6 +23,8 @@ import { CrossTeamAssignmentRequest } from "./entities/cross-team-assignment-req
 import { RequestCrossTeamMemberDto } from "./dto/request-cross-team-member.dto";
 import { RespondCrossTeamRequestDto } from "./dto/respond-cross-team-request.dto";
 import { Team } from "../teams/entities/team.entity";
+import { MetadataSyncService } from "../file-storage/metadata-sync.service";
+import { RagService } from "../rag/rag.service";
 
 @Injectable()
 export class ProjectsService {
@@ -45,6 +47,8 @@ export class ProjectsService {
     private readonly notificationsService: NotificationsService,
     @Inject(forwardRef(() => ScoringService))
     private readonly scoringService: ScoringService,
+    private readonly metadataSyncService: MetadataSyncService,
+    private readonly ragService: RagService,
   ) {
     this.logger = new Logger(ProjectsService.name);
   }
@@ -641,6 +645,9 @@ export class ProjectsService {
     if (dto.description !== undefined) {
       participant.description = String(dto.description || "").trim();
     }
+    if (dto.role !== undefined) {
+      participant.role = String(dto.role || "").trim() || null;
+    }
 
     const saved = await this.participantRepo.save(participant);
 
@@ -676,7 +683,38 @@ export class ProjectsService {
       );
     }
 
+    if (employeeUserId) {
+      await this.metadataSyncService.syncFromDb(employeeUserId);
+      await this.ragService.triggerUserSync(employeeUserId);
+    }
+
     return saved;
+  }
+
+  /**
+   * Self-service: remove a project from the employee's own CV (e.g. it was
+   * fabricated by the CV parser or no longer belongs there). Only the
+   * employee's own ProjectParticipant row is removed — the shared Project
+   * entity (and any other participants' rows on it) is left untouched.
+   */
+  async deleteOwnParticipation(participantId: string, userId: string) {
+    const participant = await this.participantRepo.findOne({
+      where: { participant_id: participantId },
+      relations: ["profile", "profile.user"],
+    });
+    if (!participant) {
+      throw new NotFoundException("Project participation not found");
+    }
+    if (participant.profile?.user?.user_id !== userId) {
+      throw new NotFoundException(
+        "Project participation not found for this user",
+      );
+    }
+
+    await this.participantRepo.remove(participant);
+    await this.metadataSyncService.syncFromDb(userId);
+    await this.ragService.triggerUserSync(userId);
+    return { success: true };
   }
 
   private mapCrossTeamRequest(

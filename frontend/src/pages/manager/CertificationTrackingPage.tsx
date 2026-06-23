@@ -24,7 +24,7 @@ import {
 } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
-import { Search, Filter, Download, CalendarIcon, Award, Loader2 } from 'lucide-react';
+import { Search, Filter, Download, CalendarIcon, Award, Loader2, FileText } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -85,6 +85,17 @@ const CertificationTrackingPage: React.FC = () => {
 
     return matchesSearch && matchesStatus && matchesDate;
   });
+
+  const handleViewProof = async (cert: TeamCertification) => {
+    try {
+      const url = await certificationService.getCertificationProofUrl(cert.certification_id);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      // Give the browser time to load the blob before revoking.
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      toast.error('Justificatif indisponible.');
+    }
+  };
 
   const exportToCSV = () => {
     const headers = ['Certification', 'Employé', 'E-mail', 'Émetteur', 'Date d\'émission', 'Date d\'expiration', 'Statut'];
@@ -254,6 +265,17 @@ const CertificationTrackingPage: React.FC = () => {
                       <Award className="h-4 w-4 text-primary" />
                       <span className="font-medium">{cert.certificationName}</span>
                     </div>
+                    {cert.hasProof && (
+                      <Button
+                        variant="link"
+                        size="sm"
+                        className="h-auto p-0 mt-1 text-xs text-muted-foreground hover:text-primary"
+                        onClick={() => handleViewProof(cert)}
+                      >
+                        <FileText className="h-3 w-3 mr-1" />
+                        Voir le justificatif
+                      </Button>
+                    )}
                   </TableCell>
                   <TableCell>
                     <div>

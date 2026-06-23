@@ -12,6 +12,8 @@ import { NotificationsModule } from "../notifications/notifications.module";
 import { ScoringModule } from "../scoring/scoring.module";
 import { CrossTeamAssignmentRequest } from "./entities/cross-team-assignment-request.entity";
 import { Team } from "../teams/entities/team.entity";
+import { FileStorageModule } from "../file-storage/file-storage.module";
+import { RagModule } from "../rag/rag.module";
 
 @Module({
   imports: [
@@ -27,6 +29,8 @@ import { Team } from "../teams/entities/team.entity";
     TeamsModule,
     NotificationsModule,
     forwardRef(() => ScoringModule),
+    FileStorageModule,
+    RagModule,
   ],
   providers: [ProjectsService],
   controllers: [ProjectsController],

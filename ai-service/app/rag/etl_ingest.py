@@ -2,6 +2,7 @@ import argparse
 import json
 import re
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -25,6 +26,7 @@ import argparse
 import json
 import re
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -316,7 +318,8 @@ def build_chunks(employee: EmployeeRow, payload: dict[str, Any]) -> list[tuple[s
         cert_map[merged_name] = {
             "name": merged_name,
             "is_uploaded": False,
-            "credential_id": None
+            "credential_id": None,
+            "expiration_date": None,
         }
 
     # 2. Process DB certifications (which may be verified uploads)
@@ -324,20 +327,37 @@ def build_chunks(employee: EmployeeRow, payload: dict[str, Any]) -> list[tuple[s
         name = db_cert.get("name")
         if not name:
             continue
-            
+
         # If the DB says it's uploaded, or it has a credential ID, it overwrites the CV payload version
         if name in cert_map:
             cert_map[name]["is_uploaded"] = cert_map[name]["is_uploaded"] or db_cert.get("is_uploaded", False)
             if db_cert.get("credential_id"):
                 cert_map[name]["credential_id"] = db_cert.get("credential_id")
+            if db_cert.get("expiration_date"):
+                cert_map[name]["expiration_date"] = db_cert.get("expiration_date")
         else:
             cert_map[name] = {
                 "name": name,
                 "is_uploaded": db_cert.get("is_uploaded", False),
-                "credential_id": db_cert.get("credential_id")
+                "credential_id": db_cert.get("credential_id"),
+                "expiration_date": db_cert.get("expiration_date"),
             }
 
-    all_certs = list(cert_map.values())
+    # Strict gating: only certifications verified through a direct proof upload
+    # are exposed to the RAG. CV-parsed certifications without proof are never
+    # indexed, so the assistant can never assert an unverified certification to a
+    # manager or BID. They reappear automatically once the employee uploads proof
+    # (which flips is_uploaded and re-triggers this sync).
+    all_certs = [c for c in cert_map.values() if c.get("is_uploaded")]
+
+    # Expired certifications stay indexed (the assistant should still be able to
+    # answer "has X ever held cert Y") but are tagged so the LLM never presents
+    # them as currently active — see the [Expired since ...] tag below and the
+    # qa_prompt_llm_first RULES in chat_agent.py.
+    today = date.today()
+    for cert in all_certs:
+        exp = cert.get("expiration_date")
+        cert["is_expired"] = bool(exp) and exp < today
 
     merged_experience = _merge_experience_rows(employee.experience or [], payload or {})
     merged_education = _merge_education_rows(employee.education or [], payload or {})
@@ -385,8 +405,13 @@ def build_chunks(employee: EmployeeRow, payload: dict[str, Any]) -> list[tuple[s
         summary_lines = []
         for c in all_certs:
             status = " [Verified via direct upload]" if c.get("is_uploaded") else ""
+            expired_tag = (
+                f" [Expired since {c['expiration_date'].isoformat()}]"
+                if c.get("is_expired")
+                else ""
+            )
             cred = f" (ID: {c.get('credential_id')})" if c.get("credential_id") else ""
-            summary_lines.append(f"- {full_name}: {c['name']}{status}{cred}")
+            summary_lines.append(f"- {full_name}: {c['name']}{status}{expired_tag}{cred}")
             
         chunks.append((
             f"{full_name} - Certifications:\n" + "\n".join(summary_lines),
@@ -408,10 +433,17 @@ def build_chunks(employee: EmployeeRow, payload: dict[str, Any]) -> list[tuple[s
                 lines.append("Status: Verified via direct upload")
             else:
                 lines.append("Status: Mentioned on CV")
-                
+
+            if cert.get("expiration_date"):
+                exp_str = cert["expiration_date"].isoformat()
+                if cert.get("is_expired"):
+                    lines.append(f"Expiration: {exp_str} (EXPIRED — do not present as currently active)")
+                else:
+                    lines.append(f"Expiration: {exp_str}")
+
             if cert.get("credential_id"):
                 lines.append(f"Credential ID: {cert['credential_id']}")
-                
+
             chunks.append((
                 "\n".join(lines),
                 {
@@ -420,6 +452,7 @@ def build_chunks(employee: EmployeeRow, payload: dict[str, Any]) -> list[tuple[s
                     "chunk_id": f"{user_id_str}_certification_entry_{idx}",
                     "certification_name": cert["name"],
                     "is_uploaded": cert.get("is_uploaded", False),
+                    "is_expired": cert.get("is_expired", False),
                     "credential_id": cert.get("credential_id"),
                 }
             ))
@@ -595,8 +628,8 @@ def load_employees() -> list[EmployeeRow]:
             skills = session.execute(text("SELECT s.skill_name FROM employee_skills es JOIN skills s ON s.skill_id = es.skill_id WHERE es.profile_id = :p_id"), {"p_id": p_id}).scalars().all()
             
             certs_result = session.execute(text("""
-                SELECT certification_name as name, is_uploaded, credential_id 
-                FROM certifications 
+                SELECT certification_name as name, is_uploaded, credential_id, expiration_date
+                FROM certifications
                 WHERE profile_id = :p_id
             """), {"p_id": p_id}).mappings().all()
             

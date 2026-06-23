@@ -459,6 +459,49 @@ export class FileStorageService {
     this.logger.log(`Saved parsed CV metadata to ${metadataPath}`);
   }
 
+  /**
+   * Read-modify-write helper for metadata.json. The mutator receives the
+   * parsed metadata object (with `structured_data` guaranteed to be present)
+   * and edits it in place; `last_update` is refreshed and the file rewritten.
+   * Safe no-op when the user has no storage folder yet.
+   *
+   * Used to keep metadata.json aligned with the DB after self-service CV
+   * corrections, so the RAG ETL (which merges DB rows with metadata
+   * structured_data) never re-introduces edited or deleted entries.
+   */
+  async mutateMetadata(
+    userId: string,
+    mutator: (metadata: any) => void,
+  ): Promise<void> {
+    const baseDir = await this.findBaseDirByOwner(userId);
+    if (!baseDir) {
+      this.logger.warn(
+        `No base directory found for user ${userId}, cannot mutate metadata`,
+      );
+      return;
+    }
+
+    const metadataPath = path.join(baseDir, "metadata.json");
+    let metadata: any = {};
+    try {
+      metadata = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+    } catch {
+      metadata = {};
+    }
+    if (
+      !metadata.structured_data ||
+      typeof metadata.structured_data !== "object"
+    ) {
+      metadata.structured_data = {};
+    }
+
+    mutator(metadata);
+    metadata.last_update = new Date().toISOString();
+
+    await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+    this.logger.log(`Mutated metadata.json for user ${userId}`);
+  }
+
   async updateExperienceYearsInMetadata(
     userId: string,
     experienceYears: number | null,
@@ -670,7 +713,7 @@ export class FileStorageService {
     return path.resolve(__dirname, "..", "..", "..");
   }
 
-  private getStorageRoot() {
+  public getStorageRoot() {
     return path.resolve(this.getWorkspaceRoot(), "file-storage", "CV_Database");
   }
 

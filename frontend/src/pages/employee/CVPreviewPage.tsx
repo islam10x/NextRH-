@@ -1,11 +1,17 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Separator } from '@/components/ui/separator';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { Switch } from '@/components/ui/switch';
 import api from '@/services/api';
 import { CvProfile } from '@/types';
+import { cvService } from '@/services/cv.service';
+import { certificationService } from '@/services/certification.service';
+import { projectService } from '@/services/project.service';
 import {
   FileText,
   Download,
@@ -24,6 +30,11 @@ import {
   Copy,
   Check,
   ChevronLeft,
+  ShieldAlert,
+  Pencil,
+  Plus,
+  Trash2,
+  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { format, parseISO } from 'date-fns';
@@ -57,26 +68,48 @@ const CVPreviewPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copiedEmail, setCopiedEmail] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [addingExp, setAddingExp] = useState(false);
+  const [editingExpId, setEditingExpId] = useState<string | null>(null);
+  const [addingEdu, setAddingEdu] = useState(false);
+  const [editingEduId, setEditingEduId] = useState<string | null>(null);
+  const [uploadingCert, setUploadingCert] = useState(false);
+  const certFileInputRef = useRef<HTMLInputElement>(null);
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+
+  // Only the owner can edit their own CV preview — managers/BID viewing a
+  // colleague's profile (targetUserId set) never get edit controls.
+  const canEdit = !targetUserId;
+
+  const fetchProfile = async () => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+    try {
+      const url = targetUserId ? `/cv/profile/${targetUserId}` : '/cv/profile/me';
+      const response = await api.get<CvProfile>(url);
+      setProfile(response.data);
+      setError(null);
+    } catch (err) {
+      setError('Impossible de charger le profil CV. Veuillez réessayer.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchProfile = async () => {
-      if (!user) {
-        setLoading(false);
-        return;
-      }
-      try {
-        const url = targetUserId ? `/cv/profile/${targetUserId}` : '/cv/profile/me';
-        const response = await api.get<CvProfile>(url);
-        setProfile(response.data);
-      } catch (err) {
-        setError('Impossible de charger le profil CV. Veuillez réessayer.');
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchProfile();
   }, [user, targetUserId]);
+
+  const reloadProfile = async () => {
+    try {
+      const updated = await cvService.getMyProfile();
+      setProfile(updated);
+    } catch {
+      toast.error('Impossible de rafraîchir le profil.');
+    }
+  };
 
   const handleDownloadPDF = async () => {
     try {
@@ -338,7 +371,18 @@ const CVPreviewPage: React.FC = () => {
           const statusColor = cert.status === 'active' ? [34, 197, 94] : cert.status === 'expiring_soon' ? [251, 191, 36] : [239, 68, 68];
           pdf.setTextColor(statusColor[0], statusColor[1], statusColor[2]);
           pdf.text(`Statut : ${cert.status.replace('_', ' ').toUpperCase()}`, margin, yPosition);
-          yPosition += 10;
+          yPosition += 5;
+
+          // Unverified flag — no proof uploaded yet
+          if (!cert.isUploaded) {
+            pdf.setFont('helvetica', 'italic');
+            pdf.setFontSize(9);
+            pdf.setTextColor(217, 119, 6);
+            pdf.text('Non vérifiée — justificatif non fourni', margin, yPosition);
+            yPosition += 5;
+          }
+
+          yPosition += 5;
         });
       }
 
@@ -482,7 +526,17 @@ const CVPreviewPage: React.FC = () => {
             )}
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="no-print flex gap-2">
+          {canEdit && (
+            <Button
+              variant={editMode ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setEditMode((v) => !v)}
+            >
+              <Pencil className="h-4 w-4 mr-2" />
+              {editMode ? 'Terminer la modification' : 'Modifier le CV'}
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={() => window.print()}>
             <Printer className="h-4 w-4 mr-2" />
             Imprimer
@@ -493,6 +547,11 @@ const CVPreviewPage: React.FC = () => {
           </Button>
         </div>
       </div>
+      {editMode && (
+        <div className="no-print rounded-md border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning-foreground">
+          Mode édition : corrigez les erreurs d'extraction de votre CV. Chaque modification est enregistrée immédiatement.
+        </div>
+      )}
 
       {/* CV Document */}
       <Card className="max-w-4xl mx-auto shadow-lg print:shadow-none">
@@ -504,7 +563,7 @@ const CVPreviewPage: React.FC = () => {
           {/* Header */}
           <div className="print-header text-center pb-6 border-b">
             <h1 className="text-3xl font-bold text-foreground mb-1">{profile.name}</h1>
-            {profile.currentPosition && (
+            {!editMode && profile.currentPosition && (
               <p className="position text-xl text-primary font-medium mb-3">{profile.currentPosition}</p>
             )}
             <div className="contact-info flex flex-wrap items-center justify-center gap-4 text-base text-muted-foreground">
@@ -547,8 +606,19 @@ const CVPreviewPage: React.FC = () => {
             )}
           </div>
 
+          {/* â€”â€” Profile basics (edit mode) â€”â€” */}
+          {editMode && (
+            <section className="section no-print">
+              <h2 className="section-title text-lg font-semibold text-primary flex items-center gap-2 mb-3">
+                <FileText className="h-5 w-5 text-primary" />
+                Informations générales
+              </h2>
+              <ProfileBasicsEditor profile={profile} onSaved={setProfile} />
+            </section>
+          )}
+
           {/* â€”â€” Summary â€”â€” */}
-          {profile.professionalSummary && (
+          {!editMode && profile.professionalSummary && (
             <section className="section">
               <h2 className="section-title text-lg font-semibold text-primary flex items-center gap-2 mb-3">
                 <FileText className="h-5 w-5 text-primary" />
@@ -574,32 +644,100 @@ const CVPreviewPage: React.FC = () => {
           )}
 
           {/* â€”â€” Work Experience â€”â€” */}
-          {profile.workExperiences.length > 0 && (
+          {(profile.workExperiences.length > 0 || editMode) && (
             <section className="section">
-              <h2 className="section-title text-lg font-semibold text-primary flex items-center gap-2 mb-4">
-                <Building2 className="h-5 w-5 text-primary" />
-                Expérience professionnelle
-              </h2>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="section-title text-lg font-semibold text-primary flex items-center gap-2">
+                  <Building2 className="h-5 w-5 text-primary" />
+                  Expérience professionnelle
+                </h2>
+                {editMode && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="no-print"
+                    onClick={() => setAddingExp(true)}
+                  >
+                    <Plus className="h-4 w-4 mr-1" /> Ajouter
+                  </Button>
+                )}
+              </div>
               <div className="space-y-6">
-                {profile.workExperiences.map((exp) => (
-                  <div key={exp.id} className="experience-item border-l-2 border-primary/30 pl-4">
-                    <div className="item-header flex flex-col md:flex-row md:items-start md:justify-between gap-1">
-                      <div>
-                        <h3 className="item-title font-semibold text-foreground">{exp.jobTitle}</h3>
-                        <p className="item-company text-sm text-primary">{exp.companyName}</p>
+                {addingExp && (
+                  <WorkExperienceForm
+                    onCancel={() => setAddingExp(false)}
+                    onSave={async (values) => {
+                      const updated = await cvService.createWorkExperience(values);
+                      setProfile(updated);
+                      setAddingExp(false);
+                      toast.success('Expérience ajoutée');
+                    }}
+                  />
+                )}
+                {profile.workExperiences.map((exp) =>
+                  editingExpId === exp.id ? (
+                    <WorkExperienceForm
+                      key={exp.id}
+                      initial={exp}
+                      onCancel={() => setEditingExpId(null)}
+                      onSave={async (values) => {
+                        const updated = await cvService.updateWorkExperience(exp.id, values);
+                        setProfile(updated);
+                        setEditingExpId(null);
+                        toast.success('Expérience mise à jour');
+                      }}
+                    />
+                  ) : (
+                    <div key={exp.id} className="experience-item border-l-2 border-primary/30 pl-4 relative">
+                      <div className="item-header flex flex-col md:flex-row md:items-start md:justify-between gap-1">
+                        <div>
+                          <h3 className="item-title font-semibold text-foreground">{exp.jobTitle}</h3>
+                          <p className="item-company text-sm text-primary">{exp.companyName}</p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {formatDateRange(exp.startDate, exp.endDate) && (
+                            <span className="item-date text-sm text-muted-foreground flex items-center gap-1.5">
+                              <CalendarDays className="h-4 w-4" />
+                              {formatDateRange(exp.startDate, exp.endDate)}
+                            </span>
+                          )}
+                          {editMode && (
+                            <div className="no-print flex gap-1">
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7"
+                                onClick={() => setEditingExpId(exp.id)}
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7 text-destructive"
+                                onClick={async () => {
+                                  if (!window.confirm('Supprimer cette expérience ?')) return;
+                                  try {
+                                    const updated = await cvService.deleteWorkExperience(exp.id);
+                                    setProfile(updated);
+                                    toast.success('Expérience supprimée');
+                                  } catch {
+                                    toast.error('Échec de la suppression');
+                                  }
+                                }}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                      {formatDateRange(exp.startDate, exp.endDate) && (
-                        <span className="item-date text-sm text-muted-foreground flex items-center gap-1.5 shrink-0">
-                          <CalendarDays className="h-4 w-4" />
-                          {formatDateRange(exp.startDate, exp.endDate)}
-                        </span>
+                      {exp.description && (
+                        <p className="mt-3 text-base text-muted-foreground whitespace-pre-line leading-relaxed">{exp.description}</p>
                       )}
                     </div>
-                    {exp.description && (
-                      <p className="mt-3 text-base text-muted-foreground whitespace-pre-line leading-relaxed">{exp.description}</p>
-                    )}
-                  </div>
-                ))}
+                  ),
+                )}
               </div>
             </section>
           )}
@@ -613,25 +751,108 @@ const CVPreviewPage: React.FC = () => {
               </h2>
               <div className="space-y-6">
                 {profile.projects.map((p) => (
-                  <ProjectItem key={p.id} project={p} />
+                  <ProjectItem
+                    key={p.id}
+                    project={p}
+                    editMode={editMode}
+                    isEditing={editingProjectId === p.id}
+                    onStartEdit={() => setEditingProjectId(p.id)}
+                    onCancelEdit={() => setEditingProjectId(null)}
+                    onSave={async (values) => {
+                      await projectService.updateParticipation(p.id, values);
+                      await reloadProfile();
+                      setEditingProjectId(null);
+                      toast.success('Projet mis à jour');
+                    }}
+                    onDelete={async () => {
+                      if (!window.confirm('Retirer ce projet de votre CV ?')) return;
+                      try {
+                        await projectService.deleteParticipation(p.id);
+                        await reloadProfile();
+                        toast.success('Projet retiré');
+                      } catch {
+                        toast.error('Échec de la suppression');
+                      }
+                    }}
+                  />
                 ))}
               </div>
             </section>
           )}
 
           {/* â€”â€” Certifications â€”â€” */}
-          {profile.certifications.length > 0 && (
+          {(profile.certifications.length > 0 || editMode) && (
             <section className="section">
-              <h2 className="section-title text-lg font-semibold text-primary flex items-center gap-2 mb-4">
-                <Award className="h-5 w-5 text-primary" />
-                Certifications
-              </h2>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="section-title text-lg font-semibold text-primary flex items-center gap-2">
+                  <Award className="h-5 w-5 text-primary" />
+                  Certifications
+                </h2>
+                {editMode && (
+                  <div className="no-print flex items-center gap-2">
+                    <input
+                      ref={certFileInputRef}
+                      type="file"
+                      accept=".pdf,.docx,.png,.jpg,.jpeg,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        if (!file) return;
+                        setUploadingCert(true);
+                        try {
+                          await certificationService.uploadCertification(file);
+                          await reloadProfile();
+                          toast.success('Certification vérifiée et ajoutée');
+                        } catch (err: any) {
+                          const msg =
+                            err?.response?.data?.message ||
+                            "Échec de l'import du justificatif";
+                          toast.error(Array.isArray(msg) ? msg.join(' ') : msg);
+                        } finally {
+                          setUploadingCert(false);
+                        }
+                      }}
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => certFileInputRef.current?.click()}
+                      disabled={uploadingCert}
+                    >
+                      {uploadingCert ? (
+                        <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                      ) : (
+                        <FileUp className="h-4 w-4 mr-1" />
+                      )}
+                      Importer un justificatif
+                    </Button>
+                  </div>
+                )}
+              </div>
+              {editMode && (
+                <p className="no-print -mt-2 mb-4 text-xs text-muted-foreground">
+                  Pour ajouter une certification, importez son justificatif : il est
+                  analysé puis enregistré comme vérifié.
+                </p>
+              )}
               <div className="space-y-4">
                 {profile.certifications.map((cert) => (
                   <div key={cert.id} className="cert-item border-l-4 border-primary/40 pl-4 py-2">
                     <div className="flex justify-between items-start">
                       <div className="flex-1">
-                        <h3 className="cert-name font-semibold text-base text-foreground mb-1">{cert.name}</h3>
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <h3 className="cert-name font-semibold text-base text-foreground">{cert.name}</h3>
+                          {!cert.isUploaded && (
+                            <Badge
+                              variant="outline"
+                              className="text-xs font-medium text-warning border-warning/40 bg-warning/10 gap-1"
+                            >
+                              <ShieldAlert className="h-3 w-3" />
+                              Non vérifiée — justificatif non fourni
+                            </Badge>
+                          )}
+                        </div>
                         {cert.issuingOrganization && (
                           <p className="cert-org text-sm text-primary font-medium mb-2">{cert.issuingOrganization}</p>
                         )}
@@ -640,7 +861,34 @@ const CVPreviewPage: React.FC = () => {
                           {cert.expirationDate && <span>Expire : {fmtDate(cert.expirationDate)}</span>}
                         </div>
                       </div>
+                      {editMode && (
+                        <div className="no-print flex gap-1">
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7 text-destructive"
+                            onClick={async () => {
+                              if (!window.confirm('Supprimer cette certification ?')) return;
+                              try {
+                                await certificationService.deleteCertification(cert.id);
+                                await reloadProfile();
+                                toast.success('Certification supprimée');
+                              } catch {
+                                toast.error('Échec de la suppression');
+                              }
+                            }}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      )}
                     </div>
+                    {editMode && (
+                      <p className="no-print mt-2 text-xs text-muted-foreground italic">
+                        Les informations d'une certification proviennent du justificatif analysé et ne sont pas
+                        modifiables. Pour corriger une erreur, supprimez la certification puis ré-importez le justificatif.
+                      </p>
+                    )}
                   </div>
                 ))}
               </div>
@@ -648,28 +896,96 @@ const CVPreviewPage: React.FC = () => {
           )}
 
           {/* â€”â€” Education â€”â€” */}
-          {profile.educations.length > 0 && (
+          {(profile.educations.length > 0 || editMode) && (
             <section className="section">
-              <h2 className="section-title text-lg font-semibold text-primary flex items-center gap-2 mb-4">
-                <GraduationCap className="h-5 w-5 text-primary" />
-                Formation
-              </h2>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="section-title text-lg font-semibold text-primary flex items-center gap-2">
+                  <GraduationCap className="h-5 w-5 text-primary" />
+                  Formation
+                </h2>
+                {editMode && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="no-print"
+                    onClick={() => setAddingEdu(true)}
+                  >
+                    <Plus className="h-4 w-4 mr-1" /> Ajouter
+                  </Button>
+                )}
+              </div>
               <div className="space-y-4">
-                {profile.educations.map((edu) => (
-                  <div key={edu.id} className="education-item border-l-4 border-primary/40 pl-4 py-2">
-                    <div>
-                      <h3 className="font-semibold text-base text-foreground mb-1">
-                        {edu.degree}{edu.fieldOfStudy ? ` - ${edu.fieldOfStudy}` : ''}
-                      </h3>
-                      {edu.institution && (
-                        <p className="text-sm text-primary font-medium mb-1">{edu.institution}</p>
-                      )}
-                      {edu.endDate && (
-                        <p className="text-base text-muted-foreground mt-1">Diplômé : {fmtDate(edu.endDate)}</p>
-                      )}
+                {addingEdu && (
+                  <EducationForm
+                    onCancel={() => setAddingEdu(false)}
+                    onSave={async (values) => {
+                      const updated = await cvService.createEducation(values);
+                      setProfile(updated);
+                      setAddingEdu(false);
+                      toast.success('Formation ajoutée');
+                    }}
+                  />
+                )}
+                {profile.educations.map((edu) =>
+                  editingEduId === edu.id ? (
+                    <EducationForm
+                      key={edu.id}
+                      initial={edu}
+                      onCancel={() => setEditingEduId(null)}
+                      onSave={async (values) => {
+                        const updated = await cvService.updateEducation(edu.id, values);
+                        setProfile(updated);
+                        setEditingEduId(null);
+                        toast.success('Formation mise à jour');
+                      }}
+                    />
+                  ) : (
+                    <div key={edu.id} className="education-item border-l-4 border-primary/40 pl-4 py-2">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <h3 className="font-semibold text-base text-foreground mb-1">
+                            {edu.degree}{edu.fieldOfStudy ? ` - ${edu.fieldOfStudy}` : ''}
+                          </h3>
+                          {edu.institution && (
+                            <p className="text-sm text-primary font-medium mb-1">{edu.institution}</p>
+                          )}
+                          {edu.endDate && (
+                            <p className="text-base text-muted-foreground mt-1">Diplômé : {fmtDate(edu.endDate)}</p>
+                          )}
+                        </div>
+                        {editMode && (
+                          <div className="no-print flex gap-1">
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7"
+                              onClick={() => setEditingEduId(edu.id)}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7 text-destructive"
+                              onClick={async () => {
+                                if (!window.confirm('Supprimer cette formation ?')) return;
+                                try {
+                                  const updated = await cvService.deleteEducation(edu.id);
+                                  setProfile(updated);
+                                  toast.success('Formation supprimée');
+                                } catch {
+                                  toast.error('Échec de la suppression');
+                                }
+                              }}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ),
+                )}
               </div>
             </section>
           )}
@@ -680,9 +996,20 @@ const CVPreviewPage: React.FC = () => {
   );
 };
 
-const ProjectItem: React.FC<{ project: CvProfile['projects'][0] }> = ({
-  project,
-}) => {
+// Date inputs need a strict YYYY-MM-DD value; flexible parser artifacts
+// (e.g. "depuis 2020") simply leave the picker empty for the user to set.
+const toDateInput = (d: string | null | undefined): string =>
+  d && /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0, 10) : '';
+
+const ProjectItem: React.FC<{
+  project: CvProfile['projects'][0];
+  editMode: boolean;
+  isEditing: boolean;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onSave: (values: { description?: string; role?: string }) => Promise<void>;
+  onDelete: () => void;
+}> = ({ project, editMode, isEditing, onStartEdit, onCancelEdit, onSave, onDelete }) => {
   const projectDescription = (project.description ?? '').trim();
   const hasInvalidName = !project.name || project.name.toLowerCase() === 'unknown project';
 
@@ -692,6 +1019,10 @@ const ProjectItem: React.FC<{ project: CvProfile['projects'][0] }> = ({
     : project.generatedTitle || 'Projet sans description';
   const mainProjectText = projectDescription || fallbackTitle;
 
+  if (isEditing) {
+    return <ProjectEditForm initial={project} onCancel={onCancelEdit} onSave={onSave} />;
+  }
+
   return (
     <div className="border-l-2 border-primary/30 pl-4">
       <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-1">
@@ -699,12 +1030,29 @@ const ProjectItem: React.FC<{ project: CvProfile['projects'][0] }> = ({
           <h3 className="font-semibold text-foreground">{mainProjectText}</h3>
           {project.client && <p className="text-sm text-muted-foreground">{project.client}</p>}
         </div>
-        {formatDateRange(project.startDate, project.endDate) && (
-          <span className="text-xs text-muted-foreground flex items-center gap-1 shrink-0">
-            <CalendarDays className="h-3.5 w-3.5" />
-            {formatDateRange(project.startDate, project.endDate)}
-          </span>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          {formatDateRange(project.startDate, project.endDate) && (
+            <span className="text-xs text-muted-foreground flex items-center gap-1">
+              <CalendarDays className="h-3.5 w-3.5" />
+              {formatDateRange(project.startDate, project.endDate)}
+            </span>
+          )}
+          {editMode && (
+            <div className="no-print flex gap-1">
+              <Button size="icon" variant="ghost" className="h-7 w-7" onClick={onStartEdit}>
+                <Pencil className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 text-destructive"
+                onClick={onDelete}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
       {project.skills.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mt-2">
@@ -713,6 +1061,340 @@ const ProjectItem: React.FC<{ project: CvProfile['projects'][0] }> = ({
           ))}
         </div>
       )}
+    </div>
+  );
+};
+
+// â€”â€” Edit forms â€”â€” //
+// Each form persists immediately through cvService / certificationService /
+// projectService so a parsing correction lands in the DB right away.
+
+const ProfileBasicsEditor: React.FC<{
+  profile: CvProfile;
+  onSaved: (p: CvProfile) => void;
+}> = ({ profile, onSaved }) => {
+  const [currentPosition, setCurrentPosition] = useState(profile.currentPosition ?? '');
+  const [professionalSummary, setProfessionalSummary] = useState(
+    profile.professionalSummary ?? '',
+  );
+  const [totalExperienceYears, setTotalExperienceYears] = useState(
+    profile.totalExperienceYears != null ? String(profile.totalExperienceYears) : '',
+  );
+  const [phone, setPhone] = useState(profile.phone ?? '');
+  const [address, setAddress] = useState(profile.address ?? '');
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    const trimmedYears = totalExperienceYears.trim();
+    let yearsNum: number | undefined;
+    if (trimmedYears !== '') {
+      yearsNum = Number(trimmedYears);
+      if (!Number.isInteger(yearsNum) || yearsNum < 0) {
+        toast.error("Le nombre d'années d'expérience doit être un entier positif.");
+        return;
+      }
+    }
+    setSaving(true);
+    try {
+      const updated = await cvService.updateProfileBasics({
+        currentPosition: currentPosition.trim(),
+        professionalSummary: professionalSummary.trim(),
+        phone: phone.trim(),
+        address: address.trim(),
+        ...(yearsNum !== undefined ? { totalExperienceYears: yearsNum } : {}),
+      });
+      onSaved(updated);
+      toast.success('Informations enregistrées');
+    } catch {
+      toast.error("Échec de l'enregistrement");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="rounded-md border p-4 space-y-3">
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="cv-position">Poste actuel</Label>
+          <Input
+            id="cv-position"
+            value={currentPosition}
+            onChange={(e) => setCurrentPosition(e.target.value)}
+            placeholder="Ex : Ingénieur DevOps"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="cv-years">Années d'expérience</Label>
+          <Input
+            id="cv-years"
+            type="number"
+            min={0}
+            value={totalExperienceYears}
+            onChange={(e) => setTotalExperienceYears(e.target.value)}
+            placeholder="Ex : 5"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="cv-email">Email (connexion)</Label>
+          <Input id="cv-email" value={profile.email} disabled readOnly />
+          <p className="text-xs text-muted-foreground">
+            L'email de connexion ne peut pas être modifié ici.
+          </p>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="cv-phone">Téléphone</Label>
+          <Input
+            id="cv-phone"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="Ex : +216 12 345 678"
+          />
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="cv-address">Adresse</Label>
+        <Input
+          id="cv-address"
+          value={address}
+          onChange={(e) => setAddress(e.target.value)}
+          placeholder="Ex : 12 rue des Jasmins, Tunis"
+        />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="cv-summary">Résumé professionnel</Label>
+        <Textarea
+          id="cv-summary"
+          rows={4}
+          value={professionalSummary}
+          onChange={(e) => setProfessionalSummary(e.target.value)}
+          placeholder="Bref résumé de votre profil"
+        />
+      </div>
+      <div className="flex justify-end">
+        <Button size="sm" onClick={handleSave} disabled={saving}>
+          {saving ? (
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+          ) : (
+            <Check className="h-4 w-4 mr-2" />
+          )}
+          Enregistrer
+        </Button>
+      </div>
+    </div>
+  );
+};
+
+const WorkExperienceForm: React.FC<{
+  initial?: CvProfile['workExperiences'][0];
+  onCancel: () => void;
+  onSave: (values: {
+    jobTitle: string;
+    companyName: string;
+    startDate?: string;
+    endDate?: string;
+    isCurrent?: boolean;
+    description?: string;
+  }) => Promise<void>;
+}> = ({ initial, onCancel, onSave }) => {
+  const [jobTitle, setJobTitle] = useState(initial?.jobTitle ?? '');
+  const [companyName, setCompanyName] = useState(initial?.companyName ?? '');
+  const [startDate, setStartDate] = useState(toDateInput(initial?.startDate));
+  const [endDate, setEndDate] = useState(toDateInput(initial?.endDate));
+  const [isCurrent, setIsCurrent] = useState(Boolean(initial?.isCurrent));
+  const [description, setDescription] = useState(initial?.description ?? '');
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!jobTitle.trim() || !companyName.trim()) {
+      toast.error("Le poste et l'entreprise sont obligatoires.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave({
+        jobTitle: jobTitle.trim(),
+        companyName: companyName.trim(),
+        startDate: startDate || '',
+        endDate: isCurrent ? '' : endDate || '',
+        isCurrent,
+        description: description.trim(),
+      });
+    } catch {
+      toast.error("Échec de l'enregistrement");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="rounded-md border p-4 space-y-3 no-print">
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label>Poste *</Label>
+          <Input value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Entreprise *</Label>
+          <Input value={companyName} onChange={(e) => setCompanyName(e.target.value)} />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Date de début</Label>
+          <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Date de fin</Label>
+          <Input
+            type="date"
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
+            disabled={isCurrent}
+          />
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <Switch id="exp-current" checked={isCurrent} onCheckedChange={setIsCurrent} />
+        <Label htmlFor="exp-current" className="cursor-pointer">
+          Poste actuel
+        </Label>
+      </div>
+      <div className="space-y-1.5">
+        <Label>Description</Label>
+        <Textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
+      </div>
+      <div className="flex justify-end gap-2">
+        <Button size="sm" variant="ghost" onClick={onCancel} disabled={saving}>
+          <X className="h-4 w-4 mr-1" /> Annuler
+        </Button>
+        <Button size="sm" onClick={handleSubmit} disabled={saving}>
+          {saving ? (
+            <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+          ) : (
+            <Check className="h-4 w-4 mr-1" />
+          )}
+          Enregistrer
+        </Button>
+      </div>
+    </div>
+  );
+};
+
+const EducationForm: React.FC<{
+  initial?: CvProfile['educations'][0];
+  onCancel: () => void;
+  onSave: (values: {
+    degree: string;
+    fieldOfStudy?: string;
+    institution?: string;
+    endDate?: string;
+  }) => Promise<void>;
+}> = ({ initial, onCancel, onSave }) => {
+  const [degree, setDegree] = useState(initial?.degree ?? '');
+  const [fieldOfStudy, setFieldOfStudy] = useState(initial?.fieldOfStudy ?? '');
+  const [institution, setInstitution] = useState(initial?.institution ?? '');
+  const [endDate, setEndDate] = useState(toDateInput(initial?.endDate));
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!degree.trim()) {
+      toast.error('Le diplôme est obligatoire.');
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave({
+        degree: degree.trim(),
+        fieldOfStudy: fieldOfStudy.trim(),
+        institution: institution.trim(),
+        endDate: endDate || '',
+      });
+    } catch {
+      toast.error("Échec de l'enregistrement");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="rounded-md border p-4 space-y-3 no-print">
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label>Diplôme *</Label>
+          <Input value={degree} onChange={(e) => setDegree(e.target.value)} />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Domaine d'étude</Label>
+          <Input value={fieldOfStudy} onChange={(e) => setFieldOfStudy(e.target.value)} />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Établissement</Label>
+          <Input value={institution} onChange={(e) => setInstitution(e.target.value)} />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Date d'obtention</Label>
+          <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+        </div>
+      </div>
+      <div className="flex justify-end gap-2">
+        <Button size="sm" variant="ghost" onClick={onCancel} disabled={saving}>
+          <X className="h-4 w-4 mr-1" /> Annuler
+        </Button>
+        <Button size="sm" onClick={handleSubmit} disabled={saving}>
+          {saving ? (
+            <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+          ) : (
+            <Check className="h-4 w-4 mr-1" />
+          )}
+          Enregistrer
+        </Button>
+      </div>
+    </div>
+  );
+};
+
+const ProjectEditForm: React.FC<{
+  initial: CvProfile['projects'][0];
+  onCancel: () => void;
+  onSave: (values: { description?: string; role?: string }) => Promise<void>;
+}> = ({ initial, onCancel, onSave }) => {
+  const [description, setDescription] = useState(initial.description ?? '');
+  const [role, setRole] = useState(initial.role ?? '');
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async () => {
+    setSaving(true);
+    try {
+      await onSave({ description: description.trim(), role: role.trim() });
+    } catch {
+      toast.error("Échec de l'enregistrement");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="rounded-md border p-4 space-y-3 no-print">
+      <div className="space-y-1.5">
+        <Label>Rôle</Label>
+        <Input value={role} onChange={(e) => setRole(e.target.value)} />
+      </div>
+      <div className="space-y-1.5">
+        <Label>Description</Label>
+        <Textarea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
+      </div>
+      <div className="flex justify-end gap-2">
+        <Button size="sm" variant="ghost" onClick={onCancel} disabled={saving}>
+          <X className="h-4 w-4 mr-1" /> Annuler
+        </Button>
+        <Button size="sm" onClick={handleSubmit} disabled={saving}>
+          {saving ? (
+            <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+          ) : (
+            <Check className="h-4 w-4 mr-1" />
+          )}
+          Enregistrer
+        </Button>
+      </div>
     </div>
   );
 };
