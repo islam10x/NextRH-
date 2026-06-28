@@ -9,7 +9,7 @@ import {
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import * as bcrypt from "bcryptjs";
-import { User, UserStatus } from "./entities/user.entity";
+import { User, UserStatus, UserRole } from "./entities/user.entity";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { RagService } from "../rag/rag.service";
@@ -161,6 +161,63 @@ export class UsersService {
     return this.usersRepository.findOne({
       where: { email },
     });
+  }
+
+  async findByKeycloakSub(sub: string): Promise<User | null> {
+    return this.usersRepository.findOne({ where: { keycloakSub: sub } });
+  }
+
+  /**
+   * Resolve the local user behind a verified Keycloak token (JIT provisioning).
+   * Keycloak owns identity AND roles; the local row mirrors them so existing
+   * DB-side queries/joins (findAll, relations) keep working.
+   * 1. Already linked → sync role if it changed.
+   * 2. Known email, not linked yet (existing user) → link `keycloak_sub`, sync role.
+   * 3. Unknown → create the local row (role from token, else EMPLOYEE).
+   *
+   * `role` is undefined when the token carries no app role (misconfigured
+   * mapper); in that case we keep the stored role rather than overwrite it.
+   */
+  async findOrProvisionFromKeycloak(claims: {
+    sub: string;
+    email: string;
+    firstName?: string;
+    lastName?: string;
+    role?: UserRole;
+  }): Promise<User> {
+    const linked = await this.findByKeycloakSub(claims.sub);
+    if (linked) {
+      if (claims.role && linked.role !== claims.role) {
+        linked.role = claims.role;
+        this.logger.log(
+          `Synced role ${claims.role} from Keycloak for ${claims.email}`,
+        );
+        return this.usersRepository.save(linked);
+      }
+      return linked;
+    }
+
+    const byEmail = await this.findByEmail(claims.email);
+    if (byEmail) {
+      byEmail.keycloakSub = claims.sub;
+      byEmail.status = UserStatus.ACTIVE;
+      if (claims.role) byEmail.role = claims.role;
+      if (!byEmail.activatedAt) byEmail.activatedAt = new Date();
+      this.logger.log(`Linked Keycloak sub to existing user ${claims.email}`);
+      return this.usersRepository.save(byEmail);
+    }
+
+    const created = this.usersRepository.create({
+      email: claims.email,
+      firstName: claims.firstName ?? null,
+      lastName: claims.lastName ?? null,
+      keycloakSub: claims.sub,
+      role: claims.role ?? UserRole.EMPLOYEE,
+      status: UserStatus.ACTIVE,
+      activatedAt: new Date(),
+    });
+    this.logger.log(`Provisioned new user from Keycloak: ${claims.email}`);
+    return this.usersRepository.save(created);
   }
 
   async getOwnProfile(userId: string) {

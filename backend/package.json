@@ -46,6 +46,7 @@
         "cookie-parser": "^1.4.7",
         "dotenv": "^17.2.3",
         "form-data": "^4.0.5",
+        "jwks-rsa": "^4.1.0",
         "multer": "^2.0.2",
         "nodemailer": "^8.0.1",
         "passport": "^0.7.0",

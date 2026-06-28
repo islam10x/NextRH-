@@ -1,11 +1,15 @@
 import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react';
+import { useAuth as useOidc } from 'react-oidc-context';
 import { User, UserRole } from '@/types';
 import { authService } from '@/services/auth.service';
+import { setAccessToken } from '@/lib/oidc';
 
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
-  login: (email: string, password: string) => Promise<{ user: User | null; error?: string }>;
+  /** Redirects to Keycloak (Authorization Code + PKCE). */
+  login: () => void;
+  /** Redirects to Keycloak end-session, then back to /login. */
   logout: () => void;
   updateUser: (backendUser: any) => void;
   isLoading: boolean;
@@ -13,117 +17,85 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const mapBackendUserToFrontend = (backendUser: any): User => {
+  const firstName = backendUser.firstName || '';
+  const lastName = backendUser.lastName || '';
+  const name = (firstName || lastName)
+    ? `${firstName} ${lastName}`.trim()
+    : backendUser.email;
+
+  return {
+    id: backendUser.id || backendUser.user_id,
+    email: backendUser.email,
+    name,
+    role: backendUser.role as UserRole,
+    avatar: backendUser.avatarUrl || backendUser.avatar || '',
+    firstName,
+    lastName,
+    title: 'Employee', // Default, backend doesn't send yet
+    yearsOfExperience: 0 // Default
+  };
+};
+
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(() => {
-    const savedUser = sessionStorage.getItem('user');
-    return savedUser ? JSON.parse(savedUser) : null;
-  });
-  const [isLoading, setIsLoading] = useState(true);
+  const oidc = useOidc();
+  const [user, setUser] = useState<User | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
 
-  const mapBackendUserToFrontend = (backendUser: any): User => {
-    const firstName = backendUser.firstName || '';
-    const lastName = backendUser.lastName || '';
-    const name = (firstName || lastName)
-      ? `${firstName} ${lastName}`.trim()
-      : backendUser.email;
-
-    return {
-      id: backendUser.id || backendUser.user_id,
-      email: backendUser.email,
-      name,
-      role: backendUser.role as UserRole,
-      avatar: backendUser.avatarUrl || backendUser.avatar || '',
-      firstName,
-      lastName,
-      title: 'Employee', // Default, backend doesn't send yet
-      yearsOfExperience: 0 // Default
-    };
-  };
-
-  const initAuth = async () => {
-    if (authService.isAuthenticated()) {
-      try {
-        const profile = await authService.getProfile();
-        setUser(mapBackendUserToFrontend(profile));
-      } catch (error: any) {
-        console.error('Failed to fetch profile', error);
-        // Only logout on explicit authentication failures (401, 403)
-        // If it's a network error or other, keep the user logged in with current data
-        if (error.response?.status === 401 || error.response?.status === 403) {
-          authService.logout();
-          setUser(null);
-        }
-      }
+  // When Keycloak authentication state changes, sync the access token and
+  // load the local user profile (the backend JIT-provisions and returns the
+  // role synced from the token).
+  useEffect(() => {
+    if (oidc.isAuthenticated && oidc.user) {
+      setAccessToken(oidc.user.access_token);
+      setProfileLoading(true);
+      authService.getProfile()
+        .then((profile) => setUser(mapBackendUserToFrontend(profile)))
+        .catch((error: any) => {
+          console.error('Failed to fetch profile', error);
+          if (error.response?.status === 401 || error.response?.status === 403) {
+            setUser(null);
+          }
+        })
+        .finally(() => setProfileLoading(false));
+    } else {
+      setAccessToken(null);
+      setUser(null);
     }
-    setIsLoading(false);
-  };
+  }, [oidc.isAuthenticated, oidc.user]);
 
-
-
-  const login = useCallback(async (email: string, password: string): Promise<{ user: User | null; error?: string }> => {
-    // Reset the blast shield so a fresh login attempt is never blocked by a stale logout flag.
-    (window as any)._isLoggingOut = false;
-    try {
-      const response = await authService.login(email, password);
-
-      sessionStorage.setItem('access_token', response.access_token);
-      sessionStorage.setItem('refresh_token', response.refresh_token);
-      sessionStorage.setItem('session_id', response.session_id);
-      // refresh_token is stored as an HTTPOnly cookie by the server — no JS access needed
-
-      const mappedUser = mapBackendUserToFrontend(response.user);
-      sessionStorage.setItem('user', JSON.stringify(mappedUser));
-      setUser(mappedUser);
-      return { user: mappedUser };
-    } catch (error: any) {
-      console.error('Login failed', error);
-      const rawMessage = error?.response?.data?.message;
-      const message = Array.isArray(rawMessage) ? rawMessage.join(', ') : rawMessage;
-      const isNetworkError = !error?.response;
-      const friendlyMessage = isNetworkError
-        ? 'Unable to connect to the server. Please check your connection.'
-        : message === 'Invalid credentials'
-          ? 'Incorrect email or password. Please try again.'
-          : message === 'Account is inactive or pending invitation'
-            ? 'Your account is not active yet. Please contact your administrator.'
-            : message || 'Login failed. Please try again.';
-      return { user: null, error: friendlyMessage };
-    }
-  }, []);
+  const login = useCallback(() => {
+    void oidc.signinRedirect();
+  }, [oidc]);
 
   const logout = useCallback(() => {
-    void authService.logout(); // Clears storage and calls API
+    setAccessToken(null);
     setUser(null);
-  }, []);
+    void oidc.signoutRedirect();
+  }, [oidc]);
 
+  // The api.ts interceptor dispatches this when a request gets a 401
+  // (access token expired and silent renew failed) → re-authenticate.
   useEffect(() => {
-    // Listen for logout events from the API interceptor
-    const handleLogoutEvent = () => {
-      console.log('Logout event received from API interceptor');
-      logout();
+    const handleExpired = () => {
+      void oidc.signinRedirect();
     };
-
-    window.addEventListener('auth:logout', handleLogoutEvent);
-    initAuth();
-
-    return () => {
-      window.removeEventListener('auth:logout', handleLogoutEvent);
-    };
-  }, [logout]);
+    window.addEventListener('auth:expired', handleExpired);
+    return () => window.removeEventListener('auth:expired', handleExpired);
+  }, [oidc]);
 
   const updateUser = useCallback((backendUser: any) => {
-    const mappedUser = mapBackendUserToFrontend(backendUser);
-    sessionStorage.setItem('user', JSON.stringify(mappedUser));
-    setUser(mappedUser);
+    setUser(mapBackendUserToFrontend(backendUser));
   }, []);
 
-  const value = {
+  const value: AuthContextType = {
     user,
-    isAuthenticated: !!user,
+    isAuthenticated: oidc.isAuthenticated && !!user,
     login,
     logout,
     updateUser,
-    isLoading
+    // Loading while Keycloak initializes, or while we fetch the local profile.
+    isLoading: oidc.isLoading || (oidc.isAuthenticated && profileLoading && !user),
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

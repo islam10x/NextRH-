@@ -10,7 +10,6 @@ import {
   UserPlus,
   Mail,
   Loader2,
-  RotateCcw,
   Trash2,
   Users as UsersIcon,
   Clock,
@@ -75,7 +74,7 @@ const TeamMembersPage: React.FC = () => {
     setIsSubmitting(true);
     try {
       await api.post('/auth/invite', { email: inviteEmail, role: 'employee' });
-      toast.success(`Invitation envoyée à ${inviteEmail}`);
+      toast.success(`${inviteEmail} ajouté à votre équipe`);
       setInviteEmail('');
       setIsInviteDialogOpen(false);
       fetchUsers();
@@ -86,20 +85,11 @@ const TeamMembersPage: React.FC = () => {
     }
   };
 
-  const handleResend = async (userId: string, email: string) => {
-    try {
-      await api.post(`/auth/invite/resend/${userId}`);
-      toast.success(`Invitation renvoyée à ${email}`);
-    } catch (err: any) {
-      toast.error(`Impossible de renvoyer l'invitation à ${email}. Réessayez dans un instant.`);
-    }
-  };
-
   const handleCancelConfirmed = async () => {
     if (!cancelTarget) return;
     try {
       await api.delete(`/auth/invite/${cancelTarget}`);
-      toast.success('Invitation annulée — le lien n\'est plus valide.');
+      toast.success('Membre en attente retiré.');
       fetchUsers();
     } catch {
       toast.error("Impossible d'annuler l'invitation. Réessayez.");
@@ -328,11 +318,8 @@ const TeamMembersPage: React.FC = () => {
                         </div>
 
                         <div className="flex gap-2 mt-4">
-                          <Button variant="outline" size="sm" className="flex-1 text-xs gap-1" onClick={() => handleResend(u.user_id, u.email)}>
-                            <RotateCcw className="h-3 w-3" /> Renvoyer
-                          </Button>
                           <Button variant="outline" size="sm" className="flex-1 text-xs gap-1 text-destructive hover:text-destructive" onClick={() => setCancelTarget(u.user_id)}>
-                            <Trash2 className="h-3 w-3" /> Annuler
+                            <Trash2 className="h-3 w-3" /> Retirer
                           </Button>
                         </div>
                       </CardContent>

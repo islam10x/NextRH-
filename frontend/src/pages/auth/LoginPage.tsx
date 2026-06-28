@@ -1,42 +1,28 @@
-import React, { useState } from 'react';
+import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Eye, EyeOff, FileText, Loader2 } from 'lucide-react';
+import { FileText, Loader2, LogIn } from 'lucide-react';
+
+const dashboardFor = (role?: string) =>
+  role === 'employee'
+    ? '/employee/dashboard'
+    : role === 'team_manager'
+      ? '/manager/dashboard'
+      : '/bid/dashboard';
 
 const LoginPage: React.FC = () => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const { login } = useAuth();
+  const { login, isAuthenticated, user, isLoading } = useAuth();
   const navigate = useNavigate();
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-    setErrorMessage(null);
-    const { user, error } = await login(email, password);
-    setIsLoading(false);
-
-    if (user) {
-      const role = user.role;
-      const redirectPath =
-        role === 'employee'
-          ? '/employee/dashboard'
-          : role === 'team_manager'
-            ? '/manager/dashboard'
-            : '/bid/dashboard';
-      navigate(redirectPath);
-    } else if (error) {
-      setErrorMessage(error);
+  // Once Keycloak has authenticated and the local profile is loaded,
+  // send the user to their role-based dashboard.
+  useEffect(() => {
+    if (isAuthenticated && user) {
+      navigate(dashboardFor(user.role), { replace: true });
     }
-  };
+  }, [isAuthenticated, user, navigate]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/5 via-background to-accent/5 p-4">
@@ -58,73 +44,33 @@ const LoginPage: React.FC = () => {
             <CardDescription>Connectez-vous pour accéder à votre portail</CardDescription>
           </CardHeader>
 
-          <form onSubmit={handleSubmit}>
-            <CardContent className="space-y-6">
-              {errorMessage && (
-                <Alert variant="destructive">
-                  <AlertDescription>{errorMessage}</AlertDescription>
-                </Alert>
-              )}
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="email">E-mail</Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    placeholder="prenom.nom@entreprise.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="h-11"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="password">Mot de passe</Label>
-                  <div className="relative">
-                    <Input
-                      id="password"
-                      type={showPassword ? 'text' : 'password'}
-                      placeholder="••••••••"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="h-11 pr-10"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword((prev) => !prev)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                      aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
-                      aria-pressed={showPassword}
-                    >
-                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
-                  </div>
-                </div>
-                <div className="flex justify-end">
-                  <Button
-                    type="button"
-                    variant="link"
-                    className="px-0 text-sm text-muted-foreground"
-                    onClick={() => navigate('/auth/forgot-password')}
-                  >
-                    Mot de passe oublié ?
-                  </Button>
-                </div>
-              </div>
-            </CardContent>
+          <CardContent className="space-y-6">
+            <p className="text-center text-sm text-muted-foreground">
+              L'authentification est gérée de façon sécurisée par le portail
+              d'identité NextStep.
+            </p>
+          </CardContent>
 
-            <CardFooter className="flex-col gap-4">
-              <Button type="submit" className="w-full h-11" disabled={isLoading}>
-                {isLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Connexion...
-                  </>
-                ) : (
-                  'Se connecter'
-                )}
-              </Button>
-            </CardFooter>
-          </form>
+          <CardFooter className="flex-col gap-4">
+            <Button
+              type="button"
+              className="w-full h-11"
+              disabled={isLoading}
+              onClick={() => login()}
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Connexion...
+                </>
+              ) : (
+                <>
+                  <LogIn className="mr-2 h-4 w-4" />
+                  Se connecter
+                </>
+              )}
+            </Button>
+          </CardFooter>
         </Card>
       </div>
     </div>

@@ -6,9 +6,6 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { MainLayout } from "@/components/layout";
 import LoginPage from "@/pages/auth/LoginPage";
-import SetupPasswordPage from "@/pages/auth/SetupPasswordPage";
-import ForgotPasswordPage from "@/pages/auth/ForgotPasswordPage";
-import ResetPasswordPage from "@/pages/auth/ResetPasswordPage";
 import { EmployeeDashboard, CVUploadPage, CertificationsPage, TrainingProjectsPage, CVPreviewPage, EmployeeScoringPage } from "@/pages/employee";
 import { ManagerDashboard, TeamMembersPage, MemberProfilePage, CertificationTrackingPage, ManagerTrainingsPage, ManagerProjectsPage, ManagerScoringPage } from "@/pages/manager";
 import { BIDDashboard, EmployeeDirectoryPage, AIChatPage, CVGenerationPage } from "@/pages/bid";
@@ -28,9 +25,6 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Navigate to="/login" replace />} />
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/auth/setup-password" element={<SetupPasswordPage />} />
-            <Route path="/auth/forgot-password" element={<ForgotPasswordPage />} />
-            <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
 
             {/* Employee Routes */}
             <Route element={<MainLayout requiredRole="employee" />}>
